@@ -81,16 +81,16 @@ button{font-family:inherit;cursor:pointer}
 @keyframes rot{to{transform:rotate(360deg)}}
 @keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-4px)}75%{transform:translateX(4px)}}
 .shake{animation:shake .3s ease 2}
-.con-sel{flex:1 1 300px;min-width:240px;display:flex;align-items:center;gap:8px}
-.con-sel label{font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:#9db5a8;text-transform:uppercase}
+.con-sel{flex:1 1 300px;min-width:0;display:flex;align-items:center;gap:8px}
+.con-sel label{flex:0 0 auto;font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:#9db5a8;text-transform:uppercase}
 select#comboSel{
-  flex:1;background:#0b1712;color:#e7eee8;border:1px solid rgba(255,255,255,.18);border-radius:8px;
-  font-family:var(--mono);font-size:12px;padding:9px 10px;max-width:430px;cursor:pointer;
+  flex:1 1 auto;min-width:0;width:100%;background:#0b1712;color:#e7eee8;border:1px solid rgba(255,255,255,.18);border-radius:8px;
+  font-family:var(--mono);font-size:12px;padding:9px 10px;max-width:430px;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
 }
 select#comboSel:focus{outline:2px solid var(--amber);outline-offset:1px}
-.nav-arrows{display:flex;gap:6px}
+.nav-arrows{display:flex;gap:6px;flex:0 0 auto}
 .nav-arrows .btn{padding:9px 12px;font-size:15px}
-.badges{display:flex;gap:8px;margin-left:auto}
+.badges{display:flex;gap:8px;margin-left:auto;flex:0 0 auto}
 .badge{font-family:var(--mono);font-size:12px;font-weight:600;padding:8px 12px;border-radius:8px;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.06)}
 .badge.score{color:#ffd97a;border-color:rgba(232,164,31,.55)}
 .badge.score.best{background:var(--amber);color:#241a02;border-color:var(--amber);box-shadow:0 0 14px rgba(232,164,31,.45)}

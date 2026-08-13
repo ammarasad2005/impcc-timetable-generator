@@ -1192,5 +1192,21 @@ rep("  let h='<div class=\"cons-note\"><b>Faculty constraints are data.</b>",
     "  let h='<div class=\"cons-note\">'+(SB&&SB.loggedIn?'':'<b style=\"color:var(--amber-deep)\">🔒 Sign in to unlock AI translation & cloud sync. </b>')+'<b>Faculty constraints are data.</b>")
 
 
+# ---- 22) fix combination selector overflow (console bar) -------------------
+# The <select> flex item had min-width:auto, so its longest option (e.g.
+# "#12 · score 680 · +120 pts · ✦CP-SAT") forced it wider than the console row and
+# it collided with the ‹ › arrows. Let it shrink; keep arrows/badges fixed-size.
+rep(".con-sel{flex:1 1 300px;min-width:240px;display:flex;align-items:center;gap:8px}",
+    ".con-sel{flex:1 1 300px;min-width:0;display:flex;align-items:center;gap:8px}")
+rep("select#comboSel{\n  flex:1;background:#0b1712;color:#e7eee8;border:1px solid rgba(255,255,255,.18);border-radius:8px;\n  font-family:var(--mono);font-size:12px;padding:9px 10px;max-width:430px;cursor:pointer;\n}",
+    "select#comboSel{\n  flex:1 1 auto;min-width:0;width:100%;background:#0b1712;color:#e7eee8;border:1px solid rgba(255,255,255,.18);border-radius:8px;\n  font-family:var(--mono);font-size:12px;padding:9px 10px;max-width:430px;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;\n}")
+rep(".nav-arrows{display:flex;gap:6px}",
+    ".nav-arrows{display:flex;gap:6px;flex:0 0 auto}")
+rep(".badges{display:flex;gap:8px;margin-left:auto}",
+    ".badges{display:flex;gap:8px;margin-left:auto;flex:0 0 auto}")
+rep(".con-sel label{font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:#9db5a8;text-transform:uppercase}",
+    ".con-sel label{flex:0 0 auto;font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:#9db5a8;text-transform:uppercase}")
+
+
 io.open(DST, "w", encoding="utf-8").write(src)
 print("OK → wrote", DST, "(", len(src), "bytes )")
