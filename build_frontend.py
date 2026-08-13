@@ -1211,7 +1211,7 @@ rep(".con-sel label{font-family:var(--mono);font-size:10px;letter-spacing:.14em;
 # ---- 23) faculty directory (roster as data) + picker consistency -------------
 # CSS
 rep(".cons-status{font-family:var(--mono);font-size:10.5px;color:var(--ink2);min-height:14px}",
-    ".cons-status{font-family:var(--mono);font-size:10.5px;color:var(--ink2);min-height:14px}\n.dir-add{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:16px}\n.dir-add input#dirNewName{flex:1;min-width:220px;padding:8px 11px;border:1px solid var(--line2);border-radius:8px;background:#fff;font-size:13px;color:var(--ink)}\n.dir-add select{padding:8px 10px;border:1px solid var(--line2);border-radius:8px;background:#fff;font-size:13px;color:var(--ink)}\n.dir-name{width:100%;font-family:var(--disp);font-weight:700;font-size:15px;border:1px solid transparent;background:transparent;color:var(--ink);padding:2px 4px;border-radius:6px;box-sizing:border-box}\n.dir-name:hover,.dir-name:focus{border-color:var(--line2);background:#fff}")
+    ".cons-status{font-family:var(--mono);font-size:10.5px;color:var(--ink2);min-height:14px}\n.dir-add{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:16px}\n.dir-add input#dirNewName{flex:1;min-width:220px;padding:8px 11px;border:1px solid var(--line2);border-radius:8px;background:#fff;font-size:13px;color:var(--ink)}\n.dir-add select{padding:8px 10px;border:1px solid var(--line2);border-radius:8px;background:#fff;font-size:13px;color:var(--ink)}\n.dir-name{width:100%;font-family:var(--disp);font-weight:700;font-size:15px;border:1px solid transparent;background:transparent;color:var(--ink);padding:2px 4px;border-radius:6px;box-sizing:border-box}\n.dir-name:hover,.dir-name:focus{border-color:var(--line2);background:#fff}\n.dir-name[readonly]{cursor:default}\n.dir-name[readonly]:hover,.dir-name[readonly]:focus{border-color:transparent;background:transparent}\n.dir-type:disabled{opacity:.55;cursor:not-allowed}")
 
 # Directory tab
 rep('<button id="viewAllocation">🗂 Allocation</button>',
@@ -1331,20 +1331,26 @@ function facultyNames(){
   return Array.from(set).sort();
 }
 function renderDirectory(){
+  const signedIn=SB&&SB.loggedIn;
   const roster=getFaculty();
-  let h='<div class="cons-note"><b>Faculty directory.</b> Add, rename or retire faculty — the Allocation and Constraints pickers stay in sync with this list.'+(SB&&SB.loggedIn?' Signed in — changes sync across devices.':' <b style="color:var(--amber-deep)">Not signed in — saved locally only.</b>')+'</div>';
-  h+='<div class="dir-add"><input id="dirNewName" placeholder="New faculty name (e.g. Prof. Jane Doe)"><select id="dirNewType"><option value="permanent">Permanent</option><option value="visiting">Visiting</option></select><button class="mini-export" id="dirAddBtn">＋ Add</button></div>';
+  let h='<div class="cons-note"><b>Faculty directory.</b> '+(signedIn?'Add, rename or retire faculty — the Allocation and Constraints pickers stay in sync with this list.':'This is a read-only view. <b style="color:var(--amber-deep)">🔒 Sign in to add or edit faculty.</b>')+'</div>';
+  if(signedIn){
+    h+='<div class="dir-add"><input id="dirNewName" placeholder="New faculty name (e.g. Prof. Jane Doe)"><select id="dirNewType"><option value="permanent">Permanent</option><option value="visiting">Visiting</option></select><button class="mini-export" id="dirAddBtn">＋ Add</button></div>';
+  }
   h+='<div class="cons-grid">';
   roster.forEach((f,i)=>{
-    h+='<article class="cons-card'+(f.active?'':' edited')+'"><header><h4><input class="dir-name" data-i="'+i+'" value="'+esc(f.name)+'"></h4><span class="stag'+(f.active?'':' edited')+'">'+(f.active?esc(f.type):'left')+'</span></header>'+
-      '<div class="cons-btns">'+
-        '<select class="dir-type" data-i="'+i+'"><option value="permanent"'+(f.type==='permanent'?' selected':'')+'>Permanent</option><option value="visiting"'+(f.type==='visiting'?' selected':'')+'>Visiting</option></select>'+
-        '<button class="mini-export" data-dir-toggle="'+i+'">'+(f.active?'Mark left':'Re-activate')+'</button>'+
-        '<button class="card-csv" data-dir-del="'+i+'" title="Remove from directory">✕</button>'+
-      '</div></article>';
+    h+='<article class="cons-card'+(f.active?'':' edited')+'"><header><h4><input class="dir-name" data-i="'+i+'" value="'+esc(f.name)+'"'+(signedIn?'':' readonly')+'></h4><span class="stag'+(f.active?'':' edited')+'">'+(f.active?esc(f.type):'left')+'</span></header>';
+    h+='<div class="cons-btns">';
+    h+='<select class="dir-type" data-i="'+i+'"'+(signedIn?'':' disabled')+'><option value="permanent"'+(f.type==='permanent'?' selected':'')+'>Permanent</option><option value="visiting"'+(f.type==='visiting'?' selected':'')+'>Visiting</option></select>';
+    if(signedIn){
+      h+='<button class="mini-export" data-dir-toggle="'+i+'">'+(f.active?'Mark left':'Re-activate')+'</button>';
+      h+='<button class="card-csv" data-dir-del="'+i+'" title="Remove from directory">✕</button>';
+    }
+    h+='</div></article>';
   });
   h+='</div>';
   mainEl.innerHTML=h;
+  if(!signedIn)return;
   document.getElementById('dirAddBtn').addEventListener('click',()=>{
     const nm=document.getElementById('dirNewName').value.trim();
     if(!nm)return;
