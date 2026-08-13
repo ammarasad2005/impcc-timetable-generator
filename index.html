@@ -176,7 +176,7 @@ select#comboSel:focus{outline:2px solid var(--amber);outline-offset:1px}
 .cons-note b{color:var(--green-deep)}
 .cons-actions{margin-left:auto;display:inline-flex;gap:6px;float:right}
 .cons-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:16px}
-.cons-card{background:var(--surface);border:1px solid var(--line);border-radius:11px;padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.cons-card{background:var(--surface);border:1px solid var(--line);border-radius:11px;padding:14px 16px;display:flex;flex-direction:column;gap:10px;min-width:0}
 .cons-card.edited{border-color:var(--amber);box-shadow:0 0 0 1px var(--amber)}
 .cons-card header{display:flex;align-items:center;gap:8px}
 .cons-card header h4{font-family:var(--disp);font-weight:700;font-size:15px;margin:0;color:var(--ink)}
@@ -198,9 +198,10 @@ select#comboSel:focus{outline:2px solid var(--amber);outline-offset:1px}
 .auth-row .btn{color:var(--ink);background:var(--surface2);border-color:var(--line2)}
 .auth-row .btn.primary{color:#fff;background:var(--green)}
 .alloc-rows{display:flex;flex-direction:column;gap:5px}
-.alloc-row{display:grid;grid-template-columns:1fr 1.3fr 64px 28px;gap:5px;align-items:center}
-.alloc-row input,.alloc-row select{font-size:12px;padding:5px 7px;border:1px solid var(--line2);border-radius:6px;background:#fff;color:var(--ink)}
+.alloc-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr) 64px 28px;gap:5px;align-items:center;min-width:0}
+.alloc-row input,.alloc-row select{font-size:12px;padding:5px 7px;border:1px solid var(--line2);border-radius:6px;background:#fff;color:var(--ink);min-width:0;max-width:100%;box-sizing:border-box}
 .alloc-row input.alloc-per{width:100%}
+.alloc-row select{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 #main{transition:opacity .16s ease,transform .16s ease}
 #main.swap{opacity:.2;transform:translateY(8px)}
