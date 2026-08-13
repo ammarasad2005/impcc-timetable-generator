@@ -2,8 +2,8 @@
 
 The LLM key lives server-side (env vars), never in the browser:
   LLM_API_KEY   (required)  — e.g. an OpenAI/Groq/OpenRouter key
-  LLM_BASE_URL  (optional)  — default https://api.openai.com/v1
-  LLM_MODEL     (optional)  — default gpt-4o-mini
+  LLM_BASE_URL  (optional)  — default https://openrouter.ai/api/v1
+  LLM_MODEL     (optional)  — default google/gemma-4-26b-a4b-it:free
 
 See constraints_schema.md for the schema this translates into.
 """
@@ -137,8 +137,8 @@ def translate_constraints(text, teacher=None):
     if not api_key:
         return {"error": "LLM not configured — set LLM_API_KEY on the backend"}
 
-    base_url = os.environ.get("LLM_BASE_URL", "https://api.openai.com/v1").rstrip("/")
-    model = os.environ.get("LLM_MODEL", "gpt-4o-mini")
+    base_url = os.environ.get("LLM_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
+    model = os.environ.get("LLM_MODEL", "google/gemma-4-26b-a4b-it:free")
 
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -151,10 +151,16 @@ def translate_constraints(text, teacher=None):
         "temperature": 0,
     }).encode()
 
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+        "HTTP-Referer": os.environ.get("LLM_HTTP_REFERER", "https://impcc-timetable-generator.vercel.app"),
+        "X-Title": os.environ.get("LLM_X_TITLE", "IMPCC Timetable Generator"),
+    }
     req = urlreq.Request(
         f"{base_url}/chat/completions",
         data=payload,
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+        headers=headers,
     )
     try:
         with urlreq.urlopen(req, timeout=60) as resp:
