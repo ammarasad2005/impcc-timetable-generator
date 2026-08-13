@@ -378,13 +378,21 @@ if(restored){
   setTicker('Ready — press “Generate” to create timetables','ok');
 }""")
 
-# ---- 17) PDF export system (prints the SAME components as the display) ----
-# (a) .card-pdf button style (amber variant of .card-csv)
+# ---- 17) Export system --------------------------------------------------
+# (a) button styles: .card-pdf (amber) for stream/teacher PDFs, .card-img (blue)
+#     for section landscape-PNG exports
 rep('.card-csv:hover{background:var(--green);color:#f0f6ef}',
-    '.card-csv:hover,.card-pdf:hover{background:var(--green);color:#f0f6ef}\n.card-pdf{margin-left:4px;display:inline-flex;align-items:center;font-family:var(--mono);font-size:9.5px;font-weight:600;color:var(--amber-deep);background:var(--amber-tint);border:1px solid var(--amber);border-radius:6px;padding:3px 8px;transition:all .15s ease;white-space:nowrap;cursor:pointer}\n.card-pdf:hover{background:var(--amber);color:#fff}')
+    '.card-csv:hover,.card-pdf:hover,.card-img:hover{background:var(--green);color:#f0f6ef}\n.card-pdf,.card-img{margin-left:4px;display:inline-flex;align-items:center;font-family:var(--mono);font-size:9.5px;font-weight:600;border-radius:6px;padding:3px 8px;transition:all .15s ease;white-space:nowrap;cursor:pointer}\n.card-pdf{color:var(--amber-deep);background:var(--amber-tint);border:1px solid var(--amber)}\n.card-pdf:hover{background:var(--amber);color:#fff}\n.card-img{color:var(--ics-deep);background:var(--ics-tint);border:1px solid var(--ics)}\n.card-img:hover{background:var(--ics);color:#fff}')
 
-# (b) replace the PRINT CSS block — the printed document reuses the on-screen
-#     components (.sec-card / .tt / .sp-grid …), so the PDF matches the display.
+# (a2) clean the CSV filenames: no score / rank / combination numbers
+rep("downloadCSV('IMPCC_timetable_combination-'+rank+'_score-'+c.score+'.csv',rows);",
+    "downloadCSV('IMPCC_timetable.csv',rows);")
+rep("downloadCSV('IMPCC_'+secId+'_combination-'+rank+'_score-'+c.score+'.csv',rows);",
+    "downloadCSV('IMPCC_'+secId+'.csv',rows);")
+rep("downloadCSV('IMPCC_'+name+'-stream_combination-'+rank+'_score-'+c.score+'.csv',rows);",
+    "downloadCSV('IMPCC_'+name+'-stream.csv',rows);")
+
+# (b) replace the PRINT CSS block — clean, minimal, reuses the display components
 i = src.index("/* ============ PRINT ============ */")
 j = src.index("\n</style>", i)
 print_css = """/* ============ PRINT (prints the same components as the display) ============ */
@@ -397,20 +405,14 @@ print_css = """/* ============ PRINT (prints the same components as the display)
   .mast,.console,.wrap,footer,.drawer,.drawer-backdrop,.no-print{display:none!important}
   #printArea{display:block;font-family:var(--body);color:var(--ink)}
 
-  /* print-only cover + footer */
-  .pd-cover{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;border-bottom:3px solid #0e3b29;padding-bottom:10px;margin-bottom:14px}
-  .pd-brand{display:flex;gap:12px;align-items:center;min-width:0}
-  .pd-seal{flex:0 0 auto;width:46px;height:46px;background:#0e3b29;color:#f3e7c4;border:2px solid #a97b0a;border-radius:8px;display:flex;align-items:center;justify-content:center;font-family:var(--disp);font-weight:900;font-size:12px;letter-spacing:.03em}
-  .pd-brand h1{font-family:var(--disp);font-weight:900;font-size:20px;margin:0;color:#0e3b29;line-height:1.05}
-  .pd-brand p{margin:3px 0 0;font-size:9.5px;color:#5b6a61}
-  .pd-meta{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;text-align:right}
-  .pd-meta span{font-family:var(--mono);font-size:8.5px;border:1px solid #b9c2b4;border-radius:99px;padding:3px 9px;color:#334155;white-space:nowrap}
-  .pd-meta span.k{background:#0e3b29;color:#f0f6ef;border-color:#0e3b29}
-  .pd-meta span.g{background:#a97b0a;color:#fff;border-color:#a97b0a}
+  /* print-only cover + footer (college identity only — no site/tech info) */
+  .pd-cover{border-bottom:3px solid #0e3b29;padding-bottom:10px;margin-bottom:14px}
+  .pd-cover h1{font-family:var(--disp);font-weight:900;font-size:20px;margin:0;color:#0e3b29;line-height:1.1}
+  .pd-cover p{margin:3px 0 0;font-size:9.5px;color:#5b6a61}
   .pd-footer{position:fixed;bottom:0;left:0;right:0;font-family:var(--mono);font-size:7px;color:#8a8f86;text-align:center;padding:3px 0;border-top:1px solid #e2e6dc;background:#fff}
 
   /* reused display components — clean print layout, identical look */
-  #printArea .card-csv,#printArea .card-pdf,#printArea .mini-export,#printArea .spot-hint{display:none!important}
+  #printArea .card-csv,#printArea .card-pdf,#printArea .card-img,#printArea .mini-export,#printArea .spot-hint{display:none!important}
   #printArea .stream{margin:0 0 16px;break-inside:auto}
   #printArea .stream.pd-new{break-before:page}
   #printArea .stream-head{margin-bottom:10px}
@@ -435,15 +437,19 @@ src = src[:i] + print_css + src[j:]   # keep the closing </style>
 rep('<div class="drawer-backdrop" id="spotBackdrop"></div>',
     '<div id="printArea" aria-hidden="true"></div>\n<div class="drawer-backdrop" id="spotBackdrop"></div>')
 
-# (d) PDF buttons on section / stream / teacher cards
+# (d) export buttons: section → PNG image; stream/teacher → PDF
 rep("title=\"Download this section as CSV\">⇩ CSV</button></header>'+",
-    "title=\"Download this section as CSV\">⇩ CSV</button><button class=\"card-pdf\" data-pdf-sec=\"'+sec.id+'\" title=\"Print this section / save as PDF\">PDF</button></header>'+")
+    "title=\"Download this section as CSV\">⇩ CSV</button><button class=\"card-img\" data-img-sec=\"'+sec.id+'\" title=\"Download this section as a landscape PNG image\">PNG</button></header>'+")
 rep("title=\"Download this stream as CSV\">⇩ CSV</button></div><div class=\"sec-grid",
     "title=\"Download this stream as CSV\">⇩ CSV</button><button class=\"card-pdf\" data-pdf-stream=\"'+g.key+'\" title=\"Print this stream / save as PDF\">PDF</button></div><div class=\"sec-grid")
 rep("title=\"Download this faculty timetable as CSV\">⇩ CSV</button></div>'+",
-    "title=\"Download this faculty timetable as CSV\">⇩ CSV</button><button class=\"card-pdf\" data-pdf-teacher=\"'+esc(name)+'\" title=\"Print this faculty timetable / save as PDF\">PDF</button></div>'+")
+    "title=\"Download this faculty timetable as CSV\">⇩ CSV</button><button class=\"card-pdf\" data-pdf-teacher=\"'+esc(name)+'\" title=\"Print this faculty timetable / save as PDF\">PDF</button></div>'+" )
 
-# (e) click handler: route PDF buttons
+# (d2) console Print button hint
+rep('id="btnPrint" title="Print the current view / save as PDF"',
+    'id="btnPrint" title="Print the current view as PDF — single-section exports download as a landscape PNG image"')
+
+# (e) click handler: route image + PDF buttons
 rep("""  const csvBtn=e.target.closest('.card-csv');
   if(csvBtn){
     if(csvBtn.dataset.sec)exportSectionCSV(csvBtn.dataset.sec);
@@ -458,33 +464,31 @@ rep("""  const csvBtn=e.target.closest('.card-csv');
     else if(csvBtn.dataset.teacher)exportTeacherCSV(csvBtn.dataset.teacher);
     return;
   }
+  const imgBtn=e.target.closest('.card-img');
+  if(imgBtn&&imgBtn.dataset.imgSec){exportSectionImage(imgBtn.dataset.imgSec);return;}
   const pdfBtn=e.target.closest('.card-pdf');
   if(pdfBtn){
-    if(pdfBtn.dataset.pdfSec)printTarget({type:'section',id:pdfBtn.dataset.pdfSec});
-    else if(pdfBtn.dataset.pdfStream)printTarget({type:'stream',id:pdfBtn.dataset.pdfStream});
+    if(pdfBtn.dataset.pdfStream)printTarget({type:'stream',id:pdfBtn.dataset.pdfStream});
     else if(pdfBtn.dataset.pdfTeacher)printTarget({type:'teacher',name:pdfBtn.dataset.pdfTeacher});
     return;
   }""")
 
-# (f) replace printCurrent with the PDF engine that reuses the display renderers
+# (f) replace printCurrent with the export engine (no website/tech info anywhere)
 i = src.index("/* PDF = print engine. If the spotlight drawer is open, print only that")
 k = src.index("/* ---------- section filter helpers ---------- */")
-engine = """/* ---------- PDF engine (prints the same components as the display) ---------- */
-function pdMeta(c){
-  const list=sortedList(),rank=rankOf(c,list),total=list.length;
-  return '<div class="pd-meta"><span class="k">#'+rank+' of '+total+'</span><span class="g">score '+c.score+'</span><span>'+(c.via==='cpsat'?'✦ CP-SAT':'in-browser')+'</span><span>'+new Date().toLocaleDateString('en-GB')+'</span></div>';
+engine = """/* ---------- export engine (clean documents — no site/tech info) ---------- */
+const COLLEGE_LINE='Islamabad Model Postgraduate College of Commerce (H-8) · Intermediate · 1st Shift';
+function pdCover(title,sub){
+  return '<header class="pd-cover"><h1>'+esc(title)+'</h1><p>'+esc(sub)+'</p></header>';
 }
-function pdCover(title,sub,metaHtml){
-  return '<header class="pd-cover"><div class="pd-brand"><span class="pd-seal">IMPCC</span><div><h1>'+esc(title)+'</h1><p>'+esc(sub)+'</p></div></div>'+metaHtml+'</header>';
-}
-function pdFooter(txt){
-  return '<div class="pd-footer">IMPCC (H-8) · Intermediate, 1st Shift · '+txt+'</div>';
+function pdFooter(){
+  return '<div class="pd-footer">'+esc(COLLEGE_LINE)+'</div>';
 }
 function streamHeadHtml(name,secs){
   return '<div class="stream-head"><span class="swatch"></span><h2>'+esc(name)+'</h2><span class="cnt">'+secs.length+' section'+(secs.length>1?'s':'')+' · '+secs.length*25+' periods/wk</span></div>';
 }
 function buildComboDoc(c){
-  let html=pdCover('Weekly Timetable — All Sections','Islamabad Model Postgraduate College of Commerce (H-8) · Intermediate · 1st Shift · ICS & I.Com',pdMeta(c));
+  let html=pdCover('Weekly Timetable — All Sections',COLLEGE_LINE+' · ICS & I.Com');
   const groups=[{key:'icom',name:'I.Com — Commerce Stream'},{key:'ics',name:'ICS — Computer Science Stream'}];
   groups.forEach((g,gi)=>{
     const secs=SECTIONS.filter(s=>s.stream===g.key);
@@ -493,29 +497,18 @@ function buildComboDoc(c){
     for(const sec of secs)html+=sectionCard(sec,c.tt[sec.id],idx++);
     html+='</div></section>';
   });
-  const list=sortedList(),rank=rankOf(c,list),total=list.length;
-  html+=pdFooter('Combination #'+rank+' of '+total+' · shuffle score '+c.score+(c.via==='cpsat'?' · CP-SAT proven-optimal pool':''));
+  html+=pdFooter();
   return html;
 }
 function buildStreamDoc(c,stream){
   const name=stream==='icom'?'I.Com — Commerce Stream':'ICS — Computer Science Stream';
   const secs=SECTIONS.filter(s=>s.stream===stream);
-  let html=pdCover(name,'IMPCC (H-8) · Intermediate · 1st Shift · '+secs.length+' sections · '+secs.length*25+' periods/week',pdMeta(c));
+  let html=pdCover(name,COLLEGE_LINE+' · '+secs.length+' sections · '+secs.length*25+' periods/week');
   html+='<section class="stream '+stream+'">'+streamHeadHtml(name,secs)+'<div class="sec-grid">';
   let idx=0;
   for(const sec of secs)html+=sectionCard(sec,c.tt[sec.id],idx++);
   html+='</div></section>';
-  const list=sortedList(),rank=rankOf(c,list),total=list.length;
-  html+=pdFooter(name+' · Combination #'+rank+' of '+total+' · shuffle score '+c.score);
-  return html;
-}
-function buildSectionDoc(c,secId){
-  const sec=SECTIONS.find(s=>s.id===secId);
-  const st=sec.stream==='icom'?'I.Com — Commerce Stream':'ICS — Computer Science Stream';
-  let html=pdCover(sec.label,st+' · 25 periods/week',pdMeta(c));
-  html+='<section class="stream '+sec.stream+'"><div class="sec-grid">'+sectionCard(sec,c.tt[secId],0)+'</div></section>';
-  const list=sortedList(),rank=rankOf(c,list),total=list.length;
-  html+=pdFooter(esc(sec.label)+' · Combination #'+rank+' of '+total+' · shuffle score '+c.score);
+  html+=pdFooter();
   return html;
 }
 function buildTeacherDoc(c,name){
@@ -527,9 +520,8 @@ function buildTeacherDoc(c,name){
   const fav=entries.length?SLOTS[slotCnt.indexOf(Math.max.apply(null,slotCnt))]:'—';
   const freeDays=dayCnt.filter(x=>x===0).length;
   const hasDual=entries.some(e=>e.dual);
-  const list=sortedList(),rank=rankOf(c,list),total=list.length;
 
-  let html=pdCover(name+' — Personal Timetable','IMPCC (H-8) · Intermediate · 1st Shift · '+entries.length+' periods/week · '+secSet.size+' section'+(secSet.size===1?'':'s'),pdMeta(c));
+  let html=pdCover(name+' — Personal Timetable',COLLEGE_LINE+' · '+entries.length+' periods/week · '+secSet.size+' section'+(secSet.size===1?'':'s'));
   html+='<div class="sp-stats">'+
     '<div class="stat"><b>'+entries.length+'</b><span>periods / wk</span></div>'+
     '<div class="stat"><b>'+secSet.size+'</b><span>sections</span></div>'+
@@ -542,16 +534,15 @@ function buildTeacherDoc(c,name){
   html+='<div class="sp-block-title">Courses taught</div>';
   html+=spotlightCourses(entries);
   html+=cons
-    ?'<div class="sp-cons">⚑ '+esc(cons.text)+'<span class="ok">✓ enforced by the solver in this combination</span></div>'
+    ?'<div class="sp-cons">⚑ '+esc(cons.text)+'<span class="ok">✓ satisfied</span></div>'
     :'<div class="sp-cons none">No constraint listed for this faculty member.</div>';
-  html+=pdFooter('Personal timetable — '+esc(name)+' · Combination #'+rank+' of '+total+' · shuffle score '+c.score);
+  html+=pdFooter();
   return html;
 }
 function printTarget(target){
   const c=getSel();if(!c)return;
   let html='';
-  if(target.type==='section')html=buildSectionDoc(c,target.id);
-  else if(target.type==='stream')html=buildStreamDoc(c,target.id);
+  if(target.type==='stream')html=buildStreamDoc(c,target.id);
   else if(target.type==='teacher')html=buildTeacherDoc(c,target.name);
   else html=buildComboDoc(c);
   const area=document.getElementById('printArea');
@@ -559,14 +550,125 @@ function printTarget(target){
   area.innerHTML=html;
   window.print();
 }
-/* Print/PDF button: prints the current view scope (filtered section/stream, else whole combination) */
+/* Console Print/PDF button: prints the current scope; a single filtered section
+   downloads as a landscape PNG image instead (no PDF for individual sections). */
 function printCurrent(){
   const c=getSel();if(!c)return;
   if(state.spot){printTarget({type:'teacher',name:state.spot});return;}
   const f=state.sectionFilter;
   if(f==='all')printTarget({type:'combo'});
   else if(f==='icom'||f==='ics')printTarget({type:'stream',id:f});
-  else printTarget({type:'section',id:f});
+  else exportSectionImage(f);
+}
+
+/* ---------- section image export (landscape PNG, fully fitted) ---------- */
+function wrapLines(ctx,text,maxW,font){
+  ctx.font=font;
+  const words=String(text).split(' ');
+  const lines=[];let cur='';
+  for(const w of words){
+    const t=cur?cur+' '+w:w;
+    if(ctx.measureText(t).width>maxW&&cur){lines.push(cur);cur=w;}
+    else cur=t;
+  }
+  if(cur)lines.push(cur);
+  return lines;
+}
+async function exportSectionImage(secId){
+  const c=getSel();if(!c)return;
+  const sec=SECTIONS.find(s=>s.id===secId);if(!sec)return;
+  const grid=c.tt[secId];
+  const accent=sec.stream==='icom'?'#1c6b48':'#3a55b0';
+  const tint=sec.stream==='icom'?'#e2efe6':'#e5e9f8';
+  const ink='#182720',muted='#5b6a61',line='#d7dbcc';
+  const amberTint='#fdf3dc',amber='#8a6210';
+
+  const canvas=document.createElement('canvas');
+  const ctx=canvas.getContext('2d');
+  if(!ctx){setTicker('Image export is not supported in this browser','err');return;}
+  try{if(document.fonts&&document.fonts.ready)await document.fonts.ready;}catch(e){}
+
+  const pad=48,colDay=124,colP=300,colB=86;
+  const cols=[colDay,colP,colP,colP,colB,colP,colP];
+  const gap=4;
+  const W=pad*2+cols.reduce((a,b)=>a+b,0)+gap*(cols.length-1);
+  const titleH=58,subH=26,headGap=30,hdrH=64,rowH=104;
+  const H=pad*2+titleH+subH+headGap+hdrH+rowH*5;
+
+  const scale=2;
+  canvas.width=Math.round(W*scale);canvas.height=Math.round(H*scale);
+  ctx.scale(scale,scale);
+  ctx.fillStyle='#ffffff';ctx.fillRect(0,0,W,H);
+
+  ctx.textAlign='left';ctx.textBaseline='alphabetic';
+  ctx.fillStyle=accent;ctx.font='900 40px Fraunces, Georgia, serif';
+  ctx.fillText(sec.label,pad,pad+titleH-12);
+  ctx.fillStyle=muted;ctx.font='500 20px "IBM Plex Sans", sans-serif';
+  ctx.fillText(COLLEGE_LINE,pad,pad+titleH+subH-2);
+
+  function cellRect(cx,cy,cw,ch,fill){
+    ctx.fillStyle=fill;ctx.fillRect(cx,cy,cw,ch);
+    ctx.strokeStyle=line;ctx.lineWidth=1;ctx.strokeRect(cx+0.5,cy+0.5,cw-1,ch-1);
+  }
+
+  const tx=pad,ty=pad+titleH+subH+headGap;
+  const heads=[['Week',''],['Period-1',TIMES[0]],['Period-2',TIMES[1]],['Period-3',TIMES[2]],['Break','10:30–10:55'],['Period-4',TIMES[3]],['Period-5',TIMES[4]]];
+  let cx=tx;
+  for(let ci=0;ci<cols.length;ci++){
+    const isBrk=(ci===4);
+    cellRect(cx,ty,cols[ci],hdrH,isBrk?amberTint:tint);
+    ctx.textAlign='center';
+    ctx.fillStyle=isBrk?amber:accent;ctx.font='600 15px "IBM Plex Sans", sans-serif';
+    ctx.fillText(heads[ci][0],cx+cols[ci]/2,ty+hdrH/2-2);
+    if(heads[ci][1]){
+      ctx.fillStyle=muted;ctx.font='400 12px "IBM Plex Sans", sans-serif';
+      ctx.fillText(heads[ci][1],cx+cols[ci]/2,ty+hdrH/2+16);
+    }
+    cx+=cols[ci]+gap;
+  }
+
+  let y=ty+hdrH;
+  for(let d=0;d<5;d++){
+    let rx=tx;
+    cellRect(rx,y,cols[0],rowH,'#fafbf8');
+    ctx.fillStyle=ink;ctx.font='600 18px "IBM Plex Sans", sans-serif';
+    ctx.textAlign='center';ctx.fillText(DAYS[d],rx+cols[0]/2,y+rowH/2+6);
+    rx+=cols[0]+gap;
+    for(let s=0;s<5;s++){
+      const isBrk=(s===3),cw=cols[s+1];
+      if(isBrk){
+        cellRect(rx,y,cw,rowH,amberTint);
+        ctx.fillStyle=amber;ctx.font='600 13px "IBM Plex Sans", sans-serif';
+        ctx.textAlign='center';ctx.fillText('Break',rx+cw/2,y+rowH/2+4);
+      }else{
+        const cell=grid[d][s];
+        cellRect(rx,y,cw,rowH,'#ffffff');
+        const dual=cell.dual;
+        ctx.textAlign='center';
+        let sz=24,lines;
+        do{lines=wrapLines(ctx,cell.subj,cw-26,'700 '+sz+'px "IBM Plex Sans", sans-serif');sz-=2;}while(lines.length>2&&sz>16);
+        let ly=y+rowH/2-8-(lines.length===2?7:0);
+        ctx.fillStyle=dual?accent:ink;
+        for(const ln of lines){ctx.fillText(ln,rx+cw/2,ly);ly+=sz+4;}
+        let tsz=16,tlines;
+        do{tlines=wrapLines(ctx,cell.teacher,cw-26,'400 '+tsz+'px "IBM Plex Sans", sans-serif');tsz-=1.5;}while(tlines.length>2&&tsz>12);
+        ly+=6;ctx.fillStyle=muted;
+        for(const ln of tlines){ctx.fillText(ln,rx+cw/2,ly);ly+=tsz+3;}
+      }
+      rx+=cw+gap;
+    }
+    y+=rowH;
+  }
+
+  canvas.toBlob(function(blob){
+    if(!blob)return;
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url;a.download='IMPCC_'+secId+'.png';
+    document.body.appendChild(a);a.click();a.remove();
+    setTimeout(function(){URL.revokeObjectURL(url);},800);
+  },'image/png');
+  setTicker('Exported image — '+sec.label+' (landscape PNG)','ok');
 }
 
 """
