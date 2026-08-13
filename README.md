@@ -37,11 +37,20 @@ weight:  5 periods/week → 100,000
 Open **`index.html`** in any modern browser. It generates combinations **live** using a JavaScript
 port of the solver (`solver.js`) — there is **no pre-computed data** inside.
 
-- **Generate again** — produce a fresh batch of combinations.
-- **Combination** dropdown — pick any of the generated timetables (ranked by score).
+- **No cutoff, nothing hidden** — every distinct valid combination found is kept, shown in the
+  chooser, and ranked by score. Generation is time-bounded (a batch ≈ 15 s); press
+  **"Generate more"** to keep growing the set (it appends, never drops), or **"Stop"** to end early.
+- **Combination** dropdown (plus ◀ ▶ navigation) — every solution is listed with its rank, score,
+  and a plain-language description (e.g. *"tied for best"*, *"near-optimal — 10 points above the
+  best"*). The panel above the grids repeats this with a percentile and the exact shuffle breakdown.
 - **Sections / Teachers** toggle — view the grid per section, or every faculty member's weekly
   schedule alongside their personal constraint.
 - **Print / PDF** — clean paper output for the college.
+
+> **Live solver vs offline pipeline.** The browser runs a hand-written two-stage backtracking
+> solver (slot packing + day colouring) — a faithful JS port of the same constraint model. It is
+> **not** OR-Tools CP-SAT (that C++ library cannot run in a browser); CP-SAT remains the offline
+> reference in `cp_solver.py` and is what proves the optimal score of **560**.
 
 ### 2. Offline pipeline (Python, proven optimum)
 ```bash

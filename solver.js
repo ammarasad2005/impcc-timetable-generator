@@ -829,7 +829,9 @@
 
   // ------------------------------------------------------------ generate
   function generate(opts) {
-    const maxCount = (opts && opts.maxCount) || 20;
+    // No hard count cutoff by default: keep every distinct valid solution
+    // until the time budget is exhausted. Pass maxCount>0 only to cap explicitly.
+    const maxCount = (opts && opts.maxCount > 0) ? opts.maxCount : Infinity;
     const timeMs = (opts && opts.timeMs) || 15000;
     const seed = (opts && opts.seed) || (Date.now() % 2147483647);
     const rng = makeRng(seed);

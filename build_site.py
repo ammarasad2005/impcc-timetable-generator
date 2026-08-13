@@ -32,7 +32,14 @@ HEAD = """<!DOCTYPE html>
   .viewtoggle button{border:none;background:#fff;padding:8px 14px;font-size:.9rem;cursor:pointer}
   .viewtoggle button.on{background:var(--accent);color:#fff}
   button#genbtn{background:#1d4ed8;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:.9rem;cursor:pointer;font-weight:600}
+  button#genbtn.stop{background:#c2410c}
+  button#genbtn:disabled{opacity:.6;cursor:default}
+  .nav{display:inline-flex;gap:4px}
+  .nav button{background:#fff;border:1px solid var(--line);border-radius:8px;padding:6px 10px;cursor:pointer;font-size:.95rem}
+  .nav button:disabled{opacity:.4;cursor:default}
   button#printbtn{background:#0e7a5f;color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:.9rem;cursor:pointer}
+  #semantic{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px 16px;margin-top:12px;font-size:.86rem;color:#334155;max-width:900px}
+  #semantic b{color:var(--ink)}
   .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:16px;margin-top:6px}
   .card{background:var(--paper);border:1px solid var(--line);border-radius:12px;overflow:hidden;
         box-shadow:0 1px 3px rgba(16,24,40,.08)}
@@ -65,12 +72,17 @@ HEAD = """<!DOCTYPE html>
 <header>
   <h1>IMPCC — Inter (1st Shift) Timetable Generator</h1>
   <p>Islamabad Model Postgraduate College of Commerce (H-8). ICS &amp; I.Com · Mon–Fri · 5 periods/day (40 min) · break after 3rd period.
-     <b>Everything is generated live in your browser</b> by a constraint solver (a JavaScript port of the same model used offline) — no pre-computed data.</p>
+     <b>Everything is generated live in your browser</b> by a constraint solver (a JavaScript port of the same model used offline).
+     <b>No cutoff:</b> every distinct valid combination that is found is kept, shown in the chooser, and ranked by score — hit <b>&ldquo;Generate more&rdquo;</b> to keep growing the set.</p>
 </header>
 <div class="wrap">
   <div class="bar">
     <button id="genbtn">Generating…</button>
     <span class="lbl">Combination</span>
+    <span class="nav">
+      <button id="prevbtn" disabled>◀</button>
+      <button id="nextbtn" disabled>▶</button>
+    </span>
     <select id="combo"></select>
     <span id="rank" class="pill rank-badge">—</span>
     <span id="score" class="pill score-badge">—</span>
@@ -81,6 +93,7 @@ HEAD = """<!DOCTYPE html>
     </div>
     <button id="printbtn">Print / PDF</button>
   </div>
+  <div id="semantic"></div>
   <div id="grid" class="grid"></div>
   <div class="note">
     <b>How to read the score.</b> Every combination already satisfies <b>all</b> hard rules (faculty constraints,
@@ -94,7 +107,8 @@ HEAD = """<!DOCTYPE html>
       either/or option block — students take one of the two, taught in parallel rooms by Prof. Naeem Asghar (Economics) and
       Prof. Ishfaq Ahmed (Statistics) at the same time. Visiting-1/2/3 are placeholder labels for visiting faculty, exactly
       as in the allocation sheet. Use the <b>Teachers</b> view to check any faculty member's weekly schedule against their
-      personal constraints.
+      personal constraints. The <b>combination chooser</b> lists every generated solution with its rank, score, and a plain-language
+      description of where it stands (near-optimal, good, …); the panel above the grids repeats this with a percentile.
     </details>
   </div>
 </div>
