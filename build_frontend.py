@@ -1161,5 +1161,27 @@ rep("$('spPrint').addEventListener('click',()=>{if(state.spot)exportTeacherImage
     "$('spPrint').addEventListener('click',()=>{if(state.spot)exportTeacherImage(state.spot);});\nmainEl.addEventListener('input',e=>{if(e.target.classList.contains('alloc-subj')||e.target.classList.contains('alloc-tchr')||e.target.classList.contains('alloc-per'))allocInputHandler(e.target);});\nmainEl.addEventListener('change',e=>{if(e.target.classList.contains('alloc-tchr'))allocInputHandler(e.target);});\nmainEl.addEventListener('click',e=>{\n  const del=e.target.closest('[data-alloc-del]');\n  if(del){const a=getWorkingAllocation();a[del.dataset.allocDel].subjects.splice(+del.dataset.i,1);renderAllocation();return;}\n  const add=e.target.closest('[data-alloc-add]');\n  if(add){const a=getWorkingAllocation();a[add.dataset.allocAdd]=a[add.dataset.allocAdd]||{subjects:[]};a[add.dataset.allocAdd].subjects.push({subject:'New Subject',teacher:rosterNames()[0],periods:1});renderAllocation();return;}\n});\nconst _ab1=document.getElementById('authSignInBtn');if(_ab1)_ab1.addEventListener('click',()=>authSubmit('in'));\n\nconst _ab3=document.getElementById('authClose');if(_ab3)_ab3.addEventListener('click',()=>{document.getElementById('authModal').style.display='none';});")
 
 
+# ---- 20) gate expensive backend features behind sign-in -------------------
+# runCpsat: refuse when signed out + send the Supabase token
+rep("function runCpsat(){\n  if(state.cpsatBusy)return;",
+    "function runCpsat(){\n  if(!SB||!SB.loggedIn){setCpsatStatus('Sign in required to use CP-SAT','err');setTicker('Sign in to use CP-SAT','ok');return;}\n  if(state.cpsatBusy)return;")
+rep("    headers:{'Content-Type':'application/json'},\n    body:JSON.stringify({time_limit:120,n_seeds:1,max_solutions:0,constraints:currentConstraints(),sections:currentAllocation()})",
+    "    headers:{'Content-Type':'application/json','Authorization':'Bearer '+(SB&&SB.session&&SB.session.access_token?SB.session.access_token:'')},\n    body:JSON.stringify({time_limit:120,n_seeds:1,max_solutions:0,constraints:currentConstraints(),sections:currentAllocation()})")
+# translateOne: refuse when signed out + send the token
+rep("  if(st)st.textContent='Translating…';",
+    "  if(!SB||!SB.loggedIn){if(st)st.textContent='Sign in required to use AI translation.';return;}\n  if(st)st.textContent='Translating…';")
+rep("    headers:{'Content-Type':'application/json'},\n    body:JSON.stringify({text:text,teacher:IMPCC_SOLVER.TEACHER_FULL[code]})",
+    "    headers:{'Content-Type':'application/json','Authorization':'Bearer '+(SB&&SB.session&&SB.session.access_token?SB.session.access_token:'')},\n    body:JSON.stringify({text:text,teacher:IMPCC_SOLVER.TEACHER_FULL[code]})")
+# 401 -> friendly "Sign in required" (both fetch chains)
+rep(".then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})",
+    ".then(r=>{if(!r.ok)throw new Error(r.status===401?'Sign in required':'HTTP '+r.status);return r.json();})", count=2)
+# renderChrome: disable the CP-SAT button while signed out
+rep("    btnCpsat.disabled=false;",
+    "    btnCpsat.disabled=!(SB&&SB.loggedIn);btnCpsat.title=(SB&&SB.loggedIn)?'Call the CP-SAT backend for proven-optimal results':'Sign in to use CP-SAT';")
+# sign-out: refresh the console so the button re-disables
+rep("SB.logout().then(()=>{renderAuth();setTicker('Signed out — using local data','ok');});",
+    "SB.logout().then(()=>{renderAuth();renderChrome();setTicker('Signed out — local data only','ok');});")
+
+
 io.open(DST, "w", encoding="utf-8").write(src)
 print("OK → wrote", DST, "(", len(src), "bytes )")

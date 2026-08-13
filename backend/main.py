@@ -14,12 +14,13 @@ import time
 # make the repo root importable so we can import cp_solver / solver
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Header, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 import cp_solver as CS
 import llm_translate
+import auth_check
 from solver import UNITS, SECTIONS, TEACHER_FULL, DAYS, SLOTS, DEFAULT_CONSTRAINTS
 
 app = FastAPI(
@@ -36,6 +37,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+
+
+def require_user(authorization: str = Header(default="")):
+    """Reject the request unless it carries a valid Supabase session token."""
+    token = ""
+    if authorization.lower().startswith("bearer "):
+        token = authorization[7:].strip()
+    user = auth_check.verify_token(token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Sign in required")
+    return user
 
 class GenerateRequest(BaseModel):
     time_limit: int = Field(default=45, ge=1, le=300,
@@ -82,14 +95,14 @@ def constraints():
 
 
 @app.post("/translate")
-def translate(req: TranslateRequest):
+def translate(req: TranslateRequest, user: dict = Depends(require_user)):
     if not (req.text or "").strip():
         return {"error": "text is required"}
     return llm_translate.translate_constraints(req.text.strip(), req.teacher)
 
 
 @app.post("/generate")
-def generate(req: GenerateRequest):
+def generate(req: GenerateRequest, user: dict = Depends(require_user)):
     t0 = time.time()
     ranked, any_optimal = CS.generate_ranked(
         n_seeds=req.n_seeds,

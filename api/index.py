@@ -19,13 +19,14 @@ import pathlib
 # Make the repo root importable (parent of api/) so cp_solver / solver resolve.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Header, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 import cp_solver as CS
 import llm_translate
+import auth_check
 from solver import UNITS, SECTIONS, TEACHER_FULL, DAYS, SLOTS, DEFAULT_CONSTRAINTS
 
 app = FastAPI(
@@ -84,6 +85,18 @@ def supabase_js():
     return JSONResponse({"detail": "supabase.js not found"}, status_code=404)
 
 
+
+
+def require_user(authorization: str = Header(default="")):
+    """Reject the request unless it carries a valid Supabase session token."""
+    token = ""
+    if authorization.lower().startswith("bearer "):
+        token = authorization[7:].strip()
+    user = auth_check.verify_token(token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Sign in required")
+    return user
+
 class GenerateRequest(BaseModel):
     # Vercel Hobby gives 1 vCPU + a 300s cap, so defaults are tuned for that:
     # 20s reliably returns the best-known 560 without needing a 45s prove-optimal run.
@@ -131,7 +144,7 @@ def constraints():
 
 
 @app.post("/translate")
-def translate(req: TranslateRequest):
+def translate(req: TranslateRequest, user: dict = Depends(require_user)):
     """Translate a natural-language constraint into the system schema via the LLM."""
     if not (req.text or "").strip():
         return {"error": "text is required"}
@@ -140,7 +153,7 @@ def translate(req: TranslateRequest):
 
 
 @app.post("/generate")
-def generate(req: GenerateRequest):
+def generate(req: GenerateRequest, user: dict = Depends(require_user)):
     t0 = time.time()
     ranked, any_optimal = CS.generate_ranked(
         n_seeds=req.n_seeds,

@@ -186,3 +186,8 @@ stored in **Supabase** per signed-in account, so changing devices keeps everythi
 > **Access model:** public signup is **disabled** — only authorized accounts can reach the
 > Supabase-synced data. The admin account is created server-side (currently
 > `admin@impcc.com`); additional accounts are added by an admin in Supabase → Authentication.
+
+> **Resource protection:** the expensive backend features require sign-in. `POST /generate`
+> (CP-SAT) and `POST /translate` (LLM) reject requests without a valid Supabase session
+> (server-side `auth_check.py`); the in-browser JS generator stays free. The UI disables the
+> CP-SAT button and blocks Translate until signed in.

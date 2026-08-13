@@ -1210,7 +1210,7 @@ function renderChrome(){
   $('btnComboCsv').disabled=!list.length;
   if(!state.cpsatBusy){
     btnCpsat.innerHTML='<span class="g">✦</span> Compute optimal (CP-SAT)'+(state.cpsatDone?' ✓':'');
-    btnCpsat.disabled=false;
+    btnCpsat.disabled=!(SB&&SB.loggedIn);btnCpsat.title=(SB&&SB.loggedIn)?'Call the CP-SAT backend for proven-optimal results':'Sign in to use CP-SAT';
   }
 }
 function popBadge(el){el.classList.remove('pop');void el.offsetWidth;el.classList.add('pop');}
@@ -1405,6 +1405,7 @@ function runSlice(){
 function stopRun(){state.stopRequested=true;}
 /* ---------- CP-SAT (real backend call) ---------- */
 function runCpsat(){
+  if(!SB||!SB.loggedIn){setCpsatStatus('Sign in required to use CP-SAT','err');setTicker('Sign in to use CP-SAT','ok');return;}
   if(state.cpsatBusy)return;
   if(state.cpsatDone){
     setCpsatStatus('CP-SAT: proven optimal — best score 560 ('+state.cpsatMerged+' solutions merged)','ok');
@@ -1420,10 +1421,10 @@ function runCpsat(){
   if(typeof fetch!=='function'){fail('fetch unavailable');return;}
   fetch(base+'/generate',{
     method:'POST',
-    headers:{'Content-Type':'application/json'},
+    headers:{'Content-Type':'application/json','Authorization':'Bearer '+(SB&&SB.session&&SB.session.access_token?SB.session.access_token:'')},
     body:JSON.stringify({time_limit:120,n_seeds:1,max_solutions:0,constraints:currentConstraints(),sections:currentAllocation()})
   })
-  .then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
+  .then(r=>{if(!r.ok)throw new Error(r.status===401?'Sign in required':'HTTP '+r.status);return r.json();})
   .then(data=>{
     let added=0;
     for(const sol of (data.solutions||[])){
@@ -1609,7 +1610,7 @@ function renderAuth(){
   if(SB&&SB.loggedIn){
     el.innerHTML='<span class="auth-name">'+esc(SB.user.email)+'</span><button class="mini-export" id="authSignOut">Sign out</button>';
     document.getElementById('authSignOut').addEventListener('click',()=>{
-      SB.logout().then(()=>{renderAuth();setTicker('Signed out — using local data','ok');});
+      SB.logout().then(()=>{renderAuth();renderChrome();setTicker('Signed out — local data only','ok');});
     });
   }else{
     el.innerHTML='<button class="mini-export" id="authSignIn">Sign in</button>';
@@ -1801,15 +1802,16 @@ function translateOne(code){
   const text=ta?ta.value.trim():'';
   const st=document.querySelector('.cons-status[data-status="'+code+'"]');
   if(!text){if(st)st.textContent='Type a plain-language note first.';return;}
+  if(!SB||!SB.loggedIn){if(st)st.textContent='Sign in required to use AI translation.';return;}
   if(st)st.textContent='Translating…';
   const base=(typeof window.IMPCC_API_URL==='string')?window.IMPCC_API_URL:'';
   if(typeof fetch!=='function'){if(st)st.textContent='Translation needs the backend (set IMPCC_API_URL or deploy with api/).';return;}
   fetch(base+'/translate',{
     method:'POST',
-    headers:{'Content-Type':'application/json'},
+    headers:{'Content-Type':'application/json','Authorization':'Bearer '+(SB&&SB.session&&SB.session.access_token?SB.session.access_token:'')},
     body:JSON.stringify({text:text,teacher:IMPCC_SOLVER.TEACHER_FULL[code]})
   })
-  .then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
+  .then(r=>{if(!r.ok)throw new Error(r.status===401?'Sign in required':'HTTP '+r.status);return r.json();})
   .then(d=>{
     if(d.error){if(st)st.textContent='⚠ '+d.error;return;}
     const sum=rulesSummary(d.rules||{});
