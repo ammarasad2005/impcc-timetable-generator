@@ -1209,8 +1209,8 @@ function renderChrome(){
   btnPrev.disabled=btnNext.disabled=!list.length;
   $('btnComboCsv').disabled=!list.length;
   if(!state.cpsatBusy){
-    btnCpsat.innerHTML='<span class="g">✦</span> Compute optimal (CP-SAT)'+(state.cpsatDone?' ✓':'');
-    btnCpsat.disabled=!(SB&&SB.loggedIn);btnCpsat.title=(SB&&SB.loggedIn)?'Call the CP-SAT backend for proven-optimal results':'Sign in to use CP-SAT';
+    const _signedIn=SB&&SB.loggedIn;btnCpsat.innerHTML='<span class="g">'+(_signedIn?'✦':'🔒')+'</span> Compute optimal (CP-SAT)'+(state.cpsatDone?' ✓':'');
+    btnCpsat.disabled=!_signedIn;btnCpsat.title=_signedIn?'Call the CP-SAT backend for proven-optimal results':'Sign in to unlock CP-SAT & AI translation';if(!_signedIn&&!state.cpsatDone){setCpsatStatus('CP-SAT: 🔒 sign in to unlock CP-SAT & AI translation','warn');}
   }
 }
 function popBadge(el){el.classList.remove('pop');void el.offsetWidth;el.classList.add('pop');}
@@ -1776,7 +1776,7 @@ function rulesSummary(rules){
 }
 function renderConstraints(){
   const entries=constraintEntries();
-  let h='<div class="cons-note"><b>Faculty constraints are data.</b> Type a member’s plain-language note and press <b>✦ Translate with AI</b> to convert it into the system’s structured rules, review the preview, then <b>Apply</b>. Changes take effect on the next generation — nothing is hard-coded anymore.<span class="cons-actions"><button class="mini-export" id="consDownload">⇩ Download</button><button class="mini-export" id="consUpload">⇧ Upload</button><button class="mini-export" id="consReset">Reset to defaults</button></span></div>';
+  let h='<div class="cons-note">'+(SB&&SB.loggedIn?'':'<b style="color:var(--amber-deep)">🔒 Sign in to unlock AI translation & cloud sync. </b>')+'<b>Faculty constraints are data.</b> Type a member’s plain-language note and press <b>✦ Translate with AI</b> to convert it into the system’s structured rules, review the preview, then <b>Apply</b>. Changes take effect on the next generation — nothing is hard-coded anymore.<span class="cons-actions"><button class="mini-export" id="consDownload">⇩ Download</button><button class="mini-export" id="consUpload">⇧ Upload</button><button class="mini-export" id="consReset">Reset to defaults</button></span></div>';
   h+='<input type="file" id="consUploadInput" accept="application/json" style="display:none">';
   h+='<div class="cons-grid">';
   for(const e of entries){

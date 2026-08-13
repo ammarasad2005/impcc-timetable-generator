@@ -1183,5 +1183,14 @@ rep("SB.logout().then(()=>{renderAuth();setTicker('Signed out — using local da
     "SB.logout().then(()=>{renderAuth();renderChrome();setTicker('Signed out — local data only','ok');});")
 
 
+# ---- 21) visible "sign in to unlock" hint on CP-SAT + translation ---------
+rep("""    btnCpsat.innerHTML='<span class="g">✦</span> Compute optimal (CP-SAT)'+(state.cpsatDone?' ✓':'');""",
+    """    const _signedIn=SB&&SB.loggedIn;btnCpsat.innerHTML='<span class="g">'+(_signedIn?'✦':'🔒')+'</span> Compute optimal (CP-SAT)'+(state.cpsatDone?' ✓':'');""")
+rep("""    btnCpsat.disabled=!(SB&&SB.loggedIn);btnCpsat.title=(SB&&SB.loggedIn)?'Call the CP-SAT backend for proven-optimal results':'Sign in to use CP-SAT';""",
+    """    btnCpsat.disabled=!_signedIn;btnCpsat.title=_signedIn?'Call the CP-SAT backend for proven-optimal results':'Sign in to unlock CP-SAT & AI translation';if(!_signedIn&&!state.cpsatDone){setCpsatStatus('CP-SAT: 🔒 sign in to unlock CP-SAT & AI translation','warn');}""")
+rep("  let h='<div class=\"cons-note\"><b>Faculty constraints are data.</b>",
+    "  let h='<div class=\"cons-note\">'+(SB&&SB.loggedIn?'':'<b style=\"color:var(--amber-deep)\">🔒 Sign in to unlock AI translation & cloud sync. </b>')+'<b>Faculty constraints are data.</b>")
+
+
 io.open(DST, "w", encoding="utf-8").write(src)
 print("OK → wrote", DST, "(", len(src), "bytes )")
