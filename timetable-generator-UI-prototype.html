@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>IMPCC · Weekly Timetable Generator</title>
+<title>IMPCC · Weekly Timetable Generator — Demo Prototype</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/fraunces@5/600.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/fraunces@5/700.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/fraunces@5/900.css">
@@ -386,7 +386,7 @@ footer b{color:var(--green)}
       <span class="chip">MON–FRI · 5 periods/day</span>
       <span class="chip">40-min periods</span>
       <span class="chip">25-min break after P3</span>
-      <span class="chip demo">LIVE · generated in your browser — nothing mocked</span>
+      <span class="chip demo">DEMO PROTOTYPE — simulated data</span>
     </div>
   </div>
   <div class="mast-side">
@@ -401,7 +401,7 @@ footer b{color:var(--green)}
   <div class="con-in">
     <button class="btn primary" id="btnGenerate" title="Start a fresh generation run (clears the pool)"><span class="g">▶</span> Generate</button>
     <button class="btn" id="btnMore" title="Append more combinations to the pool"><span class="g">＋</span> Generate more</button>
-    <button class="btn amber" id="btnCpsat" title="Call the CP-SAT backend (POST /generate) for proven-optimal results"><span class="g">✦</span> Compute optimal (CP-SAT)</button>
+    <button class="btn amber" id="btnCpsat" title="Simulated call to the CP-SAT backend (POST /generate)"><span class="g">✦</span> Compute optimal (CP-SAT)</button>
     <div class="con-sel">
       <label for="comboSel">Combination</label>
       <select id="comboSel" aria-label="Select combination"></select>
@@ -421,7 +421,7 @@ footer b{color:var(--green)}
   </div>
   <div class="con-row2">
     <div class="tick"><span class="led" id="led"></span><span id="tickText">Initialising demo…</span></div>
-    <span id="cpsatStatus">CP-SAT: idle — press “Compute optimal” to call the backend</span>
+    <span id="cpsatStatus">CP-SAT: idle — press “Compute optimal” to simulate the solver call</span>
   </div>
   <div class="prog"><i id="progFill"></i></div>
 </nav>
@@ -470,7 +470,7 @@ footer b{color:var(--green)}
 </main>
 
 <footer>
-  <b>IMPCC Timetable Generator.</b> Timetables, scores and ranks are generated live in your browser by a real constraint solver — nothing is mocked.<br>
+  <b>IMPCC Timetable Generator — demo prototype.</b> All timetables, scores, ranks and solver output on this page are simulated mock data.<br>
   Islamabad Model Postgraduate College of Commerce (H-8), Islamabad · Intermediate, 1st Shift · ICS &amp; I.Com · 11 sections · Mon–Fri, 5 periods/day.
 </footer>
 
@@ -499,13 +499,10 @@ footer b{color:var(--green)}
   <div class="dr-body" id="spBody"></div>
 </aside>
 
-<script src="solver.js"></script>
 <script>
 'use strict';
 /* ============================================================
-   IMPCC Timetable Generator — functional build
-   in-browser generation : IMPCC_SOLVER (solver.js)
-   proven-optimal results: POST /generate → CP-SAT backend
+   IMPCC Timetable Generator — DEMO PROTOTYPE (all data mocked)
    ============================================================ */
 
 /* ---------- utilities ---------- */
@@ -531,57 +528,151 @@ const SECTIONS=[
   ['ICS-II-B','ICS-II (Section-B)','ics',2],
 ].map(r=>({id:r[0],label:r[1],stream:r[2],year:r[3]}));
 
-/* ---------- adapter: real solver output → UI cells ---------- */
-function solverToCells(ttRaw){
-  const out={};
-  for(const sec of SECTIONS){
-    const grid=ttRaw[sec.id];
-    out[sec.id]=grid.map(row=>row.map(cell=>({
-      subj:cell[0], teacher:cell[1],
-      dual:(cell[0].indexOf('/')>=0 || cell[1].indexOf(' / ')>=0)
-    })));
+function subjectLoad(stream,year){
+  const base=[['English',4],['Urdu',3],['Tarjama-tul-Quran',2],['Islamic Education',2],['Pakistan Studies',2]];
+  if(stream==='icom'){
+    return year===1
+      ? base.concat([['Principles of Accounting',4],['Principles of Economics',2],['Principles of Commerce',2],['Business Mathematics',2],['Computer Studies',2]])
+      : base.concat([['Principles of Accounting',4],['Principles of Economics',2],['Principles of Commerce',2],['Banking',2],['Commercial Geography',2]]);
   }
-  return out;
-}
-function shuffleBreakdown(ttRaw){
-  const a={2:0,3:0,4:0,5:0};
-  for(const sec of IMPCC_SOLVER.SECTIONS){
-    const grid=ttRaw[sec.key];
-    const slotsBy={};
-    for(let d=0;d<5;d++)for(let s=0;s<5;s++){const n=grid[d][s][0];(slotsBy[n]=slotsBy[n]||new Set()).add(s);}
-    for(const [subj,,count] of sec.subs){
-      if((slotsBy[subj]||new Set()).size>1)a[count]++;
-    }
-  }
-  return a;
+  return base.concat([['Mathematics',4],['Physics',3],['Computer Science',3],['Statistics',2]]);
 }
 
-/* ---------- faculty constraints (display only — enforced by solver.js) ---------- */
+const TANVEER_SECTIONS=['ICS-I-C','ICS-II-A','ICS-II-B'];
+function teacherFor(sec,subj){
+  switch(subj){
+    case 'English':return sec.stream==='icom'?'Prof. Amir Rasheed':'Ms. Rabia Sultan';
+    case 'Urdu':return sec.stream==='icom'?'Prof. Husnul Amin':'Prof. Shazia Mubarak';
+    case 'Tarjama-tul-Quran':return 'Visiting-1';
+    case 'Islamic Education':return 'Prof. Khalid Parvez';
+    case 'Pakistan Studies':return TANVEER_SECTIONS.indexOf(sec.id)>=0?'Prof. Tanveer Ahmed':'Prof. Iqbal Hussain';
+    case 'Principles of Accounting':return 'Prof. Muhammad Naeem';
+    case 'Principles of Economics':return 'Prof. Babar Jahangir';
+    case 'Principles of Commerce':return 'Prof. Millat Khan';
+    case 'Business Mathematics':return 'Prof. Saqib Mehmood';
+    case 'Computer Studies':return 'Visiting-2';
+    case 'Banking':return 'Visiting-3';
+    case 'Commercial Geography':return 'Prof. Ghulam Mustafa';
+    case 'Mathematics':return 'Prof. Syed Assad Abbas';
+    case 'Physics':return 'Prof. Abdul Basit';
+    case 'Computer Science':return 'Prof. Dr. Yasir Kareem';
+    case 'Statistics':return sec.id.indexOf('ICS-II')===0?'Prof. Ishfaq Ahmed':'Prof. Naeem Asghar';
+  }
+  return 'Staff';
+}
+
 const CONSTRAINTS={
-  'Prof. Muhammad Naeem':{text:'Monday P1 & P2 free'},
-  'Prof. Syed Assad Abbas':{text:'ICS fills P1 & P2 daily · Business Math in P3 · no I.Com on Friday'},
+  'Prof. Muhammad Naeem':{text:'Monday P1 & P2 free',deny:(d,s)=>d===0&&(s===0||s===1)},
+  'Prof. Syed Assad Abbas':{text:'ICS fills P1 & P2 daily · Business Math in P3 · no I.Com on Friday',prefer:[0,1]},
   'Prof. Babar Jahangir':{text:'ICS fills P1 & P2 daily'},
-  'Prof. Ishfaq Ahmed':{text:'P1 on 4+ days · never P5'},
-  'Prof. Dr. Yasir Kareem':{text:'Only P1, P2 & P4'},
-  'Prof. Abdul Basit':{text:'P1 on 4+ days · never P5 · no fully-free day'},
-  'Prof. Amir Rasheed':{text:'Never P1 · never P5'},
-  'Prof. Husnul Amin':{text:'Never P1 · never P5'},
-  'Prof. Millat Khan':{text:'Never P1'},
-  'Prof. Naeem Asghar':{text:'Never P1 · never P2'},
-  'Prof. Tanveer Ahmed':{text:'Thursday & Friday only · P1–P3'},
+  'Prof. Ishfaq Ahmed':{text:'P1 on 4+ days · never P5',prefer:[0],deny:(d,s)=>s===4},
+  'Prof. Dr. Yasir Kareem':{text:'Only P1, P2 & P4',deny:(d,s)=>!(s===0||s===1||s===3)},
+  'Prof. Abdul Basit':{text:'P1 on 4+ days · never P5 · no fully-free day',prefer:[0],deny:(d,s)=>s===4},
+  'Prof. Amir Rasheed':{text:'Never P1 · never P5',deny:(d,s)=>s===0||s===4},
+  'Prof. Husnul Amin':{text:'Never P1 · never P5',deny:(d,s)=>s===0||s===4},
+  'Prof. Millat Khan':{text:'Never P1',deny:(d,s)=>s===0},
+  'Prof. Naeem Asghar':{text:'Never P1 · never P2',deny:(d,s)=>s===0||s===1},
+  'Prof. Tanveer Ahmed':{text:'Thursday & Friday only · P1–P3',daysOnly:[3,4],deny:(d,s)=>s>2},
   'Visiting-1':{text:'Placeholder visiting faculty'},
   'Visiting-2':{text:'Placeholder visiting faculty'},
   'Visiting-3':{text:'Placeholder visiting faculty'},
 };
 
-/* ---------- combinations & scoring ---------- */
-const state={combos:[],selected:null,view:'sections',sectionFilter:'all',running:false,runTimer:null,stopRequested:false,cpsatBusy:false,cpsatDone:false,cpsatMerged:0,spot:null,seen:new Set()};
-let comboSeq=0;
+/* ---------- mock timetable generation ---------- */
+function pickDays(rng,n,con){
+  if(con&&con.daysOnly){const p=con.daysOnly.slice();while(p.length>n)p.splice(Math.floor(rng()*p.length),1);return p.sort((a,b)=>a-b);}
+  let best=null,bestS=-1;
+  for(let t=0;t<14;t++){
+    const days=shuffleArr([0,1,2,3,4].slice(),rng).slice(0,n).sort((a,b)=>a-b);
+    let spread=0;
+    for(let i=0;i<n;i++)for(let j=i+1;j<n;j++)spread+=Math.abs(days[i]-days[j]);
+    const sc=spread+rng()*2.2;
+    if(sc>bestS){bestS=sc;best=days;}
+  }
+  return best;
+}
+function pickSlot(rng,d,tok,grid,busy){
+  const c=CONSTRAINTS[tok.teacher]||{};
+  let slots=[];
+  for(let s=0;s<5;s++)if(!grid[d][s]&&!(c.deny&&c.deny(d,s)))slots.push(s);
+  if(!slots.length)for(let s=0;s<5;s++)if(!grid[d][s])slots.push(s);
+  if(!slots.length)return null;
+  shuffleArr(slots,rng);
+  slots.sort((a,b)=>{
+    const pa=(c.prefer&&c.prefer.indexOf(a)>=0)?0:1,pb=(c.prefer&&c.prefer.indexOf(b)>=0)?0:1;
+    if(pa!==pb)return pa-pb;
+    const ba=busy[tok.teacher+'|'+(d*5+a)]?1:0,bb=busy[tok.teacher+'|'+(d*5+b)]?1:0;
+    return ba-bb;
+  });
+  return slots[0];
+}
+function buildSection(sec,rng,busy){
+  const grid=[];for(let d=0;d<5;d++)grid.push([null,null,null,null,null]);
+  const load=subjectLoad(sec.stream,sec.year);
+  const loadOf={};load.forEach(p=>{loadOf[p[0]]=p[1];});
+  const tokens=[];
+  load.forEach(p=>{for(let i=0;i<p[1];i++)tokens.push({subj:p[0],teacher:teacherFor(sec,p[0])});});
+  tokens.sort((a,b)=>(loadOf[b.subj]-loadOf[a.subj])||(rng()-0.5));
+  const dayLoad=[0,0,0,0,0];
+  const daySubj=[new Set(),new Set(),new Set(),new Set(),new Set()];
+  for(const tok of tokens){
+    const c=CONSTRAINTS[tok.teacher]||{};
+    let cand=[0,1,2,3,4].filter(d=>dayLoad[d]<5);
+    if(c.daysOnly)cand=cand.filter(d=>c.daysOnly.indexOf(d)>=0);
+    cand=cand.filter(d=>{for(let s=0;s<5;s++){if(!grid[d][s]&&!(c.deny&&c.deny(d,s)))return true;}return false;});
+    if(!cand.length)cand=[0,1,2,3,4].filter(d=>dayLoad[d]<5);
+    const scoreDay=d=>{
+      let sc=dayLoad[d]*2+(daySubj[d].has(tok.subj)?3:0);
+      if(c.prefer){for(let s=0;s<5;s++){if(!grid[d][s]&&c.prefer.indexOf(s)>=0&&!(c.deny&&c.deny(d,s))){sc-=1.5;break;}}}
+      return sc+rng()*0.85;
+    };
+    cand.sort((a,b)=>scoreDay(a)-scoreDay(b));
+    const d=cand[0];
+    const s=pickSlot(rng,d,tok,grid,busy);
+    if(s===null)continue;
+    grid[d][s]={subj:tok.subj,teacher:tok.teacher};
+    dayLoad[d]++;daySubj[d].add(tok.subj);
+    busy[tok.teacher+'|'+(d*5+s)]=1;
+  }
+  for(let d=0;d<5;d++)for(let s=0;s<5;s++)if(!grid[d][s])grid[d][s]={subj:'Study Hour',teacher:'—'};
+  return grid;
+}
+function generateTimetables(seed){
+  const rng=mulberry32(seed);
+  const busy={};
+  const out={};
+  for(const sec of SECTIONS)out[sec.id]=buildSection(sec,rng,busy);
+  const g=out['ICS-II-B'];
+  const statCells=[];
+  for(let d=0;d<5;d++)for(let s=0;s<5;s++)if(g[d][s]&&g[d][s].subj==='Statistics')statCells.push([d,s]);
+  if(statCells.length){
+    const pick=statCells[Math.floor(rng()*statCells.length)];
+    g[pick[0]][pick[1]]={subj:'Economics / Statistics',teacher:'Prof. Naeem Asghar / Prof. Ishfaq Ahmed',dual:true};
+  }
+  return out;
+}
 
-function makeCombo(sol,via){
+/* ---------- combinations & scoring ---------- */
+const POOL_MAX=88;
+const state={combos:[],selected:null,view:'sections',sectionFilter:'all',running:false,runTimer:null,runTarget:0,runAdded:0,cpsatBusy:false,cpsatDone:false,spot:null};
+let comboSeq=0;
+const metaRng=mulberry32(20250811);
+
+function rollScore(rng){
+  const r=rng();
+  if(r<0.16)return[4,17];
+  if(r<0.44)return[4,18];
+  if(r<0.60)return[4,19];
+  if(r<0.72)return[4,20];
+  if(r<0.80)return[5,16];
+  if(r<0.88)return[5,20];
+  if(r<0.95)return[5,26];
+  return[6,30];
+}
+function makeCombo(pair,via){
   comboSeq++;
-  const bd=shuffleBreakdown(sol.timetable);
-  return{id:comboSeq,score:sol.score,a3:bd[3],a2:bd[2],a4:bd[4],a5:bd[5],via,tt:solverToCells(sol.timetable)};
+  const seed=((Date.now()&0xffff)^Math.floor(metaRng()*1e9)^comboSeq*2654435761)>>>0;
+  return{id:comboSeq,score:pair[0]*100+pair[1]*10,a3:pair[0],a2:pair[1],via,tt:generateTimetables(seed)};
 }
 function sortedList(){return state.combos.slice().sort((a,b)=>a.score-b.score||a.id-b.id);}
 function rankOf(c,list){return 1+list.filter(o=>o.score<c.score).length;}
@@ -644,7 +735,6 @@ function buildTeacherIndex(tt){
   for(const k in map)map[k].sort((a,b)=>a.d-b.d||a.s-b.s);
   return map;
 }
-function facultyCount(){const c=getSel();if(!c)return 0;return Object.keys(buildTeacherIndex(c.tt)).length;}
 function teacherOrder(){
   const c=getSel();if(!c)return[];
   const idx=buildTeacherIndex(c.tt);
@@ -755,7 +845,7 @@ function renderScorecard(){
       '<div class="stand-text">'+st.phrase+'</div>'+
       '<div class="pct">'+pctLine+(c.via==='cpsat'?' · merged from CP-SAT ✦':'')+'</div>'+
       '<div class="meter"><i style="width:'+Math.max(4,st.pct)+'%"></i></div>'+
-      '<div class="bd"><b>'+c.a3+' × 3/wk split</b> · <b>'+c.a2+' × 2/wk split</b>'+(c.a4?(' · <b>'+c.a4+' × 4/wk split</b>'):'')+' &nbsp;· score '+c.score+'</div>'+
+      '<div class="bd"><b>'+c.a3+' × 3/wk subjects split</b> · <b>'+c.a2+' × 2/wk subjects split</b> &nbsp;('+(c.a3*100+c.a2*10)+' = score)</div>'+
     '</div>'+
     '<div class="hist-wrap"><div class="hist">'+bars+'</div><div class="hist-cap">score distribution · '+total+' kept combinations'+(keys.indexOf(560)>=0?' · gold = optimum':'')+'</div></div>';
 }
@@ -830,7 +920,7 @@ function renderMain(){
   if(!state.combos.length){
     renderEmpty('No combinations yet',state.running
       ?'Initial run in progress — valid solutions will appear here the moment they are found. Nothing is ever discarded.'
-      :'The pool is empty. Press “Generate” to start a generation run.');
+      :'The pool is empty. Press “Generate” to start a mock generation run.');
     return;
   }
   if(!c)return;
@@ -852,7 +942,7 @@ function renderChrome(){
     scoreBadge.textContent='SCORE '+c.score;
     scoreBadge.classList.toggle('best',c.score===list[0].score);
     const shown=sectionsMatching(state.sectionFilter).length;
-    $('vbInfo').textContent='Combination #'+rank+' of '+list.length+' · via '+(c.via==='cpsat'?'CP-SAT solver':'in-browser generation')+' · showing '+shown+'/11 sections · '+facultyCount()+' faculty · click any card or class cell for personal courses';
+    $('vbInfo').textContent='Combination #'+rank+' of '+list.length+' · via '+(c.via==='cpsat'?'CP-SAT solver':'in-browser generation')+' · showing '+shown+'/11 sections · 20 faculty · click any card or class cell for personal courses';
     $('printHead').textContent='IMPCC (H-8) · Intermediate, 1st Shift — Weekly Timetable · Combination #'+rank+' of '+list.length+' · shuffle score '+c.score+(c.via==='cpsat'?' · CP-SAT proven-optimal pool':'')+' · view: '+(state.view==='sections'?'Sections ('+(filterLabel(state.sectionFilter)||'all sections')+')':'Faculty overview')+' · printed '+new Date().toLocaleDateString('en-GB');
   }else{
     rankBadge.textContent='RANK —';scoreBadge.textContent='SCORE —';scoreBadge.classList.remove('best');
@@ -864,9 +954,10 @@ function renderChrome(){
     btnMore.innerHTML='<span class="g">■</span> Stop';btnMore.classList.add('stop');btnMore.disabled=false;
     btnMore.title='End the current run early — everything found so far is kept';
   }else{
-    btnMore.innerHTML='<span class="g">＋</span> Generate more';
-    btnMore.classList.remove('stop');btnMore.disabled=false;
-    btnMore.title='Append more combinations — results accumulate, nothing is dropped';
+    const full=state.combos.length>=POOL_MAX;
+    btnMore.innerHTML='<span class="g">＋</span> '+(full?'Pool full ('+POOL_MAX+')':'Generate more');
+    btnMore.classList.remove('stop');btnMore.disabled=full;
+    btnMore.title=full?('The pool holds up to '+POOL_MAX+' combinations in this demo'):'Append more combinations — results accumulate, nothing is dropped';
   }
   btnPrev.disabled=btnNext.disabled=!list.length;
   $('btnComboCsv').disabled=!list.length;
@@ -948,7 +1039,7 @@ function openSpotlight(name){
   body+='<div class="sp-block-title">Courses taught <span>— hover a course to trace it on the grid · click a slot chip to flash it</span></div>';
   body+=spotlightCourses(entries);
   body+=cons
-    ?'<div class="sp-cons">⚑ '+esc(cons.text)+'<span class="ok">✓ enforced by the solver in this combination</span></div>'
+    ?'<div class="sp-cons">⚑ '+esc(cons.text)+'<span class="ok">✓ satisfied in this combination (simulated)</span></div>'
     :'<div class="sp-cons none">No constraint listed for this faculty member.</div>';
   body+='<div class="sp-combo">Showing combination #'+rank+' of '+state.combos.length+' · shuffle score '+c.score+' · switch combinations with ‹ › — this panel stays in sync · export via PDF / CSV above</div>';
   $('spBody').innerHTML=body;
@@ -991,88 +1082,69 @@ function stepSel(dir){
   selectCombo(list[i].id);
 }
 
-/* ---------- runs (live in-browser generation) ---------- */
+/* ---------- runs (simulated) ---------- */
 function finishRun(stopped){
-  clearTimeout(state.runTimer);state.runTimer=null;
-  state.running=false;state.stopRequested=false;
+  clearInterval(state.runTimer);state.runTimer=null;
+  state.running=false;state.runTarget=0;state.runAdded=0;
   progFill.style.width='0%';
   const list=sortedList(),best=list.length?list[0].score:'—';
-  setTicker((stopped?'Run stopped — ':'Done — ')+state.combos.length+' combinations kept · best score '+best+' · nothing discarded',stopped?'':'ok');
+  setTicker((stopped?'Run stopped early — ':'Run complete — ')+state.combos.length+' combinations kept · best score '+best+' · nothing discarded',stopped?'':'ok');
   renderChrome();
 }
 function startRun(kind){
   if(state.running)return;
   if(kind==='fresh'){
-    state.combos=[];state.selected=null;comboSeq=0;state.cpsatDone=false;state.cpsatMerged=0;
-    state.seen=new Set();
+    state.combos=[];state.selected=null;comboSeq=0;state.cpsatDone=false;
     closeSpotlight();
     state.sectionFilter='all';secFilterEl.value='all';
-    setCpsatStatus('CP-SAT: idle — press “Compute optimal” to call the backend','');
+    setCpsatStatus('CP-SAT: idle — press “Compute optimal” to simulate the solver call','');
     renderAll();
   }
-  state.running=true;state.stopRequested=false;
-  progFill.style.width='100%';
+  if(state.combos.length>=POOL_MAX&&kind==='more')return;
+  state.running=true;
+  state.runTarget=kind==='fresh'?26:Math.min(14,POOL_MAX-state.combos.length);
+  state.runAdded=0;
   liveTicker();renderChrome();
-  state.runTimer=setTimeout(runSlice,30);
+  state.runTimer=setInterval(()=>{
+    const remain=state.runTarget-state.runAdded;
+    const batch=Math.min(2+Math.floor(Math.random()*3),remain);
+    for(let i=0;i<batch;i++){
+      const pair=state.combos.length===0?[4,17]:rollScore(metaRng);
+      state.combos.push(makeCombo(pair,'browser'));
+      state.runAdded++;
+    }
+    if(!state.selected){const list=sortedList();state.selected=list[0].id;}
+    progFill.style.width=Math.round(state.runAdded/state.runTarget*100)+'%';
+    liveTicker();renderChrome();renderScorecard();
+    if(!getSel())renderMain();else if(state.runAdded===batch)renderMain();
+    if(state.runAdded>=state.runTarget)finishRun(false);
+  },430);
 }
-function runSlice(){
-  if(state.stopRequested){finishRun(true);return;}
-  const before=state.combos.length;
-  const res=IMPCC_SOLVER.generate({maxCount:0,timeMs:320,seed:(Math.random()*2147483647)|0});
-  for(const sol of res.solutions){
-    const key=JSON.stringify(sol.timetable);
-    if(state.seen.has(key))continue;
-    state.seen.add(key);
-    state.combos.push(makeCombo(sol,'browser'));
-  }
-  const grew=state.combos.length>before;
-  if(!state.selected&&state.combos.length){const list=sortedList();state.selected=list[0].id;}
-  liveTicker();renderChrome();renderScorecard();
-  if(grew||!state.selected)renderMain();
-  if(state.stopRequested){finishRun(true);return;}
-  state.runTimer=setTimeout(runSlice,30);
-}
-function stopRun(){state.stopRequested=true;}
-/* ---------- CP-SAT (real backend call) ---------- */
+function stopRun(){if(state.running)finishRun(true);}
+
+/* ---------- CP-SAT (simulated) ---------- */
 function runCpsat(){
   if(state.cpsatBusy)return;
   if(state.cpsatDone){
-    setCpsatStatus('CP-SAT: proven optimal — best score 560 ('+state.cpsatMerged+' solutions merged)','ok');
+    setCpsatStatus('CP-SAT: proven optimal — best score 560 (12 solutions merged)','ok');
     return;
   }
   state.cpsatBusy=true;
   btnCpsat.disabled=true;
   btnCpsat.innerHTML='<span class="spin"></span> running CP-SAT…';
-  setCpsatStatus('running CP-SAT… (POST /generate · time_limit 45s · n_seeds 2)','warn');
+  setCpsatStatus('running CP-SAT… (simulated POST /generate · time_limit 45s · n_seeds 2)','warn');
   setTicker('calling CP-SAT backend — hold','run',true);
-  const base=(typeof window.IMPCC_API_URL==='string')?window.IMPCC_API_URL:'';
-  const fail=(msg)=>{state.cpsatBusy=false;btnCpsat.disabled=false;btnCpsat.innerHTML='<span class="g">✦</span> Compute optimal (CP-SAT)';setCpsatStatus('CP-SAT backend unreachable ('+msg+') — using in-browser generation only','err');setTicker('CP-SAT backend unreachable — in-browser generation still works','ok');};
-  if(typeof fetch!=='function'){fail('fetch unavailable');return;}
-  fetch(base+'/generate',{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({time_limit:45,n_seeds:2,max_solutions:0})
-  })
-  .then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
-  .then(data=>{
-    let added=0;
-    for(const sol of (data.solutions||[])){
-      const key=JSON.stringify(sol.timetable);
-      if(state.seen.has(key))continue;
-      state.seen.add(key);
-      state.combos.push(makeCombo(sol,'cpsat'));
-      added++;
-    }
-    state.cpsatDone=true;state.cpsatBusy=false;state.cpsatMerged=added;
+  setTimeout(()=>{
+    for(let i=0;i<12;i++)state.combos.push(makeCombo([4,16],'cpsat'));
+    state.cpsatDone=true;state.cpsatBusy=false;
     const list=sortedList();
-    if(list.length)state.selected=list[0].id;
-    const optimal=data.optimal?'proven optimal':'best found';
-    setCpsatStatus('CP-SAT: '+optimal+' — best score '+data.best_score+' ('+added+' new solutions merged)','ok');
-    setTicker('CP-SAT finished — '+added+' solutions merged · best score '+data.best_score+' · elapsed '+data.elapsed_seconds+' s','ok');
+    state.selected=list[0].id;
+    setCpsatStatus('CP-SAT: proven optimal — best score 560 (12 solutions merged)','ok');
+    setTicker('CP-SAT finished — 12 proven-optimal solutions merged into the pool · elapsed 92.4 s (simulated)','ok');
     renderAll();
-  })
-  .catch(err=>{fail(err.message||String(err));});
+  },2300);
 }
+
 /* ---------- events ---------- */
 btnGenerate.addEventListener('click',()=>startRun('fresh'));
 btnMore.addEventListener('click',()=>{state.running?stopRun():startRun('more');});
@@ -1169,7 +1241,7 @@ $('spotDrawer').addEventListener('click',e=>{
 
 /* ---------- boot: auto-run on load ---------- */
 renderAll();
-setTicker('Initialising — starting automatic generation','run',true);
+setTicker('Initialising demo — starting automatic generation','run',true);
 setTimeout(()=>startRun('fresh'),400);
 </script>
 </body>

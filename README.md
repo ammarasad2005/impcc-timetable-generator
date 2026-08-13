@@ -34,18 +34,19 @@ weight:  5 periods/week → 100,000
 ## Quick start
 
 ### 1. The website (no installation, runs entirely in the browser)
-Open **`index.html`** in any modern browser. It generates combinations **live** using a JavaScript
-port of the solver (`solver.js`) — there is **no pre-computed data** inside.
+Open **`index.html`** in any modern browser (or deploy the repo to Vercel). It generates
+combinations **live** using a JavaScript port of the solver (`solver.js`) — **no pre-computed data**.
 
-- **No cutoff, nothing hidden** — every distinct valid combination found is kept, shown in the
-  chooser, and ranked by score. Generation is time-bounded (a batch ≈ 15 s); press
-  **"Generate more"** to keep growing the set (it appends, never drops), or **"Stop"** to end early.
-- **Combination** dropdown (plus ◀ ▶ navigation) — every solution is listed with its rank, score,
-  and a plain-language description (e.g. *"tied for best"*, *"near-optimal — 10 points above the
-  best"*). The panel above the grids repeats this with a percentile and the exact shuffle breakdown.
-- **Sections / Teachers** toggle — view the grid per section, or every faculty member's weekly
-  schedule alongside their personal constraint.
-- **Print / PDF** — clean paper output for the college.
+- **Generate / Generate more / Stop** — fresh run, append more (nothing is ever dropped), or stop early.
+- **Compute optimal (CP-SAT)** — calls `POST /generate` (same-origin on Vercel, or set
+  `window.IMPCC_API_URL`) to merge proven-optimal (score 560) solutions from the CP-SAT backend.
+- **Combination** dropdown + ◀ ▶ — every solution is listed with rank, score, and a plain-language
+  standing ("tied for best", "near-optimal — 10 points above the best", …); the scorecard shows the
+  percentile, score-distribution histogram, and the shuffle breakdown.
+- **Sections / Faculty** toggle — per-section grids, or every faculty member's weekly schedule;
+  click any teacher card or class cell to open their **personal courses** drawer.
+- **Print / PDF** and **CSV export** — for the full combination or a single faculty member.
+- Section **preview filter** (all / I.Com / ICS / a single section) and teacher cross-highlighting.
 
 > **Live solver vs offline pipeline.** The browser runs a hand-written two-stage backtracking
 > solver (slot packing + day colouring) — a faithful JS port of the same constraint model. It is
@@ -66,10 +67,10 @@ python3 make_report.py        # compliance_report.md
 
 | File | Purpose |
 |---|---|
-| `index.html` | **Live** website (self-contained: solver + UI inlined). |
-| `solver.js` | JavaScript port of the constraint model — runs in the browser. |
-| `app.js` | Website UI (generation loop, views, print). |
-| `build_site.py` | Inlines `solver.js` + `app.js` into `index.html`. |
+| `index.html` | **The functional website** — the client's UI design, wired to the real in-browser solver (`solver.js`) + the CP-SAT backend (`POST /generate`, same-origin on Vercel). |
+| `solver.js` | JavaScript port of the constraint model — runs live in the browser. |
+| `timetable-generator-UI-prototype.html` | The original UI prototype (mock-data demo) the client supplied — the design source. |
+| `build_frontend.py` | Re-applies the functional wiring to the prototype (`python3 build_frontend.py [prototype.html]`). |
 | `solver.py` | Python data model + (early) constructive solver. |
 | `cp_solver.py` | **CP-SAT model** (OR-Tools) — the offline reference solver + `generate_ranked()` API entry point. |
 | `backend/` | **FastAPI service** wrapping `cp_solver.py` for Cloud Run (see `backend/README.md`). |
@@ -125,8 +126,9 @@ ranked chooser (union — nothing is dropped).
 - **Google Cloud Run (free tier, fastest)** — see `backend/README.md` + `deploy.sh`.
   Needs a physical bank card (Google rejects virtual/prepaid cards).
 
-Either way, set the URL in `app.js` (`const API_URL = "…"`) or inject `window.IMPCC_API_URL`
-at page load, then rebuild with `python3 build_site.py`.
+Either way, the frontend defaults to **same-origin** `/generate` (works when the site and the
+`api/` functions are deployed together on Vercel). To point at a separately-hosted backend,
+set `window.IMPCC_API_URL` before the page scripts run (e.g. in the HTML head).
 
 ---
 
