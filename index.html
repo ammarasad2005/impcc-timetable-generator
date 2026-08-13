@@ -871,14 +871,15 @@ async function exportSectionImage(secId){
     ctx.fillStyle=ink;ctx.font='600 18px "IBM Plex Sans", sans-serif';
     ctx.textAlign='center';ctx.fillText(DAYS[d],rx+cols[0]/2,y+rowH/2+6);
     rx+=cols[0]+gap;
-    for(let s=0;s<5;s++){
-      const isBrk=(s===3),cw=cols[s+1];
-      if(isBrk){
+    // 6 visual columns per row: P1, P2, P3, Break, P4, P5
+    for(let s=0;s<6;s++){
+      const cw=cols[s+1];
+      if(s===3){
         cellRect(rx,y,cw,rowH,amberTint);
         ctx.fillStyle=amber;ctx.font='600 13px "IBM Plex Sans", sans-serif';
         ctx.textAlign='center';ctx.fillText('Break',rx+cw/2,y+rowH/2+4);
       }else{
-        const cell=grid[d][s];
+        const cell=grid[d][s<3?s:s-1];   // P1..P3 from grid[0..2]; P4,P5 from grid[3..4]
         cellRect(rx,y,cw,rowH,'#ffffff');
         const dual=cell.dual;
         ctx.textAlign='center';
