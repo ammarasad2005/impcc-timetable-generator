@@ -157,6 +157,11 @@ for _code, _full in TEACHER_FULL.items():
         NAME_TO_CODE[_full] = _code
 
 def resolve_constraints(C=None):
+    """Merge per-teacher overrides onto the defaults.
+
+    Each override carries `edits` (rule key -> value); a value of None REMOVES that rule,
+    so defaults can be deleted, not just added to. Legacy `rules` is treated as edits.
+    """
     import json as _json
     out = {}
     for code, entry in DEFAULT_CONSTRAINTS.items():
@@ -164,8 +169,16 @@ def resolve_constraints(C=None):
     if C:
         for k, v in C.items():
             code = NAME_TO_CODE.get(k, k)
-            out[code] = {"name": (v or {}).get("name") or (out.get(code) or {}).get("name") or k,
-                         "rules": (v or {}).get("rules") or {}}
+            entry = v or {}
+            edits = entry.get("edits") or entry.get("rules") or {}
+            base = _json.loads(_json.dumps((out.get(code) or {}).get("rules") or {}))
+            for rk, rv in edits.items():
+                if rv is None:
+                    base.pop(rk, None)
+                else:
+                    base[rk] = rv
+            out[code] = {"name": entry.get("name") or (out.get(code) or {}).get("name") or k,
+                         "rules": base}
     return out
 
 def _slotset(a):

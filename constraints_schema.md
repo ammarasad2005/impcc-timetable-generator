@@ -129,3 +129,26 @@ Output:
   `"forbidden_slots":["P5"]` for Prof. Basit lets him teach P5, and the validator no longer
   flags it.
 - Unknown/unsupported rule keys are ignored with a warning (never silently enforced).
+
+
+---
+
+## 6. Overrides: add, modify, OR remove rules
+
+A faculty override is an **edits map** keyed by teacher code:
+
+```json
+{ "Basit": { "name": "Prof. Abdul Basit",
+             "edits": { "forbidden_slots": null,            // null = REMOVE this rule entirely
+                        "min_days_engaged": 3,               // change a value
+                        "forbidden_days": ["FRI"] } } }      // add a new rule
+```
+
+Merge rule (applied by `resolveConstraints` in both solvers):
+
+    effective = defaults ∪ edits        (a null value deletes that rule key)
+
+- `null` removes a rule even if it exists in the college defaults.
+- Editing a key overwrites its value; omitting a key leaves the default untouched.
+- A legacy override with `rules` (instead of `edits`) is treated as edits, so older
+  saved data upgrades automatically and no longer wipes unrelated rules.

@@ -209,3 +209,10 @@ identity, and every timetable/faculty view falls back to the raw name.
 > table, and **every visitor (signed in or not) loads them on page load**. Generated
 > timetable combinations are deliberately **not** shared (they stay per-device). Writes
 > remain admin-only via RLS (`anon` can SELECT only).
+
+> **Constraint edits:** constraints are now fully **add / edit / remove** — each rule on
+> the Constraints page has ✎ and ✕ controls plus an "＋ Add rule" picker. The override
+> model uses an `edits` map where `null` deletes a rule (even a default), so faculty
+> preferences can be changed or dropped, not just added. Applying an LLM translation now
+> **merges** into the edits instead of replacing the whole set (fixes a case where
+> translating one rule silently dropped the others).

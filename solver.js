@@ -181,14 +181,24 @@
   const _daySet  = a => new Set((a||[]).map(x => DAY_OF[x]));
 
   function resolveConstraints(C){
+    // Start from the college defaults, then merge per-teacher overrides.
+    // An override carries `edits` (rule key -> value). A value of null REMOVES that
+    // rule, so defaults can be deleted, not just added to. Legacy `rules` is treated
+    // as edits (keys added/overwritten).
     const out = {};
     for (const code in DEFAULT_CONSTRAINTS)
       out[code] = { name: DEFAULT_CONSTRAINTS[code].name,
                     rules: JSON.parse(JSON.stringify(DEFAULT_CONSTRAINTS[code].rules)) };
     if (C) for (const k in C) {
       const code = NAME_TO_CODE[k] || k;
-      out[code] = { name: (C[k] && C[k].name) || (out[code] && out[code].name) || k,
-                    rules: (C[k] && C[k].rules) ? C[k].rules : {} };
+      const entry = C[k] || {};
+      const edits = entry.edits || entry.rules || {};
+      const base = (out[code] && out[code].rules) ? JSON.parse(JSON.stringify(out[code].rules)) : {};
+      for (const rk in edits) {
+        const v = edits[rk];
+        if (v === null || v === undefined) delete base[rk]; else base[rk] = v;
+      }
+      out[code] = { name: entry.name || (out[code] && out[code].name) || k, rules: base };
     }
     return out;
   }

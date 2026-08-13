@@ -1475,5 +1475,153 @@ rep(".then(()=>setTicker('Published for all users ✓','ok'))",
     ".then(()=>{publishedAt=new Date().toISOString();renderPublishedAge();setTicker('Published for all users ✓','ok');})")
 
 
+RULE_EDITOR_JS = r'''/* ---------- rule editor (add / edit / remove individual rules) ---------- */
+const RULE_META={
+  allowed_slots:{label:'Only these periods',kind:'slots'},
+  forbidden_slots:{label:'Never these periods',kind:'slots'},
+  allowed_days:{label:'Only these days',kind:'days'},
+  forbidden_days:{label:'Never these days',kind:'days'},
+  forbidden_slots_on_days:{label:'Free slots on days',kind:'slotsOnDays'},
+  min_days_in_slot:{label:'Min days in a period',kind:'minDaysSlot'},
+  min_days_engaged:{label:'Min teaching days',kind:'number'},
+  max_periods_per_day:{label:'Max periods per day',kind:'number'},
+  subject_slots:{label:'Subject in periods',kind:'subjectSlots'},
+  subject_forbidden_days:{label:'Subject not on days',kind:'subjectDays'},
+  stream_slots_required:{label:'Stream fills periods',kind:'streamSlots'},
+  stream_forbidden_days:{label:'Stream not on days',kind:'streamDays'},
+};
+function describeRule(key,v){
+  const m=RULE_META[key];if(!m)return JSON.stringify(v);
+  switch(m.kind){
+    case 'slots':case 'days':return (v||[]).join(', ');
+    case 'number':return String(v);
+    case 'slotsOnDays':return (v||[]).map(e=>e.days.join('/')+' '+e.slots.join(',')).join(' · ');
+    case 'minDaysSlot':return (v||[]).map(e=>e.slot+' ≥ '+e.min_days+' days').join(' · ');
+    case 'subjectSlots':return (v||[]).map(e=>e.subject+' → '+e.slots.join(',')).join(' · ');
+    case 'subjectDays':return (v||[]).map(e=>e.subject+' not '+e.days.join(',')).join(' · ');
+    case 'streamSlots':return (v||[]).map(e=>e.stream+' fills '+e.slots.join(',')).join(' · ');
+    case 'streamDays':return (v||[]).map(e=>e.stream+' not '+e.days.join(',')).join(' · ');
+  }
+  return JSON.stringify(v);
+}
+function displayNameOf(code){return IMPCC_SOLVER.TEACHER_FULL[code]||code;}
+function ensureOverride(code){
+  if(!state.constraints)state.constraints={};
+  if(!state.constraints[code])state.constraints[code]={name:displayNameOf(code),natural:'',edits:{}};
+  const o=state.constraints[code];
+  if(!o.edits){o.edits=o.rules||{};delete o.rules;}
+  if(!o.name)o.name=displayNameOf(code);
+  return o;
+}
+function removeRule(code,key){
+  const o=ensureOverride(code);
+  o.edits[key]=null;
+  saveConstraints();
+  setTicker('Removed "'+(RULE_META[key]?RULE_META[key].label:key)+'" for '+displayNameOf(code),'ok');
+  renderMain();
+}
+function saveRuleEdit(code,key,value){
+  const o=ensureOverride(code);
+  if(value===null||(Array.isArray(value)&&!value.length))o.edits[key]=null;
+  else o.edits[key]=value;
+  saveConstraints();
+  setTicker('Updated "'+(RULE_META[key]?RULE_META[key].label:key)+'" for '+displayNameOf(code),'ok');
+  renderMain();
+}
+function selTokens(root,cls){return Array.from(root.querySelectorAll('.'+cls+'.on')).map(e=>e.dataset.v);}
+function readRuleEditor(root,kind){
+  if(kind==='slots'){const a=selTokens(root,'ed-chip-slot');return a.length?a:null;}
+  if(kind==='days'){const a=selTokens(root,'ed-chip-day');return a.length?a:null;}
+  if(kind==='number'){const n=parseInt(root.querySelector('.ed-num').value,10);return isNaN(n)?null:n;}
+  if(kind==='slotsOnDays'){const d=selTokens(root,'ed-chip-day'),sl=selTokens(root,'ed-chip-slot');return (d.length&&sl.length)?[{days:d,slots:sl}]:null;}
+  if(kind==='minDaysSlot'){const sl=root.querySelector('.ed-slot-sel').value,n=parseInt(root.querySelector('.ed-min').value,10);return (sl&&n>0)?[{slot:sl,min_days:n}]:null;}
+  if(kind==='subjectSlots'){const subj=root.querySelector('.ed-subject').value.trim(),sl=selTokens(root,'ed-chip-slot');return (subj&&sl.length)?[{subject:subj,slots:sl}]:null;}
+  if(kind==='subjectDays'){const subj=root.querySelector('.ed-subject').value.trim(),d=selTokens(root,'ed-chip-day');return (subj&&d.length)?[{subject:subj,days:d}]:null;}
+  if(kind==='streamSlots'){const st=root.querySelector('.ed-stream').value,sl=selTokens(root,'ed-chip-slot');return (st&&sl.length)?[{stream:st,slots:sl}]:null;}
+  if(kind==='streamDays'){const st=root.querySelector('.ed-stream').value,d=selTokens(root,'ed-chip-day');return (st&&d.length)?[{stream:st,days:d}]:null;}
+  return null;
+}
+function chipsHTML(cls,tokens,selected){
+  return tokens.map(t=>'<span class="ed-chip '+cls+((selected||[]).indexOf(t)>=0?' on':'')+'" data-v="'+t+'">'+t+'</span>').join('');
+}
+function ruleEditorHTML(code,key,value){
+  const m=RULE_META[key];if(!m)return '';
+  const C='ed-chip-slot',D='ed-chip-day';const v=value||null;
+  let inner='';
+  switch(m.kind){
+    case 'slots':inner=chipsHTML('ed-chip '+C,SLOTS,v||[]);break;
+    case 'days':inner=chipsHTML('ed-chip '+D,DAYS,v||[]);break;
+    case 'number':inner='<input class="ed-num" type="number" min="1" max="5" value="'+(v!=null?v:1)+'">';break;
+    case 'slotsOnDays':inner=chipsHTML('ed-chip '+D,DAYS,(v&&v[0]&&v[0].days)||[])+' '+chipsHTML('ed-chip '+C,SLOTS,(v&&v[0]&&v[0].slots)||[]);break;
+    case 'minDaysSlot':inner='<select class="ed-slot-sel">'+SLOTS.map(x=>'<option'+(v&&v[0]&&v[0].slot===x?' selected':'')+'>'+x+'</option>').join('')+'</select> ≥ <input class="ed-min" type="number" min="1" max="5" value="'+((v&&v[0]&&v[0].min_days)||1)+'"> days';break;
+    case 'subjectSlots':inner='<input class="ed-subject" placeholder="Subject" value="'+esc((v&&v[0]&&v[0].subject)||'')+'"> '+chipsHTML('ed-chip '+C,SLOTS,(v&&v[0]&&v[0].slots)||[]);break;
+    case 'subjectDays':inner='<input class="ed-subject" placeholder="Subject" value="'+esc((v&&v[0]&&v[0].subject)||'')+'"> '+chipsHTML('ed-chip '+D,DAYS,(v&&v[0]&&v[0].days)||[]);break;
+    case 'streamSlots':inner='<select class="ed-stream"><option value="ICS"'+(v&&v[0]&&v[0].stream==='ICS'?' selected':'')+'>ICS</option><option value="I.COM"'+(v&&v[0]&&v[0].stream==='I.COM'?' selected':'')+'>I.COM</option></select> '+chipsHTML('ed-chip '+C,SLOTS,(v&&v[0]&&v[0].slots)||[]);break;
+    case 'streamDays':inner='<select class="ed-stream"><option value="ICS"'+(v&&v[0]&&v[0].stream==='ICS'?' selected':'')+'>ICS</option><option value="I.COM"'+(v&&v[0]&&v[0].stream==='I.COM'?' selected':'')+'>I.COM</option></select> '+chipsHTML('ed-chip '+D,DAYS,(v&&v[0]&&v[0].days)||[]);break;
+  }
+  return '<div class="rule-ed" data-code="'+esc(code)+'" data-key="'+esc(key)+'" data-kind="'+m.kind+'">'+inner+'<button class="mini-export rule-save">Save</button><button class="mini-export rule-cancel">Cancel</button></div>';
+}
+function renderConstraints(){
+  const entries=constraintEntries();
+  const res=IMPCC_SOLVER.resolveConstraints(state.constraints);
+  let h='<div class="cons-note">'+(SB&&SB.loggedIn?'':'<b style="color:var(--amber-deep)">🔒 Sign in to unlock AI translation & cloud sync. </b>')+'<b>Faculty constraints are data.</b> Add, edit or remove individual rules below (✎ / ✕), or describe a change in plain language and press <b>✦ Translate with AI</b>, then <b>Apply</b>. Changes take effect on the next generation.<span class="cons-actions"><button class="mini-export" id="consDownload">⇩ Download</button><button class="mini-export" id="consUpload">⇧ Upload</button><button class="mini-export" id="consReset">Reset to defaults</button></span></div>';
+  h+='<input type="file" id="consUploadInput" accept="application/json" style="display:none">';
+  h+='<div class="cons-grid">';
+  for(const e of entries){
+    const eff=((res[e.code]||{}).rules)||{};
+    const keys=Object.keys(eff);
+    h+='<article class="cons-card'+(e.overridden?' edited':'')+'">';
+    h+='<header><h4>'+esc(e.name)+'</h4>'+(e.hasDefault?'<span class="stag">default</span>':'')+(e.overridden?'<span class="stag edited">edited</span>':'')+'</header>';
+    h+='<div class="cons-rules-ed">';
+    if(keys.length){
+      for(const k of keys){
+        h+='<div class="rule-row" data-code="'+e.code+'" data-key="'+k+'">'+
+          '<span class="rule-label">'+esc(RULE_META[k]?RULE_META[k].label:k)+'</span>'+
+          '<span class="rule-val">'+esc(describeRule(k,eff[k]))+'</span>'+
+          '<button class="mini-export rule-edit" title="Edit this rule">✎</button>'+
+          '<button class="card-csv rule-remove" title="Remove this rule">✕</button>'+
+        '</div>';
+      }
+    }else{
+      h+='<div class="cons-rule none">No constraints</div>';
+    }
+    h+='</div>';
+    h+='<div class="rule-add"><select class="add-rule-type" data-code="'+e.code+'"><option value="">＋ Add rule…</option>'+
+       Object.keys(RULE_META).map(k=>'<option value="'+k+'">'+esc(RULE_META[k].label)+'</option>').join('')+
+       '</select></div>';
+    h+='<textarea class="cons-nl" data-code="'+e.code+'" placeholder="Describe their constraint in plain language…">'+esc(e.natural)+'</textarea>';
+    h+='<div class="cons-btns">'+
+      '<button class="mini-export" data-translate="'+e.code+'">✦ Translate with AI</button>'+
+      '<button class="mini-export" data-apply="'+e.code+'"'+(pendingTranslations[e.code]?'':' disabled')+'>Apply</button>'+
+      '<button class="mini-export" data-reset-one="'+e.code+'"'+(e.overridden?'':' disabled')+'>Reset</button>'+
+    '</div>';
+    h+='<div class="cons-status" data-status="'+e.code+'">'+esc(pendingTranslations[e.code]||'')+'</div>';
+    h+='</article>';
+  }
+  h+='</div>';
+  mainEl.innerHTML=h;
+  $('consUploadInput').addEventListener('change',ev=>{if(ev.target.files&&ev.target.files[0])uploadConstraintsFile(ev.target.files[0]);});
+}
+'''
+
+# ---- 26) constraints: per-rule add / edit / remove (not just additive) ----
+# (a) replace renderConstraints with the interactive rule editor
+_i = src.index("function renderConstraints(){")
+_j = src.index("function translateOne(")
+src = src[:_i] + RULE_EDITOR_JS + src[_j:]
+
+# (b) applyTranslation now MERGES the LLM rules into edits (preserves other rules)
+rep("state.constraints[code]={name:IMPCC_SOLVER.TEACHER_FULL[code]||code,natural:natural,rules:d.rules||{}};",
+    "{const o=ensureOverride(code);o.natural=natural;for(const rk in (d.rules||{})){o.edits[rk]=d.rules[rk];}}")
+
+# (c) CSS for the rule editor
+rep(".cons-status{font-family:var(--mono);font-size:10.5px;color:var(--ink2);min-height:14px}",
+    ".cons-status{font-family:var(--mono);font-size:10.5px;color:var(--ink2);min-height:14px}\n.cons-rules-ed{display:flex;flex-direction:column;gap:4px}\n.rule-row{display:flex;align-items:center;gap:6px;font-size:12px}\n.rule-label{font-family:var(--mono);font-size:10px;color:var(--ink2);min-width:128px}\n.rule-val{flex:1;font-size:11.5px;color:var(--ink)}\n.rule-row .mini-export,.rule-row .card-csv{padding:2px 7px;font-size:10px}\n.rule-ed{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12px;background:var(--surface2);border:1px dashed var(--line2);border-radius:8px;padding:6px 8px}\n.ed-chip{display:inline-flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:10px;padding:2px 8px;border:1px solid var(--line2);border-radius:99px;cursor:pointer;background:#fff;color:var(--ink2)}\n.ed-chip.on{background:var(--green);color:#fff;border-color:var(--green)}\n.ed-num{padding:4px 7px;border:1px solid var(--line2);border-radius:6px;font-size:12px;width:56px}\n.ed-subject{padding:4px 7px;border:1px solid var(--line2);border-radius:6px;font-size:12px;width:150px}\n.ed-slot-sel,.ed-stream{padding:4px 6px;border:1px solid var(--line2);border-radius:6px;font-size:12px}\n.rule-add{margin-top:2px}\n.rule-add select{padding:5px 8px;border:1px solid var(--line2);border-radius:6px;font-size:12px;color:var(--ink)}")
+
+# (d) delegation for the rule editor
+rep("$('spPrint').addEventListener('click',()=>{if(state.spot)exportTeacherImage(state.spot);});",
+    "$('spPrint').addEventListener('click',()=>{if(state.spot)exportTeacherImage(state.spot);});\nmainEl.addEventListener('click',e=>{\n  const chip=e.target.closest('.ed-chip');\n  if(chip){chip.classList.toggle('on');return;}\n  const rm=e.target.closest('.rule-remove');\n  if(rm){const row=rm.closest('.rule-row');removeRule(row.dataset.code,row.dataset.key);return;}\n  const ed=e.target.closest('.rule-edit');\n  if(ed){const row=ed.closest('.rule-row');const code=row.dataset.code,key=row.dataset.key;const eff=(IMPCC_SOLVER.resolveConstraints(state.constraints)[code]||{}).rules||{};row.outerHTML=ruleEditorHTML(code,key,eff[key]);return;}\n  const sv=e.target.closest('.rule-save');\n  if(sv){const box=sv.closest('.rule-ed');saveRuleEdit(box.dataset.code,box.dataset.key,readRuleEditor(box,box.dataset.kind));return;}\n  const cn=e.target.closest('.rule-cancel');\n  if(cn){renderMain();return;}\n});\nmainEl.addEventListener('change',e=>{\n  const at=e.target.closest('.add-rule-type');\n  if(at&&at.value){const code=at.dataset.code;at.closest('.rule-add').insertAdjacentHTML('beforebegin',ruleEditorHTML(code,at.value,null));at.value='';}\n});")
+
+
 io.open(DST, "w", encoding="utf-8").write(src)
 print("OK → wrote", DST, "(", len(src), "bytes )")
