@@ -187,6 +187,11 @@ select#comboSel:focus{outline:2px solid var(--amber);outline-offset:1px}
 .cons-nl{width:100%;min-height:52px;font-family:var(--body);font-size:12.5px;padding:8px 10px;border:1px solid var(--line2);border-radius:8px;background:#fff;resize:vertical;color:var(--ink)}
 .cons-btns{display:flex;gap:6px;flex-wrap:wrap}
 .cons-status{font-family:var(--mono);font-size:10.5px;color:var(--ink2);min-height:14px}
+.dir-add{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:16px}
+.dir-add input#dirNewName{flex:1;min-width:220px;padding:8px 11px;border:1px solid var(--line2);border-radius:8px;background:#fff;font-size:13px;color:var(--ink)}
+.dir-add select{padding:8px 10px;border:1px solid var(--line2);border-radius:8px;background:#fff;font-size:13px;color:var(--ink)}
+.dir-name{width:100%;font-family:var(--disp);font-weight:700;font-size:15px;border:1px solid transparent;background:transparent;color:var(--ink);padding:2px 4px;border-radius:6px;box-sizing:border-box}
+.dir-name:hover,.dir-name:focus{border-color:var(--line2);background:#fff}
 .mast-auth{margin-left:auto;display:flex;align-items:center;gap:8px}
 .mast-auth .auth-name{font-family:var(--mono);font-size:11px;color:var(--green-deep)}
 .auth-modal{position:fixed;inset:0;background:rgba(14,59,41,.45);z-index:200;display:none;align-items:center;justify-content:center}
@@ -464,6 +469,7 @@ footer b{color:var(--green)}
       <button id="viewTeachers">◉ Faculty</button>
       <button id="viewConstraints">⚙ Constraints</button>
       <button id="viewAllocation">🗂 Allocation</button>
+      <button id="viewDirectory">📇 Directory</button>
     </div>
 
     <span class="vb-filter" id="secFilterWrap" title="Choose which section(s) to preview">
@@ -1165,6 +1171,7 @@ function renderEmpty(msg,sub){
 function renderMain(){
   if(state.view==='constraints'){renderConstraints();return;}
   if(state.view==='allocation'){renderAllocation();return;}
+  if(state.view==='directory'){renderDirectory();return;}
   const c=getSel();
   if(!state.combos.length){
     renderEmpty('No combinations yet',state.running
@@ -1476,13 +1483,15 @@ $('viewSections').addEventListener('click',()=>setView('sections'));
 $('viewTeachers').addEventListener('click',()=>setView('teachers'));
 $('viewConstraints').addEventListener('click',()=>setView('constraints'));
 $('viewAllocation').addEventListener('click',()=>setView('allocation'));
+$('viewDirectory').addEventListener('click',()=>setView('directory'));
 function setView(v){
   state.view=v;
   $('viewSections').classList.toggle('on',v==='sections');
   $('viewTeachers').classList.toggle('on',v==='teachers');
-  $('secFilterWrap').classList.toggle('hidden',v!=='sections'&&v!=='constraints');
+  $('secFilterWrap').classList.toggle('hidden',v!=='sections');
   $('viewConstraints').classList.toggle('on',v==='constraints');
   $('viewAllocation').classList.toggle('on',v==='allocation');
+  $('viewDirectory').classList.toggle('on',v==='directory');
   renderChrome();persist();
   mainEl.classList.add('swap');
   setTimeout(()=>{renderMain();mainEl.classList.remove('swap');},150);
@@ -1583,11 +1592,7 @@ $('spotDrawer').addEventListener('click',e=>{
 
 /* ---------- auth + cloud sync + allocation page ---------- */
 const SB = (typeof IMPCC_SUPABASE!=='undefined') ? IMPCC_SUPABASE : null;
-function rosterNames(){
-  const names=[];
-  for(const code in IMPCC_SOLVER.TEACHER_FULL) names.push(IMPCC_SOLVER.TEACHER_FULL[code]);
-  return Array.from(new Set(names)).sort();
-}
+function rosterNames(){return facultyNames();}
 function defaultAllocation(){
   const a={};
   for(const sec of IMPCC_SOLVER.DEFAULT_SECTIONS){
@@ -1641,12 +1646,13 @@ async function syncFromCloud(){
     if(ws){
       if(ws.constraints&&Object.keys(ws.constraints).length){state.constraints=ws.constraints;saveConstraints();}
       if(ws.allocation&&Object.keys(ws.allocation).length){state.allocation=ws.allocation;saveAllocationLocal();}
+      if(ws.faculty&&ws.faculty.length){state.faculty=ws.faculty;saveFacultyLocal();}
     }
   }catch(e){setTicker('Cloud load failed: '+e.message,'err');}
 }
 function pushToCloud(){
   if(!SB||!SB.loggedIn)return;
-  SB.saveWorkspace(state.allocation||defaultAllocation(),state.constraints||{})
+  SB.saveWorkspace(state.allocation||defaultAllocation(),state.constraints||{},getFaculty())
     .then(()=>setTicker('Saved to Supabase ✓','ok'))
     .catch(err=>setTicker('Cloud sync failed: '+err.message,'err'));
 }
@@ -1689,6 +1695,76 @@ function allocInputHandler(el){
   if(b){const t=sectionTotal(a[key].subjects);b.textContent=t+'/25';b.style.cssText=t===25?'':'color:var(--red);border-color:var(--red)';}
 }
 
+/* ---------- faculty directory (roster as data) ---------- */
+const FAC_KEY='impcc-faculty-v1';
+function defaultFaculty(){
+  const arr=[];
+  for(const code in IMPCC_SOLVER.TEACHER_FULL){
+    if(code==='PARALLEL')continue;
+    const type=(code==='V1'||code==='V2'||code==='V3')?'visiting':'permanent';
+    arr.push({name:IMPCC_SOLVER.TEACHER_FULL[code],type:type,active:true});
+  }
+  return arr;
+}
+function loadFaculty(){
+  try{const raw=localStorage.getItem(FAC_KEY);if(raw){state.faculty=JSON.parse(raw);return true;}}catch(e){}
+  state.faculty=null;return false;
+}
+function saveFacultyLocal(){
+  try{if(state.faculty)localStorage.setItem(FAC_KEY,JSON.stringify(state.faculty));else localStorage.removeItem(FAC_KEY);}catch(e){}
+}
+function getFaculty(){if(!state.faculty)state.faculty=defaultFaculty();return state.faculty;}
+function facultyNames(){
+  const set=new Set();
+  for(const code in IMPCC_SOLVER.TEACHER_FULL)if(code!=='PARALLEL')set.add(IMPCC_SOLVER.TEACHER_FULL[code]);
+  for(const f of getFaculty())set.add(f.name);
+  try{const a=getWorkingAllocation();for(const k in a)for(const e of (a[k].subjects||[]))if(e.teacher)set.add(e.teacher);}catch(e){}
+  return Array.from(set).sort();
+}
+function renderDirectory(){
+  const roster=getFaculty();
+  let h='<div class="cons-note"><b>Faculty directory.</b> Add, rename or retire faculty — the Allocation and Constraints pickers stay in sync with this list.'+(SB&&SB.loggedIn?' Signed in — changes sync across devices.':' <b style="color:var(--amber-deep)">Not signed in — saved locally only.</b>')+'</div>';
+  h+='<div class="dir-add"><input id="dirNewName" placeholder="New faculty name (e.g. Prof. Jane Doe)"><select id="dirNewType"><option value="permanent">Permanent</option><option value="visiting">Visiting</option></select><button class="mini-export" id="dirAddBtn">＋ Add</button></div>';
+  h+='<div class="cons-grid">';
+  roster.forEach((f,i)=>{
+    h+='<article class="cons-card'+(f.active?'':' edited')+'"><header><h4><input class="dir-name" data-i="'+i+'" value="'+esc(f.name)+'"></h4><span class="stag'+(f.active?'':' edited')+'">'+(f.active?esc(f.type):'left')+'</span></header>'+
+      '<div class="cons-btns">'+
+        '<select class="dir-type" data-i="'+i+'"><option value="permanent"'+(f.type==='permanent'?' selected':'')+'>Permanent</option><option value="visiting"'+(f.type==='visiting'?' selected':'')+'>Visiting</option></select>'+
+        '<button class="mini-export" data-dir-toggle="'+i+'">'+(f.active?'Mark left':'Re-activate')+'</button>'+
+        '<button class="card-csv" data-dir-del="'+i+'" title="Remove from directory">✕</button>'+
+      '</div></article>';
+  });
+  h+='</div>';
+  mainEl.innerHTML=h;
+  document.getElementById('dirAddBtn').addEventListener('click',()=>{
+    const nm=document.getElementById('dirNewName').value.trim();
+    if(!nm)return;
+    if(facultyNames().indexOf(nm)>=0){setTicker('“'+nm+'” already exists','err');return;}
+    getFaculty().push({name:nm,type:document.getElementById('dirNewType').value,active:true});
+    saveFacultyLocal();pushToCloud();renderDirectory();
+    setTicker('Added '+nm+' to the directory','ok');
+  });
+  document.querySelectorAll('.dir-name').forEach(el=>el.addEventListener('change',e=>{
+    const f=getFaculty()[+e.target.dataset.i];if(!f)return;
+    const v=e.target.value.trim();if(v)f.name=v;
+    saveFacultyLocal();pushToCloud();setTicker('Faculty renamed','ok');
+  }));
+  document.querySelectorAll('.dir-type').forEach(el=>el.addEventListener('change',e=>{
+    const f=getFaculty()[+e.target.dataset.i];if(!f)return;
+    f.type=e.target.value;saveFacultyLocal();pushToCloud();
+  }));
+  document.querySelectorAll('[data-dir-toggle]').forEach(el=>el.addEventListener('click',e=>{
+    const f=getFaculty()[+e.target.dataset.dirToggle];if(!f)return;
+    f.active=!f.active;saveFacultyLocal();pushToCloud();renderDirectory();
+    setTicker(f.name+(f.active?' re-activated':' marked as left'),'ok');
+  }));
+  document.querySelectorAll('[data-dir-del]').forEach(el=>el.addEventListener('click',e=>{
+    const i=+e.target.dataset.dirDel;const f=getFaculty()[i];
+    getFaculty().splice(i,1);saveFacultyLocal();pushToCloud();renderDirectory();
+    setTicker('Removed '+(f?f.name:'entry')+' from the directory','ok');
+  }));
+}
+
 /* ---------- constraints page (data-driven faculty constraints + LLM) ---------- */
 const CONST_KEY='impcc-constraints-v1';
 let pendingTranslations={};
@@ -1718,7 +1794,7 @@ function resetOneConstraint(code){
   delete state.constraints[code];
   if(!Object.keys(state.constraints).length)state.constraints=null;
   saveConstraints();
-  setTicker('Reset '+IMPCC_SOLVER.TEACHER_FULL[code]+' to defaults','ok');
+  setTicker('Reset '+(IMPCC_SOLVER.TEACHER_FULL[code]||code)+' to defaults','ok');
   renderMain();
 }
 function downloadConstraints(){
@@ -1745,8 +1821,10 @@ function uploadConstraintsFile(file){
 function constraintEntries(){
   const cur=state.constraints||{};
   const list=[];
+  const seen=new Set();
   for(const code in IMPCC_SOLVER.TEACHER_FULL){
     if(code==='PARALLEL')continue;
+    seen.add(IMPCC_SOLVER.TEACHER_FULL[code]);
     const def=IMPCC_SOLVER.DEFAULT_CONSTRAINTS[code];
     const over=cur[code];
     list.push({
@@ -1757,6 +1835,13 @@ function constraintEntries(){
       rules:over?(over.rules||{}):(def?def.rules:{}),
       overridden:!!over
     });
+  }
+  // directory-only faculty (e.g. newly added / visiting) — no built-in defaults
+  for(const f of getFaculty()){
+    if(seen.has(f.name))continue;
+    seen.add(f.name);
+    const over=cur[f.name];
+    list.push({ code:f.name, name:f.name, hasDefault:false, natural:(over&&over.natural)||'', rules:over?(over.rules||{}):{}, overridden:!!over });
   }
   return list.sort((a,b)=>(b.overridden?1:0)-(a.overridden?1:0)||(b.hasDefault?1:0)-(a.hasDefault?1:0)||a.name.localeCompare(b.name));
 }
@@ -1810,7 +1895,7 @@ function translateOne(code){
   fetch(base+'/translate',{
     method:'POST',
     headers:{'Content-Type':'application/json','Authorization':'Bearer '+(SB&&SB.session&&SB.session.access_token?SB.session.access_token:'')},
-    body:JSON.stringify({text:text,teacher:IMPCC_SOLVER.TEACHER_FULL[code]})
+    body:JSON.stringify({text:text,teacher:IMPCC_SOLVER.TEACHER_FULL[code]||code})
   })
   .then(r=>{if(!r.ok)throw new Error(r.status===401?'Sign in required':'HTTP '+r.status);return r.json();})
   .then(d=>{
@@ -1830,16 +1915,17 @@ function applyTranslation(code){
   const ta=document.querySelector('.cons-nl[data-code="'+code+'"]');
   const natural=ta?ta.value.trim():d.natural;
   if(!state.constraints)state.constraints={};
-  state.constraints[code]={name:IMPCC_SOLVER.TEACHER_FULL[code],natural:natural,rules:d.rules||{}};
+  state.constraints[code]={name:IMPCC_SOLVER.TEACHER_FULL[code]||code,natural:natural,rules:d.rules||{}};
   saveConstraints();
   delete pendingTranslations[code];
-  setTicker('Applied constraints for '+IMPCC_SOLVER.TEACHER_FULL[code]+' — will affect the next generation','ok');
+  setTicker('Applied constraints for '+(IMPCC_SOLVER.TEACHER_FULL[code]||code)+' — will affect the next generation','ok');
   renderMain();
 }
 
 /* ---------- boot: restore saved results (no auto-generation) ---------- */
 loadConstraints();
 loadAllocation();
+loadFaculty();
 renderAuth();
 const restored=restore();
 if(SB&&SB.loggedIn){syncFromCloud().then(()=>{renderMain();renderChrome();});}

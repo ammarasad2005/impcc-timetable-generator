@@ -1208,5 +1208,176 @@ rep(".con-sel label{font-family:var(--mono);font-size:10px;letter-spacing:.14em;
     ".con-sel label{flex:0 0 auto;font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:#9db5a8;text-transform:uppercase}")
 
 
+# ---- 23) faculty directory (roster as data) + picker consistency -------------
+# CSS
+rep(".cons-status{font-family:var(--mono);font-size:10.5px;color:var(--ink2);min-height:14px}",
+    ".cons-status{font-family:var(--mono);font-size:10.5px;color:var(--ink2);min-height:14px}\n.dir-add{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:16px}\n.dir-add input#dirNewName{flex:1;min-width:220px;padding:8px 11px;border:1px solid var(--line2);border-radius:8px;background:#fff;font-size:13px;color:var(--ink)}\n.dir-add select{padding:8px 10px;border:1px solid var(--line2);border-radius:8px;background:#fff;font-size:13px;color:var(--ink)}\n.dir-name{width:100%;font-family:var(--disp);font-weight:700;font-size:15px;border:1px solid transparent;background:transparent;color:var(--ink);padding:2px 4px;border-radius:6px;box-sizing:border-box}\n.dir-name:hover,.dir-name:focus{border-color:var(--line2);background:#fff}")
+
+# Directory tab
+rep('<button id="viewAllocation">🗂 Allocation</button>',
+    '<button id="viewAllocation">🗂 Allocation</button>\n      <button id="viewDirectory">📇 Directory</button>')
+rep("$('viewAllocation').addEventListener('click',()=>setView('allocation'));",
+    "$('viewAllocation').addEventListener('click',()=>setView('allocation'));\n$('viewDirectory').addEventListener('click',()=>setView('directory'));")
+rep("  $('viewAllocation').classList.toggle('on',v==='allocation');",
+    "  $('viewAllocation').classList.toggle('on',v==='allocation');\n  $('viewDirectory').classList.toggle('on',v==='directory');")
+rep("  $('secFilterWrap').classList.toggle('hidden',v!=='sections'&&v!=='constraints');",
+    "  $('secFilterWrap').classList.toggle('hidden',v!=='sections');")
+rep("  if(state.view==='allocation'){renderAllocation();return;}",
+    "  if(state.view==='allocation'){renderAllocation();return;}\n  if(state.view==='directory'){renderDirectory();return;}")
+
+# boot: load faculty
+rep("loadConstraints();\nloadAllocation();\nrenderAuth();\nconst restored=restore();",
+    "loadConstraints();\nloadAllocation();\nloadFaculty();\nrenderAuth();\nconst restored=restore();")
+
+# rosterNames -> merged faculty names
+rep("""function rosterNames(){
+  const names=[];
+  for(const code in IMPCC_SOLVER.TEACHER_FULL) names.push(IMPCC_SOLVER.TEACHER_FULL[code]);
+  return Array.from(new Set(names)).sort();
+}""",
+    """function rosterNames(){return facultyNames();}""")
+
+# pushToCloud / syncFromCloud include faculty
+rep("""  SB.saveWorkspace(state.allocation||defaultAllocation(),state.constraints||{})
+    .then(()=>setTicker('Saved to Supabase ✓','ok'))""",
+    """  SB.saveWorkspace(state.allocation||defaultAllocation(),state.constraints||{},getFaculty())
+    .then(()=>setTicker('Saved to Supabase ✓','ok'))""")
+rep("""      if(ws.allocation&&Object.keys(ws.allocation).length){state.allocation=ws.allocation;saveAllocationLocal();}""",
+    """      if(ws.allocation&&Object.keys(ws.allocation).length){state.allocation=ws.allocation;saveAllocationLocal();}
+      if(ws.faculty&&ws.faculty.length){state.faculty=ws.faculty;saveFacultyLocal();}""")
+
+# constraintEntries: also list directory-only faculty
+rep("""function constraintEntries(){
+  const cur=state.constraints||{};
+  const list=[];
+  for(const code in IMPCC_SOLVER.TEACHER_FULL){
+    if(code==='PARALLEL')continue;
+    const def=IMPCC_SOLVER.DEFAULT_CONSTRAINTS[code];
+    const over=cur[code];
+    list.push({
+      code,
+      name:IMPCC_SOLVER.TEACHER_FULL[code],
+      hasDefault:!!def,
+      natural:(over&&over.natural)||'',
+      rules:over?(over.rules||{}):(def?def.rules:{}),
+      overridden:!!over
+    });
+  }
+  return list.sort((a,b)=>(b.overridden?1:0)-(a.overridden?1:0)||(b.hasDefault?1:0)-(a.hasDefault?1:0)||a.name.localeCompare(b.name));
+}""",
+    """function constraintEntries(){
+  const cur=state.constraints||{};
+  const list=[];
+  const seen=new Set();
+  for(const code in IMPCC_SOLVER.TEACHER_FULL){
+    if(code==='PARALLEL')continue;
+    seen.add(IMPCC_SOLVER.TEACHER_FULL[code]);
+    const def=IMPCC_SOLVER.DEFAULT_CONSTRAINTS[code];
+    const over=cur[code];
+    list.push({
+      code,
+      name:IMPCC_SOLVER.TEACHER_FULL[code],
+      hasDefault:!!def,
+      natural:(over&&over.natural)||'',
+      rules:over?(over.rules||{}):(def?def.rules:{}),
+      overridden:!!over
+    });
+  }
+  // directory-only faculty (e.g. newly added / visiting) — no built-in defaults
+  for(const f of getFaculty()){
+    if(seen.has(f.name))continue;
+    seen.add(f.name);
+    const over=cur[f.name];
+    list.push({ code:f.name, name:f.name, hasDefault:false, natural:(over&&over.natural)||'', rules:over?(over.rules||{}):{}, overridden:!!over });
+  }
+  return list.sort((a,b)=>(b.overridden?1:0)-(a.overridden?1:0)||(b.hasDefault?1:0)-(a.hasDefault?1:0)||a.name.localeCompare(b.name));
+}""")
+
+# display-name fallbacks (new faculty have no TEACHER_FULL entry)
+rep("setTicker('Reset '+IMPCC_SOLVER.TEACHER_FULL[code]+' to defaults','ok');",
+    "setTicker('Reset '+(IMPCC_SOLVER.TEACHER_FULL[code]||code)+' to defaults','ok');")
+rep("body:JSON.stringify({text:text,teacher:IMPCC_SOLVER.TEACHER_FULL[code]})",
+    "body:JSON.stringify({text:text,teacher:IMPCC_SOLVER.TEACHER_FULL[code]||code})")
+rep("state.constraints[code]={name:IMPCC_SOLVER.TEACHER_FULL[code],natural:natural,rules:d.rules||{}};",
+    "state.constraints[code]={name:IMPCC_SOLVER.TEACHER_FULL[code]||code,natural:natural,rules:d.rules||{}};")
+rep("setTicker('Applied constraints for '+IMPCC_SOLVER.TEACHER_FULL[code]+' — will affect the next generation','ok');",
+    "setTicker('Applied constraints for '+(IMPCC_SOLVER.TEACHER_FULL[code]||code)+' — will affect the next generation','ok');")
+
+# insert the directory module before the constraints-page module
+dir_js = """/* ---------- faculty directory (roster as data) ---------- */
+const FAC_KEY='impcc-faculty-v1';
+function defaultFaculty(){
+  const arr=[];
+  for(const code in IMPCC_SOLVER.TEACHER_FULL){
+    if(code==='PARALLEL')continue;
+    const type=(code==='V1'||code==='V2'||code==='V3')?'visiting':'permanent';
+    arr.push({name:IMPCC_SOLVER.TEACHER_FULL[code],type:type,active:true});
+  }
+  return arr;
+}
+function loadFaculty(){
+  try{const raw=localStorage.getItem(FAC_KEY);if(raw){state.faculty=JSON.parse(raw);return true;}}catch(e){}
+  state.faculty=null;return false;
+}
+function saveFacultyLocal(){
+  try{if(state.faculty)localStorage.setItem(FAC_KEY,JSON.stringify(state.faculty));else localStorage.removeItem(FAC_KEY);}catch(e){}
+}
+function getFaculty(){if(!state.faculty)state.faculty=defaultFaculty();return state.faculty;}
+function facultyNames(){
+  const set=new Set();
+  for(const code in IMPCC_SOLVER.TEACHER_FULL)if(code!=='PARALLEL')set.add(IMPCC_SOLVER.TEACHER_FULL[code]);
+  for(const f of getFaculty())set.add(f.name);
+  try{const a=getWorkingAllocation();for(const k in a)for(const e of (a[k].subjects||[]))if(e.teacher)set.add(e.teacher);}catch(e){}
+  return Array.from(set).sort();
+}
+function renderDirectory(){
+  const roster=getFaculty();
+  let h='<div class="cons-note"><b>Faculty directory.</b> Add, rename or retire faculty — the Allocation and Constraints pickers stay in sync with this list.'+(SB&&SB.loggedIn?' Signed in — changes sync across devices.':' <b style="color:var(--amber-deep)">Not signed in — saved locally only.</b>')+'</div>';
+  h+='<div class="dir-add"><input id="dirNewName" placeholder="New faculty name (e.g. Prof. Jane Doe)"><select id="dirNewType"><option value="permanent">Permanent</option><option value="visiting">Visiting</option></select><button class="mini-export" id="dirAddBtn">＋ Add</button></div>';
+  h+='<div class="cons-grid">';
+  roster.forEach((f,i)=>{
+    h+='<article class="cons-card'+(f.active?'':' edited')+'"><header><h4><input class="dir-name" data-i="'+i+'" value="'+esc(f.name)+'"></h4><span class="stag'+(f.active?'':' edited')+'">'+(f.active?esc(f.type):'left')+'</span></header>'+
+      '<div class="cons-btns">'+
+        '<select class="dir-type" data-i="'+i+'"><option value="permanent"'+(f.type==='permanent'?' selected':'')+'>Permanent</option><option value="visiting"'+(f.type==='visiting'?' selected':'')+'>Visiting</option></select>'+
+        '<button class="mini-export" data-dir-toggle="'+i+'">'+(f.active?'Mark left':'Re-activate')+'</button>'+
+        '<button class="card-csv" data-dir-del="'+i+'" title="Remove from directory">✕</button>'+
+      '</div></article>';
+  });
+  h+='</div>';
+  mainEl.innerHTML=h;
+  document.getElementById('dirAddBtn').addEventListener('click',()=>{
+    const nm=document.getElementById('dirNewName').value.trim();
+    if(!nm)return;
+    if(facultyNames().indexOf(nm)>=0){setTicker('“'+nm+'” already exists','err');return;}
+    getFaculty().push({name:nm,type:document.getElementById('dirNewType').value,active:true});
+    saveFacultyLocal();pushToCloud();renderDirectory();
+    setTicker('Added '+nm+' to the directory','ok');
+  });
+  document.querySelectorAll('.dir-name').forEach(el=>el.addEventListener('change',e=>{
+    const f=getFaculty()[+e.target.dataset.i];if(!f)return;
+    const v=e.target.value.trim();if(v)f.name=v;
+    saveFacultyLocal();pushToCloud();setTicker('Faculty renamed','ok');
+  }));
+  document.querySelectorAll('.dir-type').forEach(el=>el.addEventListener('change',e=>{
+    const f=getFaculty()[+e.target.dataset.i];if(!f)return;
+    f.type=e.target.value;saveFacultyLocal();pushToCloud();
+  }));
+  document.querySelectorAll('[data-dir-toggle]').forEach(el=>el.addEventListener('click',e=>{
+    const f=getFaculty()[+e.target.dataset.dirToggle];if(!f)return;
+    f.active=!f.active;saveFacultyLocal();pushToCloud();renderDirectory();
+    setTicker(f.name+(f.active?' re-activated':' marked as left'),'ok');
+  }));
+  document.querySelectorAll('[data-dir-del]').forEach(el=>el.addEventListener('click',e=>{
+    const i=+e.target.dataset.dirDel;const f=getFaculty()[i];
+    getFaculty().splice(i,1);saveFacultyLocal();pushToCloud();renderDirectory();
+    setTicker('Removed '+(f?f.name:'entry')+' from the directory','ok');
+  }));
+}
+
+"""
+rep("/* ---------- constraints page (data-driven faculty constraints + LLM) ---------- */",
+    dir_js + "/* ---------- constraints page (data-driven faculty constraints + LLM) ---------- */")
+
+
 io.open(DST, "w", encoding="utf-8").write(src)
 print("OK → wrote", DST, "(", len(src), "bytes )")

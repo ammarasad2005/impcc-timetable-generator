@@ -191,3 +191,15 @@ stored in **Supabase** per signed-in account, so changing devices keeps everythi
 > (CP-SAT) and `POST /translate` (LLM) reject requests without a valid Supabase session
 > (server-side `auth_check.py`); the in-browser JS generator stays free. The UI disables the
 > CP-SAT button and blocks Translate until signed in.
+
+---
+
+## Faculty directory
+
+A new **📇 Directory** page makes the faculty roster itself editable data (add, rename,
+mark "left", re-activate, remove; each member is Permanent or Visiting). The **Allocation**
+teacher pickers and the **Constraints** page both read from this directory, so they stay
+consistent as faculty come and go. The roster syncs to Supabase (per signed-in account,
+stored in `workspace.faculty`) and falls back to localStorage. Teachers who aren't in the
+built-in list still render correctly everywhere — the solver treats their name as the
+identity, and every timetable/faculty view falls back to the raw name.

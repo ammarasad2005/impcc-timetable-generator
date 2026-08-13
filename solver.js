@@ -912,7 +912,7 @@
     const out = {};
     for (const sec of SECTIONS) {
       const g = grids[sec.key];
-      out[sec.key] = g.map(row => row.map(uid => [UNITS[uid].subject, TEACHER_FULL[UNITS[uid].teacher]]));
+      out[sec.key] = g.map(row => row.map(uid => [UNITS[uid].subject, TEACHER_FULL[UNITS[uid].teacher] || UNITS[uid].teacher]));
     }
     return out;
   }

@@ -78,7 +78,7 @@ def grids_to_dict(grids):
             row = []
             for s in range(5):
                 u = UNITS[g[d][s]]
-                row.append([u["subject"], TEACHER_FULL[u["teacher"]]])
+                row.append([u["subject"], TEACHER_FULL.get(u["teacher"], u["teacher"])])
             rows.append(row)
         out[sec["key"]] = rows
     return out

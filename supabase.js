@@ -72,10 +72,10 @@
       return (Array.isArray(rows) && rows.length) ? rows[0] : null;
     },
 
-    async saveWorkspace(allocation, constraints) {
+    async saveWorkspace(allocation, constraints, faculty) {
       const uid = this.user && this.user.id;
       if (!uid) throw new Error("not signed in");
-      const body = { user_id: uid, allocation: allocation || {}, constraints: constraints || {}, updated_at: new Date().toISOString() };
+      const body = { user_id: uid, allocation: allocation || {}, constraints: constraints || {}, faculty: faculty || [], updated_at: new Date().toISOString() };
       return this._req("/rest/v1/workspace?on_conflict=user_id", {
         method: "POST",
         headers: Object.assign({}, this._headers(), { "Prefer": "resolution=merge-duplicates,return=representation" }),
