@@ -182,3 +182,7 @@ stored in **Supabase** per signed-in account, so changing devices keeps everythi
 - `supabase.js` is a dependency-free Supabase client (GoTrue + PostgREST via fetch) — the
   anon key is embedded (public by design; RLS protects data). The service-role key and the
   dashboard PAT are **not** committed.
+
+> **Access model:** public signup is **disabled** — only authorized accounts can reach the
+> Supabase-synced data. The admin account is created server-side (currently
+> `admin@impcc.com`); additional accounts are added by an admin in Supabase → Authentication.

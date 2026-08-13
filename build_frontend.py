@@ -1013,7 +1013,7 @@ rep('<script src="solver.js"></script>',
 
 # (b) masthead auth + modal (before the single literal </header>)
 rep('</header>',
-    '  <div class="mast-auth" id="authUi"></div>\n</header>\n<div class="auth-modal" id="authModal">\n  <div class="auth-box">\n    <h3>Sign in to IMPCC Timetable</h3>\n    <p>Your allocation and constraints are synced across devices.</p>\n    <input id="authEmail" type="email" placeholder="Email">\n    <input id="authPass" type="password" placeholder="Password">\n    <div class="auth-row">\n      <button class="btn primary" id="authSignInBtn">Sign in</button>\n      <button class="btn" id="authSignUpBtn">Create account</button>\n      <button class="btn" id="authClose">Cancel</button>\n    </div>\n    <div class="cons-status" id="authMsg"></div>\n  </div>\n</div>')
+    '  <div class="mast-auth" id="authUi"></div>\n</header>\n<div class="auth-modal" id="authModal">\n  <div class="auth-box">\n    <h3>Sign in to IMPCC Timetable</h3>\n    <p>Authorized access only — your allocation and constraints sync across devices.</p>\n    <input id="authEmail" type="email" placeholder="Email">\n    <input id="authPass" type="password" placeholder="Password">\n    <div class="auth-row">\n      <button class="btn primary" id="authSignInBtn">Sign in</button>\n      <button class="btn" id="authClose">Cancel</button>\n    </div>\n    <div class="cons-status" id="authMsg"></div>\n  </div>\n</div>')
 
 # (c) CSS for auth + allocation
 rep('.cons-status{font-family:var(--mono);font-size:10.5px;color:var(--ink2);min-height:14px}',
@@ -1087,8 +1087,8 @@ function authSubmit(mode){
   const pass=document.getElementById('authPass').value;
   if(!email||!pass){setAuthMsg('Enter email and password.');return;}
   if(!SB){setAuthMsg('Supabase unavailable in this environment.');return;}
-  setAuthMsg(mode==='in'?'Signing in…':'Creating account…');
-  const p=mode==='in'?SB.login(email,pass):SB.signup(email,pass);
+  setAuthMsg('Signing in…');
+  const p=SB.login(email,pass);
   p.then(async()=>{
     setAuthMsg('Signed in — loading your workspace…');
     await syncFromCloud();
@@ -1158,7 +1158,7 @@ rep("/* ---------- constraints page (data-driven faculty constraints + LLM) ----
 
 # (i) delegation for allocation inputs + auth modal buttons (append inside mainEl click handler region — add new listeners near others)
 rep("$('spPrint').addEventListener('click',()=>{if(state.spot)exportTeacherImage(state.spot);});",
-    "$('spPrint').addEventListener('click',()=>{if(state.spot)exportTeacherImage(state.spot);});\nmainEl.addEventListener('input',e=>{if(e.target.classList.contains('alloc-subj')||e.target.classList.contains('alloc-tchr')||e.target.classList.contains('alloc-per'))allocInputHandler(e.target);});\nmainEl.addEventListener('change',e=>{if(e.target.classList.contains('alloc-tchr'))allocInputHandler(e.target);});\nmainEl.addEventListener('click',e=>{\n  const del=e.target.closest('[data-alloc-del]');\n  if(del){const a=getWorkingAllocation();a[del.dataset.allocDel].subjects.splice(+del.dataset.i,1);renderAllocation();return;}\n  const add=e.target.closest('[data-alloc-add]');\n  if(add){const a=getWorkingAllocation();a[add.dataset.allocAdd]=a[add.dataset.allocAdd]||{subjects:[]};a[add.dataset.allocAdd].subjects.push({subject:'New Subject',teacher:rosterNames()[0],periods:1});renderAllocation();return;}\n});\nconst _ab1=document.getElementById('authSignInBtn');if(_ab1)_ab1.addEventListener('click',()=>authSubmit('in'));\nconst _ab2=document.getElementById('authSignUpBtn');if(_ab2)_ab2.addEventListener('click',()=>authSubmit('up'));\nconst _ab3=document.getElementById('authClose');if(_ab3)_ab3.addEventListener('click',()=>{document.getElementById('authModal').style.display='none';});")
+    "$('spPrint').addEventListener('click',()=>{if(state.spot)exportTeacherImage(state.spot);});\nmainEl.addEventListener('input',e=>{if(e.target.classList.contains('alloc-subj')||e.target.classList.contains('alloc-tchr')||e.target.classList.contains('alloc-per'))allocInputHandler(e.target);});\nmainEl.addEventListener('change',e=>{if(e.target.classList.contains('alloc-tchr'))allocInputHandler(e.target);});\nmainEl.addEventListener('click',e=>{\n  const del=e.target.closest('[data-alloc-del]');\n  if(del){const a=getWorkingAllocation();a[del.dataset.allocDel].subjects.splice(+del.dataset.i,1);renderAllocation();return;}\n  const add=e.target.closest('[data-alloc-add]');\n  if(add){const a=getWorkingAllocation();a[add.dataset.allocAdd]=a[add.dataset.allocAdd]||{subjects:[]};a[add.dataset.allocAdd].subjects.push({subject:'New Subject',teacher:rosterNames()[0],periods:1});renderAllocation();return;}\n});\nconst _ab1=document.getElementById('authSignInBtn');if(_ab1)_ab1.addEventListener('click',()=>authSubmit('in'));\n\nconst _ab3=document.getElementById('authClose');if(_ab3)_ab3.addEventListener('click',()=>{document.getElementById('authModal').style.display='none';});")
 
 
 io.open(DST, "w", encoding="utf-8").write(src)
