@@ -164,6 +164,8 @@ select#comboSel:focus{outline:2px solid var(--amber);outline-offset:1px}
 }
 .mini-export:hover:not(:disabled){background:var(--green);color:#f0f6ef;transform:translateY(-1px);box-shadow:0 4px 12px rgba(14,59,41,.3)}
 .mini-export:disabled{opacity:.45;cursor:not-allowed}
+.card-csv{margin-left:6px;display:inline-flex;align-items:center;font-family:var(--mono);font-size:9.5px;font-weight:600;color:var(--green-deep);background:var(--green-tint);border:1px solid var(--green);border-radius:6px;padding:3px 8px;transition:all .15s ease;white-space:nowrap;cursor:pointer}
+.card-csv:hover{background:var(--green);color:#f0f6ef}
 
 #main{transition:opacity .16s ease,transform .16s ease}
 #main.swap{opacity:.2;transform:translateY(8px)}
@@ -470,7 +472,7 @@ footer b{color:var(--green)}
 </main>
 
 <footer>
-  <b>IMPCC Timetable Generator.</b> Timetables, scores and ranks are generated live in your browser by a real constraint solver — nothing is mocked.<br>
+  <b>IMPCC Timetable Generator.</b> Timetables are generated live by a real constraint solver (in-browser or the CP-SAT backend) and saved in your browser until you clear or regenerate them.<br>
   Islamabad Model Postgraduate College of Commerce (H-8), Islamabad · Intermediate, 1st Shift · ICS &amp; I.Com · 11 sections · Mon–Fri, 5 periods/day.
 </footer>
 
@@ -575,7 +577,7 @@ const CONSTRAINTS={
 };
 
 /* ---------- combinations & scoring ---------- */
-const state={combos:[],selected:null,view:'sections',sectionFilter:'all',running:false,runTimer:null,stopRequested:false,cpsatBusy:false,cpsatDone:false,cpsatMerged:0,spot:null,seen:new Set()};
+const state={combos:[],selected:null,view:'sections',sectionFilter:'all',running:false,runTimer:null,runTarget:0,cpsatBusy:false,cpsatDone:false,cpsatMerged:0,spot:null,seen:new Set()};
 let comboSeq=0;
 
 function makeCombo(sol,via){
@@ -690,6 +692,35 @@ function exportComboCSV(){
   downloadCSV('IMPCC_timetable_combination-'+rank+'_score-'+c.score+'.csv',rows);
   setTicker('Exported CSV — full timetable for combination #'+rank+' (275 periods)','ok');
 }
+function exportSectionCSV(secId){
+  const c=getSel();if(!c)return;
+  const sec=SECTIONS.find(s=>s.id===secId);if(!sec)return;
+  const g=c.tt[secId];
+  const rows=[['Section','Day','Period','Time','Subject','Teacher']];
+  for(let d=0;d<5;d++)for(let s=0;s<5;s++){
+    const cell=g[d][s];
+    rows.push([secId,DAYS[d],SLOTS[s],TIMES[s],cell.subj,cell.teacher]);
+  }
+  const rank=rankOf(c,sortedList());
+  downloadCSV('IMPCC_'+secId+'_combination-'+rank+'_score-'+c.score+'.csv',rows);
+  setTicker('Exported CSV — '+secId+' (25 periods)','ok');
+}
+function exportStreamCSV(stream){
+  const c=getSel();if(!c)return;
+  const rows=[['Section','Day','Period','Time','Subject','Teacher']];
+  const secs=SECTIONS.filter(s=>s.stream===stream);
+  for(const sec of secs){
+    const g=c.tt[sec.id];
+    for(let d=0;d<5;d++)for(let s=0;s<5;s++){
+      const cell=g[d][s];
+      rows.push([sec.id,DAYS[d],SLOTS[s],TIMES[s],cell.subj,cell.teacher]);
+    }
+  }
+  const name=stream==='icom'?'ICom':'ICS';
+  const rank=rankOf(c,sortedList());
+  downloadCSV('IMPCC_'+name+'-stream_combination-'+rank+'_score-'+c.score+'.csv',rows);
+  setTicker('Exported CSV — '+name+' stream ('+secs.length*25+' periods)','ok');
+}
 /* PDF = print engine. If the spotlight drawer is open, print only that
    personal timetable (body.printing-spot print CSS); otherwise print the
    current Sections/Faculty view. */
@@ -762,7 +793,7 @@ function renderScorecard(){
 
 function sectionCard(sec,grid,idx){
   let h='<article class="sec-card '+sec.stream+'" style="animation-delay:'+Math.min(idx*45,400)+'ms">'+
-    '<header><span class="stag">'+(sec.stream==='icom'?'I.Com':'ICS')+'</span><h3>'+sec.label+'</h3><span class="pw">25 periods/wk</span></header>'+
+    '<header><span class="stag">'+(sec.stream==='icom'?'I.Com':'ICS')+'</span><h3>'+sec.label+'</h3><span class="pw">25 periods/wk</span><button class="card-csv" data-sec="'+sec.id+'" title="Download this section as CSV">⇩ CSV</button></header>'+
     '<div class="tt-wrap"><div class="tt"><div class="tg-corner">wk\\p</div>';
   for(let i=0;i<3;i++)h+='<div class="tg-ph">Period-'+(i+1)+'<span>'+TIMES[i]+'</span></div>';
   h+='<div class="tg-ph-break">BREAK<span>25 min</span></div>';
@@ -793,7 +824,7 @@ function renderSections(tt){
   for(const g of groups){
     const secs=SECTIONS.filter(s=>s.stream===g.key).filter(s=>f==='all'||f===g.key||f===s.id);
     if(!secs.length)continue;
-    html+='<section class="stream '+g.key+'"><div class="stream-head"><span class="swatch"></span><h2>'+g.name+'</h2><span class="cnt">'+secs.length+' section'+(secs.length>1?'s':'')+' · '+secs.length*25+' periods/wk</span></div><div class="sec-grid'+(shown.length===1?' solo':'')+'">';
+    html+='<section class="stream '+g.key+'"><div class="stream-head"><span class="swatch"></span><h2>'+g.name+'</h2><span class="cnt">'+secs.length+' section'+(secs.length>1?'s':'')+' · '+secs.length*25+' periods/wk</span><button class="card-csv" data-stream="'+g.key+'" title="Download this stream as CSV">⇩ CSV</button></div><div class="sec-grid'+(shown.length===1?' solo':'')+'">';
     for(const sec of secs){html+=sectionCard(sec,tt[sec.id],idx++);}
     html+='</div></section>';
   }
@@ -809,7 +840,7 @@ function teacherCard(name,entries,idx){
   return '<article class="t-card" data-name="'+esc(name)+'" style="animation-delay:'+Math.min(idx*35,420)+'ms" title="Click to open '+esc(name)+'\u2019s personal courses">'+
     '<div class="t-head"><div class="t-ava'+(vis?' vis':'')+'" style="background:hsl('+avatarHue(name)+' 42% 33%)">'+avatarInitials(name)+'</div>'+
     '<div><h4>'+esc(name)+'</h4><span class="t-load"><b>'+entries.length+'</b> periods / week'+(entries.some(e=>e.dual)?' · incl. shared Econ/Stats block':'')+'</span></div>'+
-    '<span class="spot-hint">personal courses ▸</span></div>'+
+    '<span class="spot-hint">personal courses ▸</span><button class="card-csv" data-teacher="'+esc(name)+'" title="Download this faculty timetable as CSV">⇩ CSV</button></div>'+
     (cons?'<div class="t-cons">⚑ '+cons.text+'</div>':'<div class="t-cons none">No constraint listed</div>')+
     '<div class="t-sched"><table><thead><tr><th>Day</th><th>Pd</th><th>Section</th><th>Subject</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
     '</article>';
@@ -829,7 +860,7 @@ function renderMain(){
   const c=getSel();
   if(!state.combos.length){
     renderEmpty('No combinations yet',state.running
-      ?'Initial run in progress — valid solutions will appear here the moment they are found. Nothing is ever discarded.'
+      ?'Generating… timetables will appear here once at least 10 combinations are ready (or all found, if fewer). Nothing is ever discarded.'
       :'The pool is empty. Press “Generate” to start a generation run.');
     return;
   }
@@ -976,7 +1007,7 @@ function clearSpotHl(){document.querySelectorAll('#spBody .sp-cell.hl').forEach(
 function selectCombo(id,instant){
   state.selected=id;
   const apply=()=>{
-    renderScorecard();renderMain();renderChrome();popBadge(rankBadge);popBadge(scoreBadge);
+    renderScorecard();renderMain();renderChrome();popBadge(rankBadge);popBadge(scoreBadge);persist();
     if(state.spot){getSel()?refreshSpotlight():closeSpotlight();}
   };
   if(instant){apply();return;}
@@ -991,18 +1022,50 @@ function stepSel(dir){
   selectCombo(list[i].id);
 }
 
-/* ---------- runs (live in-browser generation) ---------- */
+/* ---------- persistence (localStorage) ---------- */
+const STORE_KEY='impcc-timetable-v1';
+const STORE_MAX=150;
+function persist(){
+  try{
+    let combos=state.combos.slice().sort((a,b)=>a.score-b.score);
+    if(combos.length>STORE_MAX)combos=combos.slice(0,STORE_MAX);
+    localStorage.setItem(STORE_KEY,JSON.stringify({
+      combos:combos.map(c=>({score:c.score,a3:c.a3,a2:c.a2,a4:c.a4,a5:c.a5,via:c.via,tt:c.tt})),
+      selected:state.selected,view:state.view,sectionFilter:state.sectionFilter,
+      cpsatDone:state.cpsatDone,cpsatMerged:state.cpsatMerged
+    }));
+  }catch(e){}
+}
+function restore(){
+  try{
+    const raw=localStorage.getItem(STORE_KEY);
+    if(!raw)return false;
+    const data=JSON.parse(raw);
+    state.combos=(data.combos||[]).map(c=>({id:++comboSeq,score:c.score,a3:c.a3,a2:c.a2,a4:c.a4,a5:c.a5,via:c.via,tt:c.tt}));
+    state.view=data.view||'sections';
+    state.sectionFilter=data.sectionFilter||'all';
+    state.cpsatDone=!!data.cpsatDone;
+    state.cpsatMerged=data.cpsatMerged||0;
+    state.selected=(data.selected!=null&&state.combos.some(o=>o.id===data.selected))?data.selected:null;
+    return state.combos.length>0;
+  }catch(e){return false;}
+}
+function clearStorage(){try{localStorage.removeItem(STORE_KEY);}catch(e){}}
+
+/* ---------- runs (live in-browser generation, flicker-free) ---------- */
 function finishRun(stopped){
   clearTimeout(state.runTimer);state.runTimer=null;
   state.running=false;state.stopRequested=false;
   progFill.style.width='0%';
+  persist();
   const list=sortedList(),best=list.length?list[0].score:'—';
   setTicker((stopped?'Run stopped — ':'Done — ')+state.combos.length+' combinations kept · best score '+best+' · nothing discarded',stopped?'':'ok');
-  renderChrome();
+  renderAll();
 }
 function startRun(kind){
   if(state.running)return;
   if(kind==='fresh'){
+    clearStorage();
     state.combos=[];state.selected=null;comboSeq=0;state.cpsatDone=false;state.cpsatMerged=0;
     state.seen=new Set();
     closeSpotlight();
@@ -1011,13 +1074,13 @@ function startRun(kind){
     renderAll();
   }
   state.running=true;state.stopRequested=false;
-  progFill.style.width='100%';
+  state.runTarget=kind==='fresh'?24:state.combos.length+12;
+  progFill.style.width='0%';
   liveTicker();renderChrome();
   state.runTimer=setTimeout(runSlice,30);
 }
 function runSlice(){
   if(state.stopRequested){finishRun(true);return;}
-  const before=state.combos.length;
   const res=IMPCC_SOLVER.generate({maxCount:0,timeMs:320,seed:(Math.random()*2147483647)|0});
   for(const sol of res.solutions){
     const key=JSON.stringify(sol.timetable);
@@ -1025,11 +1088,11 @@ function runSlice(){
     state.seen.add(key);
     state.combos.push(makeCombo(sol,'browser'));
   }
-  const grew=state.combos.length>before;
   if(!state.selected&&state.combos.length){const list=sortedList();state.selected=list[0].id;}
-  liveTicker();renderChrome();renderScorecard();
-  if(grew||!state.selected)renderMain();
+  progFill.style.width=Math.min(100,Math.round(100*state.combos.length/state.runTarget))+'%';
+  liveTicker();renderChrome();
   if(state.stopRequested){finishRun(true);return;}
+  if(state.combos.length>=state.runTarget){finishRun(false);return;}
   state.runTimer=setTimeout(runSlice,30);
 }
 function stopRun(){state.stopRequested=true;}
@@ -1069,7 +1132,7 @@ function runCpsat(){
     const optimal=data.optimal?'proven optimal':'best found';
     setCpsatStatus('CP-SAT: '+optimal+' — best score '+data.best_score+' ('+added+' new solutions merged)','ok');
     setTicker('CP-SAT finished — '+added+' solutions merged · best score '+data.best_score+' · elapsed '+data.elapsed_seconds+' s','ok');
-    renderAll();
+    renderAll();persist();
   })
   .catch(err=>{fail(err.message||String(err));});
 }
@@ -1084,7 +1147,7 @@ $('btnComboCsv').addEventListener('click',exportComboCSV);
 selEl.addEventListener('change',()=>selectCombo(Number(selEl.value)));
 secFilterEl.addEventListener('change',e=>{
   state.sectionFilter=e.target.value;
-  swapRender();renderChrome();
+  swapRender();renderChrome();persist();
   setTicker(state.sectionFilter==='all'
     ?'Preview: all 11 sections'
     :'Preview: '+filterLabel(state.sectionFilter),'ok');
@@ -1107,7 +1170,7 @@ function setView(v){
   $('viewSections').classList.toggle('on',v==='sections');
   $('viewTeachers').classList.toggle('on',v==='teachers');
   $('secFilterWrap').classList.toggle('hidden',v!=='sections');
-  renderChrome();
+  renderChrome();persist();
   mainEl.classList.add('swap');
   setTimeout(()=>{renderMain();mainEl.classList.remove('swap');},150);
 }
@@ -1129,6 +1192,13 @@ mainEl.addEventListener('click',e=>{
     state.sectionFilter='all';secFilterEl.value='all';
     swapRender();renderChrome();
     setTicker('Preview: all 11 sections','ok');
+    return;
+  }
+  const csvBtn=e.target.closest('.card-csv');
+  if(csvBtn){
+    if(csvBtn.dataset.sec)exportSectionCSV(csvBtn.dataset.sec);
+    else if(csvBtn.dataset.stream)exportStreamCSV(csvBtn.dataset.stream);
+    else if(csvBtn.dataset.teacher)exportTeacherCSV(csvBtn.dataset.teacher);
     return;
   }
   const card=e.target.closest('.t-card');
@@ -1167,10 +1237,22 @@ $('spotDrawer').addEventListener('click',e=>{
   if(cell){cell.classList.add('pulse');setTimeout(()=>cell.classList.remove('pulse'),700);}
 });
 
-/* ---------- boot: auto-run on load ---------- */
-renderAll();
-setTicker('Initialising — starting automatic generation','run',true);
-setTimeout(()=>startRun('fresh'),400);
+/* ---------- boot: restore saved results (no auto-generation) ---------- */
+const restored=restore();
+if(restored){
+  const list=sortedList();
+  if(state.selected===null)state.selected=list[0].id;
+  secFilterEl.value=state.sectionFilter;
+  $('viewSections').classList.toggle('on',state.view==='sections');
+  $('viewTeachers').classList.toggle('on',state.view==='teachers');
+  $('secFilterWrap').classList.toggle('hidden',state.view!=='sections');
+  renderAll();
+  setTicker('Restored '+state.combos.length+' saved combination'+(state.combos.length===1?'':'s')+' · best score '+list[0].score+' · press “Generate” for a fresh run','ok');
+  if(state.cpsatDone)setCpsatStatus('CP-SAT: proven optimal — best score 560 ('+state.cpsatMerged+' solutions merged)','ok');
+}else{
+  renderAll();
+  setTicker('Ready — press “Generate” to create timetables','ok');
+}
 </script>
 </body>
 </html>
