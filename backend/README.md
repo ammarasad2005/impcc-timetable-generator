@@ -35,6 +35,16 @@ Response:
 }
 ```
 
+## Deploy to Vercel (serverless function, same platform as the frontend)
+
+`api/index.py` + `vercel.json` (repo root) run the same CP-SAT solver as a **Vercel Python
+function**. See `VERCEL_GUIDE.md` for the click-by-click guide.
+
+- Function: 1 vCPU / 2 GB / 300 s (Hobby) → CP-SAT solves ~10× faster than Render's free tier.
+- Clean URLs `/health`, `/generate`, `/docs` via rewrites.
+- Defaults in `api/index.py` are tuned for it: `time_limit=20`, `n_seeds=1`.
+- Note: Hobby is non-commercial.
+
 ## Deploy to Render (free, no credit card)
 
 The repo root has `render.yaml` + `RENDER_GUIDE.md`. One-click deploy:

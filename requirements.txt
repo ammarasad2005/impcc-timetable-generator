@@ -1,8 +1,14 @@
-# IMPCC timetable generator — offline (Python) pipeline dependencies
+# IMPCC timetable generator — Python dependencies
+#
+# Used by:
+#   - the offline pipeline (gen_all.py, export_xlsx.py):  ortools + openpyxl
+#   - the Vercel serverless backend (api/index.py):        fastapi + ortools
+#   - the Render / Cloud Run backend (backend/main.py):    see backend/requirements.txt
+#
 # Install with:  pip install -r requirements.txt
 #
-# The live website (index.html) has NO dependencies — it runs entirely in the browser.
-# The JS test harness (test_solver.js) needs Node.js 18+ only (no npm packages).
+# The live in-browser solver (index.html / solver.js) has NO Python dependencies.
 
 ortools>=9.10
 openpyxl>=3.1
+fastapi>=0.110

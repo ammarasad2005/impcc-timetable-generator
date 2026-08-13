@@ -1,0 +1,16 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "api/index.py": {
+      "includeFiles": ["api/**", "cp_solver.py", "solver.py"],
+      "maxDuration": 300,
+      "memory": 1024
+    }
+  },
+  "rewrites": [
+    { "source": "/generate", "destination": "/api/index/generate" },
+    { "source": "/health", "destination": "/api/index/health" },
+    { "source": "/docs", "destination": "/api/index/docs" },
+    { "source": "/openapi.json", "destination": "/api/index/openapi.json" }
+  ]
+}

@@ -115,12 +115,14 @@ The website also ships an optional **"Compute optimal (CP-SAT)"** button. Point 
 FastAPI backend and it fetches the proven-optimal set (score 560) and merges it into the
 ranked chooser (union — nothing is dropped).
 
-**Two ways to host the backend:**
+**Three ways to host the backend:**
 
-- **Render (free, no credit card)** — see `RENDER_GUIDE.md`. Uses `render.yaml` for one-click
-  Blueprint deploy. Free tier is 512 MB / 0.1 vCPU and sleeps after 15 min idle (cold start
-  ~30–60 s), tuned via `CP_SAT_WORKERS=4`.
-- **Google Cloud Run (free tier, faster)** — see `backend/README.md` + `deploy.sh`.
+- **Vercel (same platform as your frontend — recommended for this project)** — see
+  `VERCEL_GUIDE.md`. `api/index.py` + `vercel.json` deploy the CP-SAT solver as a Python
+  serverless function (1 vCPU / 2 GB / 300 s on Hobby). Note: Hobby is non-commercial.
+- **Render (free, no credit card)** — see `RENDER_GUIDE.md`. Free tier is 512 MB / 0.1 vCPU
+  and sleeps after 15 min idle (cold start ~30–60 s), tuned via `CP_SAT_WORKERS=4`.
+- **Google Cloud Run (free tier, fastest)** — see `backend/README.md` + `deploy.sh`.
   Needs a physical bank card (Google rejects virtual/prepaid cards).
 
 Either way, set the URL in `app.js` (`const API_URL = "…"`) or inject `window.IMPCC_API_URL`
