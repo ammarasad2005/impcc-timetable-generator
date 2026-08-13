@@ -373,19 +373,7 @@ footer b{color:var(--green)}
   <div class="mast-txt">
     <div class="overline">Islamabad Model Postgraduate College of Commerce · H-8</div>
     <h1>Weekly Timetable <em>Generator</em></h1>
-    <div class="sub">Intermediate · 1st Shift — ICS &amp; I.Com · ranked combination explorer · nothing found is ever discarded</div>
-    <div class="chips">
-      <span class="chip">11 sections</span>
-      <span class="chip">MON–FRI · 5 periods/day</span>
-      <span class="chip">40-min periods</span>
-      <span class="chip">25-min break after P3</span>
-      <span class="chip demo">LIVE · generated in your browser — nothing mocked</span>
-    </div>
-  </div>
-  <div class="mast-side">
-    <b>PROVEN OPTIMUM · 560</b><br>
-    typical runs: 570–580<br>
-    lower score = less shuffling
+    <div class="sub">Intermediate · 1st Shift · ICS &amp; I.Com</div>
   </div>
 </header>
 
@@ -482,9 +470,9 @@ footer b{color:var(--green)}
       <span id="spCon">—</span>
     </div>
     <div class="dr-export">
-      <button class="btn" id="spPrint" title="Print this personal timetable / save as PDF">
+      <button class="btn" id="spPrint" title="Download this personal timetable as a PNG image">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V3h12v6M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
-        PDF
+        PNG
       </button>
       <button class="btn" id="spCsv" title="Download this personal timetable as CSV">⇩ CSV</button>
     </div>
@@ -791,7 +779,7 @@ function printTarget(target){
    downloads as a landscape PNG image instead (no PDF for individual sections). */
 function printCurrent(){
   const c=getSel();if(!c)return;
-  if(state.spot){printTarget({type:'teacher',name:state.spot});return;}
+  if(state.spot){exportTeacherImage(state.spot);return;}
   const f=state.sectionFilter;
   if(f==='all')printTarget({type:'combo'});
   else if(f==='icom'||f==='ics')printTarget({type:'stream',id:f});
@@ -908,6 +896,102 @@ async function exportSectionImage(secId){
   },'image/png');
   setTicker('Exported image — '+sec.label+' (landscape PNG)','ok');
 }
+async function exportTeacherImage(name){
+  const c=getSel();if(!c)return;
+  const entries=(buildTeacherIndex(c.tt)[name])||[];
+  const m={};entries.forEach(e=>{m[e.d+'_'+e.s]=e;});
+  const accent='#1c6b48',tint='#e2efe6',ink='#182720',muted='#5b6a61',line='#d7dbcc';
+  const amberTint='#fdf3dc',amber='#8a6210';
+
+  const canvas=document.createElement('canvas');
+  const ctx=canvas.getContext('2d');
+  if(!ctx){setTicker('Image export is not supported in this browser','err');return;}
+  try{if(document.fonts&&document.fonts.ready)await document.fonts.ready;}catch(e){}
+
+  const pad=48,colDay=124,colP=300,colB=86;
+  const cols=[colDay,colP,colP,colP,colB,colP,colP];
+  const gap=4;
+  const W=pad*2+cols.reduce((a,b)=>a+b,0)+gap*(cols.length-1);
+  const titleH=58,subH=26,headGap=30,hdrH=64,rowH=104;
+  const H=pad*2+titleH+subH+headGap+hdrH+rowH*5;
+
+  const scale=2;
+  canvas.width=Math.round(W*scale);canvas.height=Math.round(H*scale);
+  ctx.scale(scale,scale);
+  ctx.fillStyle='#ffffff';ctx.fillRect(0,0,W,H);
+
+  ctx.textAlign='left';ctx.textBaseline='alphabetic';
+  ctx.fillStyle=accent;ctx.font='900 40px Fraunces, Georgia, serif';
+  ctx.fillText(name+' — Personal Timetable',pad,pad+titleH-12);
+  ctx.fillStyle=muted;ctx.font='500 20px "IBM Plex Sans", sans-serif';
+  ctx.fillText(COLLEGE_LINE+' · '+entries.length+' periods/week',pad,pad+titleH+subH-2);
+
+  function cellRect(cx,cy,cw,ch,fill){
+    ctx.fillStyle=fill;ctx.fillRect(cx,cy,cw,ch);
+    ctx.strokeStyle=line;ctx.lineWidth=1;ctx.strokeRect(cx+0.5,cy+0.5,cw-1,ch-1);
+  }
+
+  const tx=pad,ty=pad+titleH+subH+headGap;
+  const heads=[['Week',''],['Period-1',TIMES[0]],['Period-2',TIMES[1]],['Period-3',TIMES[2]],['Break','10:30–10:55'],['Period-4',TIMES[3]],['Period-5',TIMES[4]]];
+  let cx=tx;
+  for(let ci=0;ci<cols.length;ci++){
+    const isBrk=(ci===4);
+    cellRect(cx,ty,cols[ci],hdrH,isBrk?amberTint:tint);
+    ctx.textAlign='center';
+    ctx.fillStyle=isBrk?amber:accent;ctx.font='600 15px "IBM Plex Sans", sans-serif';
+    ctx.fillText(heads[ci][0],cx+cols[ci]/2,ty+hdrH/2-2);
+    if(heads[ci][1]){
+      ctx.fillStyle=muted;ctx.font='400 12px "IBM Plex Sans", sans-serif';
+      ctx.fillText(heads[ci][1],cx+cols[ci]/2,ty+hdrH/2+16);
+    }
+    cx+=cols[ci]+gap;
+  }
+
+  let y=ty+hdrH;
+  for(let d=0;d<5;d++){
+    let rx=tx;
+    cellRect(rx,y,cols[0],rowH,'#fafbf8');
+    ctx.fillStyle=ink;ctx.font='600 18px "IBM Plex Sans", sans-serif';
+    ctx.textAlign='center';ctx.fillText(DAYS[d],rx+cols[0]/2,y+rowH/2+6);
+    rx+=cols[0]+gap;
+    for(let s=0;s<6;s++){
+      const cw=cols[s+1];
+      if(s===3){
+        cellRect(rx,y,cw,rowH,amberTint);
+        ctx.fillStyle=amber;ctx.font='600 13px "IBM Plex Sans", sans-serif';
+        ctx.textAlign='center';ctx.fillText('Break',rx+cw/2,y+rowH/2+4);
+      }else{
+        const e=m[d+'_'+(s<3?s:s-1)];
+        cellRect(rx,y,cw,rowH,'#ffffff');
+        ctx.textAlign='center';
+        if(e){
+          ctx.fillStyle=e.dual?accent:ink;
+          let sz=24,lines;
+          do{lines=wrapLines(ctx,e.subj,cw-26,'700 '+sz+'px "IBM Plex Sans", sans-serif');sz-=2;}while(lines.length>2&&sz>16);
+          let ly=y+rowH/2-8-(lines.length===2?7:0);
+          for(const ln of lines){ctx.fillText(ln,rx+cw/2,ly);ly+=sz+4;}
+          ctx.fillStyle=muted;ctx.font='400 16px "IBM Plex Sans", sans-serif';
+          ctx.fillText(e.sec,rx+cw/2,ly+6);
+        }else{
+          ctx.fillStyle='#c2c9ba';ctx.font='400 16px "IBM Plex Sans", sans-serif';
+          ctx.fillText('·',rx+cw/2,y+rowH/2+6);
+        }
+      }
+      rx+=cw+gap;
+    }
+    y+=rowH;
+  }
+
+  canvas.toBlob(function(blob){
+    if(!blob)return;
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url;a.download='IMPCC_personal-timetable_'+slug(name)+'.png';
+    document.body.appendChild(a);a.click();a.remove();
+    setTimeout(function(){URL.revokeObjectURL(url);},800);
+  },'image/png');
+  setTicker('Exported image — '+name+' (landscape PNG)','ok');
+}
 
 /* ---------- section filter helpers ---------- */
 function filterLabel(f){
@@ -1014,7 +1098,7 @@ function teacherCard(name,entries,idx){
   return '<article class="t-card" data-name="'+esc(name)+'" style="animation-delay:'+Math.min(idx*35,420)+'ms" title="Click to open '+esc(name)+'\u2019s personal courses">'+
     '<div class="t-head"><div class="t-ava'+(vis?' vis':'')+'" style="background:hsl('+avatarHue(name)+' 42% 33%)">'+avatarInitials(name)+'</div>'+
     '<div><h4>'+esc(name)+'</h4><span class="t-load"><b>'+entries.length+'</b> periods / week'+(entries.some(e=>e.dual)?' · incl. shared Econ/Stats block':'')+'</span></div>'+
-    '<span class="spot-hint">personal courses ▸</span><button class="card-csv" data-teacher="'+esc(name)+'" title="Download this faculty timetable as CSV">⇩ CSV</button><button class="card-pdf" data-pdf-teacher="'+esc(name)+'" title="Print this faculty timetable / save as PDF">PDF</button></div>'+
+    '<span class="spot-hint">personal courses ▸</span><button class="card-csv" data-teacher="'+esc(name)+'" title="Download this faculty timetable as CSV">⇩ CSV</button><button class="card-img" data-img-teacher="'+esc(name)+'" title="Download this faculty timetable as a PNG image">PNG</button></div>'+
     (cons?'<div class="t-cons">⚑ '+cons.text+'</div>':'<div class="t-cons none">No constraint listed</div>')+
     '<div class="t-sched"><table><thead><tr><th>Day</th><th>Pd</th><th>Section</th><th>Subject</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
     '</article>';
@@ -1376,13 +1460,14 @@ mainEl.addEventListener('click',e=>{
     return;
   }
   const imgBtn=e.target.closest('.card-img');
-  if(imgBtn&&imgBtn.dataset.imgSec){exportSectionImage(imgBtn.dataset.imgSec);return;}
-  const pdfBtn=e.target.closest('.card-pdf');
-  if(pdfBtn){
-    if(pdfBtn.dataset.pdfStream)printTarget({type:'stream',id:pdfBtn.dataset.pdfStream});
-    else if(pdfBtn.dataset.pdfTeacher)printTarget({type:'teacher',name:pdfBtn.dataset.pdfTeacher});
+  if(imgBtn){
+    if(imgBtn.dataset.imgSec)exportSectionImage(imgBtn.dataset.imgSec);
+    else if(imgBtn.dataset.imgTeacher)exportTeacherImage(imgBtn.dataset.imgTeacher);
     return;
   }
+  const pdfBtn=e.target.closest('.card-pdf');
+  if(pdfBtn&&pdfBtn.dataset.pdfStream){printTarget({type:'stream',id:pdfBtn.dataset.pdfStream});return;}
+
   const card=e.target.closest('.t-card');
   if(card){openSpotlight(card.dataset.name);return;}
   const cell=e.target.closest('.tg-cell');
@@ -1396,7 +1481,7 @@ $('spClose').addEventListener('click',closeSpotlight);
 $('spotBackdrop').addEventListener('click',closeSpotlight);
 $('spPrev').addEventListener('click',()=>stepSpot(-1));
 $('spNext').addEventListener('click',()=>stepSpot(1));
-$('spPrint').addEventListener('click',()=>{if(state.spot)printTarget({type:'teacher',name:state.spot});});
+$('spPrint').addEventListener('click',()=>{if(state.spot)exportTeacherImage(state.spot);});
 $('spCsv').addEventListener('click',()=>{if(state.spot)exportTeacherCSV(state.spot);});
 $('spotDrawer').addEventListener('mouseover',e=>{
   const chip=e.target.closest('.slot-chip');

@@ -34,8 +34,18 @@ def rep(old, new, count=1):
 # ---- 1) title / labels -------------------------------------------------
 rep("<title>IMPCC · Weekly Timetable Generator — Demo Prototype</title>",
     "<title>IMPCC · Weekly Timetable Generator</title>")
-rep('<span class="chip demo">DEMO PROTOTYPE — simulated data</span>',
-    '<span class="chip demo">LIVE · generated in your browser — nothing mocked</span>')
+# Clean, minimal masthead: drop the stats chips and the "proven optimum" block.
+_i = src.index('<header class="mast">')
+_j = src.index('</header>', _i) + len('</header>')
+_mast = ('<header class="mast">\n'
+         '  <div class="seal"><b>IMPCC</b><span>H-8 · ISB</span></div>\n'
+         '  <div class="mast-txt">\n'
+         '    <div class="overline">Islamabad Model Postgraduate College of Commerce · H-8</div>\n'
+         '    <h1>Weekly Timetable <em>Generator</em></h1>\n'
+         '    <div class="sub">Intermediate · 1st Shift · ICS &amp; I.Com</div>\n'
+         '  </div>\n'
+         '</header>')
+src = src[:_i] + _mast + src[_j:]
 rep('<button class="btn amber" id="btnCpsat" title="Simulated call to the CP-SAT backend (POST /generate)">',
     '<button class="btn amber" id="btnCpsat" title="Call the CP-SAT backend (POST /generate) for proven-optimal results">')
 rep('CP-SAT: idle — press “Compute optimal” to simulate the solver call',
@@ -437,13 +447,13 @@ src = src[:i] + print_css + src[j:]   # keep the closing </style>
 rep('<div class="drawer-backdrop" id="spotBackdrop"></div>',
     '<div id="printArea" aria-hidden="true"></div>\n<div class="drawer-backdrop" id="spotBackdrop"></div>')
 
-# (d) export buttons: section → PNG image; stream/teacher → PDF
+# (d) export buttons: section & teacher → PNG image; stream → PDF
 rep("title=\"Download this section as CSV\">⇩ CSV</button></header>'+",
     "title=\"Download this section as CSV\">⇩ CSV</button><button class=\"card-img\" data-img-sec=\"'+sec.id+'\" title=\"Download this section as a landscape PNG image\">PNG</button></header>'+")
 rep("title=\"Download this stream as CSV\">⇩ CSV</button></div><div class=\"sec-grid",
     "title=\"Download this stream as CSV\">⇩ CSV</button><button class=\"card-pdf\" data-pdf-stream=\"'+g.key+'\" title=\"Print this stream / save as PDF\">PDF</button></div><div class=\"sec-grid")
 rep("title=\"Download this faculty timetable as CSV\">⇩ CSV</button></div>'+",
-    "title=\"Download this faculty timetable as CSV\">⇩ CSV</button><button class=\"card-pdf\" data-pdf-teacher=\"'+esc(name)+'\" title=\"Print this faculty timetable / save as PDF\">PDF</button></div>'+" )
+    "title=\"Download this faculty timetable as CSV\">⇩ CSV</button><button class=\"card-img\" data-img-teacher=\"'+esc(name)+'\" title=\"Download this faculty timetable as a PNG image\">PNG</button></div>'+" )
 
 # (d2) console Print button hint
 rep('id="btnPrint" title="Print the current view / save as PDF"',
@@ -465,13 +475,14 @@ rep("""  const csvBtn=e.target.closest('.card-csv');
     return;
   }
   const imgBtn=e.target.closest('.card-img');
-  if(imgBtn&&imgBtn.dataset.imgSec){exportSectionImage(imgBtn.dataset.imgSec);return;}
-  const pdfBtn=e.target.closest('.card-pdf');
-  if(pdfBtn){
-    if(pdfBtn.dataset.pdfStream)printTarget({type:'stream',id:pdfBtn.dataset.pdfStream});
-    else if(pdfBtn.dataset.pdfTeacher)printTarget({type:'teacher',name:pdfBtn.dataset.pdfTeacher});
+  if(imgBtn){
+    if(imgBtn.dataset.imgSec)exportSectionImage(imgBtn.dataset.imgSec);
+    else if(imgBtn.dataset.imgTeacher)exportTeacherImage(imgBtn.dataset.imgTeacher);
     return;
-  }""")
+  }
+  const pdfBtn=e.target.closest('.card-pdf');
+  if(pdfBtn&&pdfBtn.dataset.pdfStream){printTarget({type:'stream',id:pdfBtn.dataset.pdfStream});return;}
+""")
 
 # (f) replace printCurrent with the export engine (no website/tech info anywhere)
 i = src.index("/* PDF = print engine. If the spotlight drawer is open, print only that")
@@ -554,7 +565,7 @@ function printTarget(target){
    downloads as a landscape PNG image instead (no PDF for individual sections). */
 function printCurrent(){
   const c=getSel();if(!c)return;
-  if(state.spot){printTarget({type:'teacher',name:state.spot});return;}
+  if(state.spot){exportTeacherImage(state.spot);return;}
   const f=state.sectionFilter;
   if(f==='all')printTarget({type:'combo'});
   else if(f==='icom'||f==='ics')printTarget({type:'stream',id:f});
@@ -671,13 +682,114 @@ async function exportSectionImage(secId){
   },'image/png');
   setTicker('Exported image — '+sec.label+' (landscape PNG)','ok');
 }
+async function exportTeacherImage(name){
+  const c=getSel();if(!c)return;
+  const entries=(buildTeacherIndex(c.tt)[name])||[];
+  const m={};entries.forEach(e=>{m[e.d+'_'+e.s]=e;});
+  const accent='#1c6b48',tint='#e2efe6',ink='#182720',muted='#5b6a61',line='#d7dbcc';
+  const amberTint='#fdf3dc',amber='#8a6210';
+
+  const canvas=document.createElement('canvas');
+  const ctx=canvas.getContext('2d');
+  if(!ctx){setTicker('Image export is not supported in this browser','err');return;}
+  try{if(document.fonts&&document.fonts.ready)await document.fonts.ready;}catch(e){}
+
+  const pad=48,colDay=124,colP=300,colB=86;
+  const cols=[colDay,colP,colP,colP,colB,colP,colP];
+  const gap=4;
+  const W=pad*2+cols.reduce((a,b)=>a+b,0)+gap*(cols.length-1);
+  const titleH=58,subH=26,headGap=30,hdrH=64,rowH=104;
+  const H=pad*2+titleH+subH+headGap+hdrH+rowH*5;
+
+  const scale=2;
+  canvas.width=Math.round(W*scale);canvas.height=Math.round(H*scale);
+  ctx.scale(scale,scale);
+  ctx.fillStyle='#ffffff';ctx.fillRect(0,0,W,H);
+
+  ctx.textAlign='left';ctx.textBaseline='alphabetic';
+  ctx.fillStyle=accent;ctx.font='900 40px Fraunces, Georgia, serif';
+  ctx.fillText(name+' — Personal Timetable',pad,pad+titleH-12);
+  ctx.fillStyle=muted;ctx.font='500 20px "IBM Plex Sans", sans-serif';
+  ctx.fillText(COLLEGE_LINE+' · '+entries.length+' periods/week',pad,pad+titleH+subH-2);
+
+  function cellRect(cx,cy,cw,ch,fill){
+    ctx.fillStyle=fill;ctx.fillRect(cx,cy,cw,ch);
+    ctx.strokeStyle=line;ctx.lineWidth=1;ctx.strokeRect(cx+0.5,cy+0.5,cw-1,ch-1);
+  }
+
+  const tx=pad,ty=pad+titleH+subH+headGap;
+  const heads=[['Week',''],['Period-1',TIMES[0]],['Period-2',TIMES[1]],['Period-3',TIMES[2]],['Break','10:30–10:55'],['Period-4',TIMES[3]],['Period-5',TIMES[4]]];
+  let cx=tx;
+  for(let ci=0;ci<cols.length;ci++){
+    const isBrk=(ci===4);
+    cellRect(cx,ty,cols[ci],hdrH,isBrk?amberTint:tint);
+    ctx.textAlign='center';
+    ctx.fillStyle=isBrk?amber:accent;ctx.font='600 15px "IBM Plex Sans", sans-serif';
+    ctx.fillText(heads[ci][0],cx+cols[ci]/2,ty+hdrH/2-2);
+    if(heads[ci][1]){
+      ctx.fillStyle=muted;ctx.font='400 12px "IBM Plex Sans", sans-serif';
+      ctx.fillText(heads[ci][1],cx+cols[ci]/2,ty+hdrH/2+16);
+    }
+    cx+=cols[ci]+gap;
+  }
+
+  let y=ty+hdrH;
+  for(let d=0;d<5;d++){
+    let rx=tx;
+    cellRect(rx,y,cols[0],rowH,'#fafbf8');
+    ctx.fillStyle=ink;ctx.font='600 18px "IBM Plex Sans", sans-serif';
+    ctx.textAlign='center';ctx.fillText(DAYS[d],rx+cols[0]/2,y+rowH/2+6);
+    rx+=cols[0]+gap;
+    for(let s=0;s<6;s++){
+      const cw=cols[s+1];
+      if(s===3){
+        cellRect(rx,y,cw,rowH,amberTint);
+        ctx.fillStyle=amber;ctx.font='600 13px "IBM Plex Sans", sans-serif';
+        ctx.textAlign='center';ctx.fillText('Break',rx+cw/2,y+rowH/2+4);
+      }else{
+        const e=m[d+'_'+(s<3?s:s-1)];
+        cellRect(rx,y,cw,rowH,'#ffffff');
+        ctx.textAlign='center';
+        if(e){
+          ctx.fillStyle=e.dual?accent:ink;
+          let sz=24,lines;
+          do{lines=wrapLines(ctx,e.subj,cw-26,'700 '+sz+'px "IBM Plex Sans", sans-serif');sz-=2;}while(lines.length>2&&sz>16);
+          let ly=y+rowH/2-8-(lines.length===2?7:0);
+          for(const ln of lines){ctx.fillText(ln,rx+cw/2,ly);ly+=sz+4;}
+          ctx.fillStyle=muted;ctx.font='400 16px "IBM Plex Sans", sans-serif';
+          ctx.fillText(e.sec,rx+cw/2,ly+6);
+        }else{
+          ctx.fillStyle='#c2c9ba';ctx.font='400 16px "IBM Plex Sans", sans-serif';
+          ctx.fillText('·',rx+cw/2,y+rowH/2+6);
+        }
+      }
+      rx+=cw+gap;
+    }
+    y+=rowH;
+  }
+
+  canvas.toBlob(function(blob){
+    if(!blob)return;
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url;a.download='IMPCC_personal-timetable_'+slug(name)+'.png';
+    document.body.appendChild(a);a.click();a.remove();
+    setTimeout(function(){URL.revokeObjectURL(url);},800);
+  },'image/png');
+  setTicker('Exported image — '+name+' (landscape PNG)','ok');
+}
 
 """
 src = src[:i] + engine + src[k:]
 
 # (g) spotlight drawer PDF button routes through the same engine
 rep("$('spPrint').addEventListener('click',printCurrent);",
-    "$('spPrint').addEventListener('click',()=>{if(state.spot)printTarget({type:'teacher',name:state.spot});});")
+    "$('spPrint').addEventListener('click',()=>{if(state.spot)exportTeacherImage(state.spot);});")
+# relabel the spotlight drawer export button from PDF to PNG
+rep('id="spPrint" title="Print this personal timetable / save as PDF">',
+    'id="spPrint" title="Download this personal timetable as a PNG image">')
+rep('</svg>\n        PDF\n      </button>',
+    '</svg>\n        PNG\n      </button>')
 
 io.open(DST, "w", encoding="utf-8").write(src)
 print("OK → wrote", DST, "(", len(src), "bytes )")
