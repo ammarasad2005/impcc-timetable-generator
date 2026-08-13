@@ -1,0 +1,8 @@
+# IMPCC timetable generator — offline (Python) pipeline dependencies
+# Install with:  pip install -r requirements.txt
+#
+# The live website (index.html) has NO dependencies — it runs entirely in the browser.
+# The JS test harness (test_solver.js) needs Node.js 18+ only (no npm packages).
+
+ortools>=9.10
+openpyxl>=3.1

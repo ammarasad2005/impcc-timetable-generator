@@ -1,0 +1,563 @@
+"""
+IMPCC Inter (1st Shift) timetable generator — v3.
+
+Model + section-aware slot assignment + global backtracking fill +
+validator + scorer. Randomized for variety.
+"""
+import random
+import itertools
+from collections import defaultdict
+
+DAYS = ["MON", "TUE", "WED", "THU", "FRI"]
+SLOTS = ["P1", "P2", "P3", "P4", "P5"]
+
+def S(key, subs):
+    return {"key": key, "subs": subs}
+
+SECTIONS = [
+    S("I.COM-I-A", [
+        ("English", "UmairAbid", 4), ("Urdu", "Basit", 4),
+        ("Tarjama-tul-Quran", "V1", 2), ("Islamic Education", "V2", 2),
+        ("Principles of Accounting", "Sikhani", 5),
+        ("Principles of Economics", "Yasir", 3),
+        ("Principles of Commerce", "Naeem", 3),
+        ("Business Mathematics", "Assad", 2)]),
+    S("I.COM-I-B", [
+        ("English", "UmairAbid", 4), ("Urdu", "Basit", 4),
+        ("Tarjama-tul-Quran", "V1", 2), ("Islamic Education", "V2", 2),
+        ("Principles of Accounting", "Sikhani", 5),
+        ("Principles of Economics", "Yasir", 3),
+        ("Principles of Commerce", "Naeem", 3),
+        ("Business Mathematics", "Assad", 2)]),
+    S("I.COM-I-C", [
+        ("English", "UmairAbid", 4), ("Urdu", "Basit", 4),
+        ("Tarjama-tul-Quran", "V1", 2), ("Islamic Education", "V2", 2),
+        ("Principles of Accounting", "Sikhani", 5),
+        ("Principles of Economics", "Yasir", 3),
+        ("Principles of Commerce", "Millat", 3),
+        ("Business Mathematics", "Najam", 2)]),
+    S("I.COM-II-A", [
+        ("English", "Amir", 4), ("Urdu", "Ehsam", 4),
+        ("Tarjama-tul-Quran", "V1", 2), ("Pakistan Studies", "Jilani", 2),
+        ("Principles of Accounting", "Naeem", 5),
+        ("Commercial Geography", "Husnul", 3),
+        ("Computer Studies", "Faisal", 3),
+        ("Statistics", "Tanveer", 2)]),
+    S("I.COM-II-B", [
+        ("English", "Amir", 4), ("Urdu", "Ehsam", 4),
+        ("Tarjama-tul-Quran", "V1", 2), ("Pakistan Studies", "Jilani", 2),
+        ("Principles of Accounting", "Naeem", 5),
+        ("Commercial Geography", "Husnul", 3),
+        ("Banking", "Millat", 3),
+        ("Statistics", "Tanveer", 2)]),
+    S("I.COM-II-C", [
+        ("English", "Amir", 4), ("Urdu", "Ehsam", 4),
+        ("Tarjama-tul-Quran", "V1", 2), ("Pakistan Studies", "Jilani", 2),
+        ("Principles of Accounting", "Naeem", 5),
+        ("Commercial Geography", "Husnul", 3),
+        ("Banking", "Millat", 3),
+        ("Statistics", "Tanveer", 2)]),
+    S("ICS-I-A", [
+        ("English", "Noor", 4), ("Urdu", "Rauf", 4),
+        ("Tarjama-tul-Quran", "V2", 2), ("Islamic Education", "V1", 2),
+        ("Computer Science", "Babar", 4), ("Mathematics", "Assad", 5),
+        ("Physics", "V3", 4)]),
+    S("ICS-I-B", [
+        ("English", "Noor", 4), ("Urdu", "Rauf", 4),
+        ("Tarjama-tul-Quran", "V2", 2), ("Islamic Education", "V1", 2),
+        ("Computer Science", "Babar", 4), ("Mathematics", "Assad", 5),
+        ("Physics", "V3", 4)]),
+    S("ICS-I-C", [
+        ("English", "Noor", 4), ("Urdu", "Rauf", 4),
+        ("Tarjama-tul-Quran", "V2", 2), ("Islamic Education", "V1", 2),
+        ("Computer Science", "Babar", 4), ("Mathematics", "Assad", 5),
+        ("Statistics", "Ishfaq", 4)]),
+    S("ICS-II-A", [
+        ("English", "UmairAbid", 4), ("Urdu", "Rauf", 4),
+        ("Tarjama-tul-Quran", "V2", 2), ("Pakistan Studies", "Jilani", 2),
+        ("Computer Science", "Faisal", 4), ("Mathematics", "Najam", 5),
+        ("Statistics", "Ishfaq", 4)]),
+    S("ICS-II-B", [
+        ("English", "UmairAbid", 4), ("Urdu", "Rauf", 4),
+        ("Tarjama-tul-Quran", "V2", 2), ("Pakistan Studies", "Jilani", 2),
+        ("Computer Science", "Faisal", 4), ("Mathematics", "Najam", 5),
+        ("Economics/Statistics", "PARALLEL", 4)]),
+]
+
+TEACHER_FULL = {
+    "Sikhani": "Prof. M. Waseem Sikhani",
+    "Naeem": "Prof. Muhammad Naeem",
+    "UmairAbid": "Prof. Syed Umair Abid",
+    "Rauf": "Prof. Abdul Rauf",
+    "Assad": "Prof. Syed Assad Abbas",
+    "Basit": "Prof. Abdul Basit",
+    "Najam": "Prof. Najam us Saqib",
+    "Amir": "Prof. Amir Rasheed",
+    "Ehsam": "Prof. Ehsam Ullah Baig",
+    "Noor": "Prof. Noor Muhammad",
+    "Babar": "Prof. Babar Jahangir",
+    "Faisal": "Prof. Faisal Bashir",
+    "Jilani": "Prof. Ghulam Jilani",
+    "Yasir": "Prof. Dr. Yasir Kareem",
+    "Millat": "Prof. Millat Khan",
+    "Husnul": "Prof. Husnul Amin",
+    "Ishfaq": "Prof. Ishfaq Ahmed",
+    "NaeemAsghar": "Prof. Naeem Asghar",
+    "Tanveer": "Prof. Tanveer Ahmed",
+    "V1": "Visiting-1",
+    "V2": "Visiting-2",
+    "V3": "Visiting-3",
+    "PARALLEL": "Prof. Naeem Asghar / Prof. Ishfaq Ahmed",
+}
+
+ALLOWED = {
+    "Yasir": {0, 1, 3},
+    "Amir": {1, 2, 3},
+    "Husnul": {1, 2, 3},
+    "Millat": {1, 2, 3, 4},
+    "Basit": {0, 1, 2, 3},
+    "Tanveer": {0, 1, 2},
+    "NaeemAsghar": {2, 3, 4},
+    "PARALLEL": {2, 3},
+}
+
+UNITS = []
+for sec in SECTIONS:
+    for subj, teacher, count in sec["subs"]:
+        UNITS.append({"sec": sec["key"], "subject": subj,
+                      "teacher": teacher, "count": count})
+SEC_MAP = {s["key"]: s for s in SECTIONS}
+
+# ------------------------------------------------------------------
+# SLOT ASSIGNMENT
+# ------------------------------------------------------------------
+def assign_slots(rng):
+    slot = {}; days = {}; locked = {}
+    used_teacher = defaultdict(set)   # count>=4 units
+    used_section = defaultdict(set)   # count>=4 subjects
+    by_teacher = defaultdict(list)
+    for i, u in enumerate(UNITS):
+        by_teacher[u["teacher"]].append(i)
+
+    domains = {}
+    order_big = []
+
+    def add_dom(ui, dom):
+        domains[ui] = list(dom)
+        if UNITS[ui]["count"] >= 4:
+            order_big.append(ui)
+
+    # ---- fixed small/subject specials (not part of big backtracking) ----
+    comm = [i for i in by_teacher["Naeem"] if UNITS[i]["subject"] == "Principles of Commerce"]
+    rng.shuffle(comm)
+    for j, ui in enumerate(comm):
+        slot[ui] = [0, 1][j]; days[ui] = {1, 2, 3, 4}; locked[ui] = True
+
+    bm = [i for i in by_teacher["Assad"] if UNITS[i]["subject"] == "Business Mathematics"]
+    rng.shuffle(bm); bmds = [{0, 1}, {2, 3}]; rng.shuffle(bmds)
+    for j, ui in enumerate(bm):
+        slot[ui] = 2; days[ui] = bmds[j]; locked[ui] = True
+
+    tv = list(by_teacher["Tanveer"]); rng.shuffle(tv)
+    for j, ui in enumerate(tv):
+        slot[ui] = j; days[ui] = {3, 4}; locked[ui] = True
+
+    # ---- big-subject slot domains ----
+    acct = [i for i in by_teacher["Naeem"] if UNITS[i]["subject"] == "Principles of Accounting"]
+    for ui in acct:
+        add_dom(ui, [2, 3, 4])
+
+    for ui in by_teacher["PARALLEL"]:
+        add_dom(ui, [2, 3])
+
+    math = [i for i in by_teacher["Assad"] if UNITS[i]["subject"] == "Mathematics"]
+    rng.shuffle(math)
+    for j, ui in enumerate(math):
+        add_dom(ui, [0, 1] if j < 2 else [3, 4])
+
+    cs = list(by_teacher["Babar"]); rng.shuffle(cs)
+    for j, ui in enumerate(cs):
+        add_dom(ui, [0, 1] if j < 2 else [2, 3, 4])
+
+    ish = list(by_teacher["Ishfaq"]); rng.shuffle(ish)
+    add_dom(ish[0], [0]); add_dom(ish[1], [1])
+
+    bs = list(by_teacher["Basit"]); rng.shuffle(bs)
+    add_dom(bs[0], [0])
+    for ui in bs[1:]:
+        add_dom(ui, [0, 1, 2, 3])
+
+    for t, unit_ids in by_teacher.items():
+        if t in ("Naeem", "Assad", "Babar", "Ishfaq", "PARALLEL", "Tanveer", "Basit"):
+            continue
+        dom = ALLOWED.get(t, [0, 1, 2, 3, 4])
+        for ui in unit_ids:
+            if UNITS[ui]["count"] >= 4:
+                add_dom(ui, dom)
+
+    order_big.sort(key=lambda i: len(domains[i]))
+
+    def bt(k):
+        if k == len(order_big):
+            return True
+        ui = order_big[k]; u = UNITS[ui]
+        cands = [s for s in domains[ui]
+                 if s not in used_teacher[u["teacher"]] and s not in used_section[u["sec"]]]
+        rng.shuffle(cands)
+        for s in cands:
+            slot[ui] = s
+            used_teacher[u["teacher"]].add(s); used_section[u["sec"]].add(s)
+            if bt(k + 1):
+                return True
+            used_teacher[u["teacher"]].remove(s); used_section[u["sec"]].remove(s)
+        slot.pop(ui, None)
+        return False
+
+    if not bt(0):
+        return None
+    for ui in order_big:
+        days[ui] = None; locked[ui] = True
+
+    # ---- soft primary slots for remaining 3/2-credit units ----
+    for i, u in enumerate(UNITS):
+        if i in slot:
+            continue
+        allowed = list(ALLOWED.get(u["teacher"], [0, 1, 2, 3, 4]))
+        busy = used_section[u["sec"]] | used_teacher.get(u["teacher"], set())
+        pref = [s for s in allowed if s not in busy]
+        pool = pref if pref else allowed
+        slot[i] = rng.choice(pool)
+        days[i] = None
+        locked[i] = False
+
+    parallel_slot = slot[by_teacher["PARALLEL"][0]]
+    return slot, days, locked, parallel_slot
+
+# ------------------------------------------------------------------
+# GLOBAL FILL
+# ------------------------------------------------------------------
+def gen_candidates(ui, slot, days, locked, rng):
+    u = UNITS[ui]; c = u["count"]; p = slot[ui]; t = u["teacher"]
+    allow = set(ALLOWED.get(t, [0, 1, 2, 3, 4]))
+    if locked[ui]:
+        allow = {p}
+
+    def d_ok(s, d):
+        al = days.get(ui)
+        if al is not None and d not in al:
+            return False
+        if t == "Naeem" and s in (0, 1) and d == 0:
+            return False
+        if t == "Tanveer" and d not in (3, 4):
+            return False
+        if t == "NaeemAsghar" and s in (0, 1):
+            return False
+        return True
+
+    daylist = {s: [d for d in range(5) if d_ok(s, d)] for s in allow}
+    cands = []
+    if c == 5:
+        if len(daylist[p]) == 5:
+            cands.append(tuple((p, d) for d in range(5)))
+    elif c == 4:
+        for combo in itertools.combinations(daylist[p], 4):
+            cands.append(tuple((p, d) for d in combo))
+    elif c == 3:
+        order_s = [p] + [x for x in allow if x != p]
+        for s in order_s:
+            for combo in itertools.combinations(daylist[s], 3):
+                cands.append(tuple((s, d) for d in combo))
+        for s1 in allow:
+            for s2 in allow:
+                if s2 <= s1:
+                    continue
+                for d1c in itertools.combinations(daylist[s1], 2):
+                    for d2 in daylist[s2]:
+                        if d2 not in d1c:
+                            cands.append(tuple([(s1, d) for d in d1c] + [(s2, d2)]))
+    else:
+        order_s = [p] + [x for x in allow if x != p]
+        for s in order_s:
+            for combo in itertools.combinations(daylist[s], 2):
+                cands.append(tuple((s, d) for d in combo))
+        for s1 in allow:
+            for s2 in allow:
+                if s2 <= s1:
+                    continue
+                for d1 in daylist[s1]:
+                    for d2 in daylist[s2]:
+                        if d2 != d1:
+                            cands.append(((s1, d1), (s2, d2)))
+    cands.sort(key=lambda cd: 0 if all(cs == p for cs, _ in cd) else 1)
+    return cands
+
+def can_place(ui, cells, grids, busy, sec_day_subj):
+    sec = UNITS[ui]["sec"]; t = UNITS[ui]["teacher"]; subj = UNITS[ui]["subject"]
+    extras = ("NaeemAsghar", "Ishfaq") if t == "PARALLEL" else ()
+    days_used = set()
+    for (s, d) in cells:
+        if grids[sec][d][s] is not None:
+            return False
+        if (d, s) in busy[t]:
+            return False
+        for e in extras:
+            if (d, s) in busy[e]:
+                return False
+        days_used.add(d)
+    for d in days_used:
+        if subj in sec_day_subj[sec][d]:
+            return False
+    return True
+
+def place(ui, cells, grids, busy, sec_day_subj):
+    sec = UNITS[ui]["sec"]; t = UNITS[ui]["teacher"]
+    extras = ("NaeemAsghar", "Ishfaq") if t == "PARALLEL" else ()
+    for (s, d) in cells:
+        grids[sec][d][s] = ui
+        busy[t].add((d, s))
+        for e in extras:
+            busy[e].add((d, s))
+        sec_day_subj[sec][d].add(UNITS[ui]["subject"])
+
+def unplace(ui, cells, grids, busy, sec_day_subj):
+    sec = UNITS[ui]["sec"]; t = UNITS[ui]["teacher"]
+    extras = ("NaeemAsghar", "Ishfaq") if t == "PARALLEL" else ()
+    for (s, d) in cells:
+        grids[sec][d][s] = None
+        busy[t].discard((d, s))
+        for e in extras:
+            busy[e].discard((d, s))
+        sec_day_subj[sec][d].discard(UNITS[ui]["subject"])
+
+def solve_once(slot, days, locked, rng, node_budget=600000):
+    grids = {s["key"]: [[None] * 5 for _ in range(5)] for s in SECTIONS}
+    busy = defaultdict(set)
+    sec_day_subj = defaultdict(lambda: [set() for _ in range(5)])
+
+    order = list(range(len(UNITS)))
+    rng.shuffle(order)
+    order.sort(key=lambda i: -UNITS[i]["count"])
+    cand_cache = [gen_candidates(i, slot, days, locked, rng) for i in range(len(UNITS))]
+    nodes = [0]
+
+    def backtrack(idx):
+        nodes[0] += 1
+        if nodes[0] > node_budget:
+            return "BUDGET"
+        if idx == len(order):
+            return "OK"
+        ui = order[idx]
+        for cd in cand_cache[ui]:
+            if can_place(ui, cd, grids, busy, sec_day_subj):
+                place(ui, cd, grids, busy, sec_day_subj)
+                r = backtrack(idx + 1)
+                if r == "OK":
+                    return "OK"
+                unplace(ui, cd, grids, busy, sec_day_subj)
+                if r == "BUDGET":
+                    return "BUDGET"
+        return None
+
+    if backtrack(0) != "OK":
+        return None
+    return grids
+
+# ------------------------------------------------------------------
+# VALIDATION & SCORING
+# ------------------------------------------------------------------
+def validate(grids):
+    issues = []
+    for sec in SECTIONS:
+        g = grids[sec["key"]]
+        counts = defaultdict(int)
+        for d in range(5):
+            seen = set()
+            for s in range(5):
+                uid = g[d][s]
+                if uid is None:
+                    issues.append(f"{sec['key']}: empty day{d} slot{s}")
+                    continue
+                u = UNITS[uid]
+                counts[u["subject"]] += 1
+                if u["subject"] in seen:
+                    issues.append(f"{sec['key']} {DAYS[d]} {u['subject']} twice")
+                seen.add(u["subject"])
+        for subj, teacher, count in sec["subs"]:
+            if counts[subj] != count:
+                issues.append(f"{sec['key']} {subj} load {counts[subj]} != {count}")
+
+    occ = defaultdict(list)
+    for sec in SECTIONS:
+        g = grids[sec["key"]]
+        for d in range(5):
+            for s in range(5):
+                uid = g[d][s]
+                if uid is None:
+                    continue
+                occ[UNITS[uid]["teacher"]].append((d, s, sec["key"]))
+
+    for t, lst in occ.items():
+        seen = set()
+        for (d, s, k) in lst:
+            if (d, s) in seen:
+                issues.append(f"teacher {t} double-booked {DAYS[d]} {SLOTS[s]}")
+            seen.add((d, s))
+
+    for t, lst in occ.items():
+        for (d, s, k) in lst:
+            if t == "Naeem" and s in (0, 1) and d == 0:
+                issues.append(f"Naeem Mon P1/P2 ({k})")
+            if t == "Amir" and s in (0, 4):
+                issues.append(f"Amir P1/P5 ({k})")
+            if t == "Husnul" and s in (0, 4):
+                issues.append(f"Husnul P1/P5 ({k})")
+            if t == "Millat" and s == 0:
+                issues.append(f"Millat P1 ({k})")
+            if t == "Yasir" and s not in (0, 1, 3):
+                issues.append(f"Yasir slot ({k})")
+            if t == "Basit" and s == 4:
+                issues.append(f"Basit P5 ({k})")
+            if t == "NaeemAsghar" and s in (0, 1):
+                issues.append(f"NaeemAsghar P1/P2 ({k})")
+            if t == "Tanveer" and (d not in (3, 4) or s not in (0, 1, 2)):
+                issues.append(f"Tanveer Thu/Fri P1-3 ({k})")
+
+    for sec in SECTIONS:
+        g = grids[sec["key"]]
+        for d in range(5):
+            for s in range(5):
+                uid = g[d][s]
+                if uid is None:
+                    continue
+                u = UNITS[uid]
+                if u["teacher"] == "Assad" and u["subject"] == "Business Mathematics":
+                    if s != 2:
+                        issues.append(f"Assad BM not P3 ({sec['key']})")
+                    if d == 4:
+                        issues.append(f"Assad BM Friday ({sec['key']})")
+
+    for d in range(5):
+        if not any((dd, ss) == (d, 0) for (dd, ss, k) in occ["Assad"]):
+            issues.append(f"Assad not P1 {DAYS[d]}")
+        if not any((dd, ss) == (d, 1) for (dd, ss, k) in occ["Assad"]):
+            issues.append(f"Assad not P2 {DAYS[d]}")
+    if len({d for (d, s, k) in occ["Babar"] if s == 0}) < 4:
+        issues.append("Babar P1 <4 days")
+    if len({d for (d, s, k) in occ["Babar"] if s == 1}) < 4:
+        issues.append("Babar P2 <4 days")
+
+    basit_days = defaultdict(int); basit_p1 = set()
+    for (d, s, k) in occ["Basit"]:
+        basit_days[d] += 1
+        if s == 0:
+            basit_p1.add(d)
+    for d in range(5):
+        if basit_days[d] == 0:
+            issues.append(f"Basit off {DAYS[d]}")
+    if len(basit_p1) < 4:
+        issues.append(f"Basit P1 only {len(basit_p1)}")
+
+    ish_p1 = set()
+    for (d, s, k) in occ["Ishfaq"]:
+        if s == 0:
+            ish_p1.add(d)
+        if s == 4:
+            issues.append(f"Ishfaq P5 ({k})")
+    if len(ish_p1) < 4:
+        issues.append(f"Ishfaq P1 only {len(ish_p1)}")
+
+    par = occ["PARALLEL"]
+    if len(par) != 4:
+        issues.append(f"parallel size {len(par)}")
+    par_slots = {s for (d, s, k) in par}
+    if len(par_slots) != 1 or list(par_slots)[0] not in (2, 3):
+        issues.append(f"parallel slot {par_slots}")
+    par_ds = {(d, s) for (d, s, k) in par}
+    for (d, s, k) in occ["Ishfaq"]:
+        if (d, s) in par_ds and k != "ICS-II-B":
+            issues.append("Ishfaq clash parallel")
+    for (d, s, k) in occ["NaeemAsghar"]:
+        if (d, s) not in par_ds:
+            issues.append("NaeemAsghar outside parallel")
+
+    com1 = ["I.COM-I-A", "I.COM-I-B", "I.COM-I-C"]
+    for x in com1:
+        gx = grids[x]
+        found = False
+        for d in range(5):
+            for s in range(5):
+                if UNITS[gx[d][s]]["subject"] == "Principles of Accounting":
+                    if all(UNITS[grids[y][d][s]]["subject"] != "Principles of Economics"
+                           for y in com1 if y != x):
+                        found = True
+                        break
+            if found:
+                break
+        if not found:
+            issues.append(f"non-overriding failed {x}")
+
+    return len(issues) == 0, issues
+
+def score(grids):
+    pen = 0
+    for sec in SECTIONS:
+        g = grids[sec["key"]]
+        slots_by_subj = defaultdict(set)
+        for d in range(5):
+            for s in range(5):
+                uid = g[d][s]
+                if uid is not None:
+                    slots_by_subj[UNITS[uid]["subject"]].add(s)
+        for subj, teacher, count in sec["subs"]:
+            extra = len(slots_by_subj[subj]) - 1
+            if count == 5:
+                pen += extra * 100000
+            elif count == 4:
+                pen += extra * 10000
+            elif count == 3:
+                pen += extra * 100
+            else:
+                pen += extra * 10
+    return pen
+
+def canonical(grids):
+    parts = []
+    for sec in SECTIONS:
+        g = grids[sec["key"]]
+        for d in range(5):
+            for s in range(5):
+                u = UNITS[g[d][s]]
+                parts.append(f"{sec['key']}|{d}|{s}|{u['subject']}|{u['teacher']}")
+    return "|".join(parts)
+
+def generate(n_attempts, seed=1, budget=600000):
+    rng = random.Random(seed)
+    solutions = {}
+    attempts = valid = fill_fail = no_slot = 0
+    while attempts < n_attempts and len(solutions) < 300:
+        attempts += 1
+        res = assign_slots(rng)
+        if res is None:
+            no_slot += 1
+            continue
+        slot, days, locked, par = res
+        grids = solve_once(slot, days, locked, rng, budget)
+        if grids is None:
+            fill_fail += 1
+            continue
+        ok, issues = validate(grids)
+        if ok:
+            valid += 1
+            key = canonical(grids)
+            if key not in solutions:
+                solutions[key] = (score(grids), grids)
+    return solutions, attempts, valid, fill_fail, no_slot
+
+if __name__ == "__main__":
+    import sys
+    n = int(sys.argv[1]) if len(sys.argv) > 1 else 2000
+    sols, attempts, valid, ff, ns = generate(n, seed=42)
+    print(f"attempts={attempts} valid={valid} distinct={len(sols)} fill_fail={ff} no_slot={ns}")
+    ranked = sorted(sols.values(), key=lambda x: x[0])
+    for sc, g in ranked[:10]:
+        print("score", sc)
