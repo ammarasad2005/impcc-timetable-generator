@@ -106,6 +106,9 @@ select#comboSel:focus{outline:2px solid var(--amber);outline-offset:1px}
 .tick .ell::after{content:"";animation:ell 1.2s steps(4) infinite}
 @keyframes ell{0%{content:""}25%{content:"."}50%{content:".."}75%{content:"..."}}
 #cpsatStatus{margin-left:auto;color:#9db5a8}
+#publishedAge{font-family:var(--mono);font-size:11px;color:#9db5a8;white-space:nowrap;margin-left:12px}
+#publishedAge b{color:#ffd97a;font-weight:600}
+#publishedAge .led-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#4ade80;box-shadow:0 0 6px #4ade80;margin-right:4px;vertical-align:1px}
 #cpsatStatus.ok{color:#ffd97a}
 #cpsatStatus.err{color:#ff9d84}
 #cpsatStatus.warn{color:#f0c36a}
@@ -456,6 +459,7 @@ footer b{color:var(--green)}
   <div class="con-row2">
     <div class="tick"><span class="led" id="led"></span><span id="tickText">Initialising demo…</span></div>
     <span id="cpsatStatus">CP-SAT: idle — press “Compute optimal” to call the backend</span>
+    <span id="publishedAge"></span>
   </div>
   <div class="prog"><i id="progFill"></i></div>
 </nav>
@@ -1642,21 +1646,43 @@ function authSubmit(mode){
     setTicker('Signed in as '+SB.user.email+' — workspace synced','ok');
   }).catch(err=>setAuthMsg('Error: '+err.message));
 }
+let publishedAt=null;
+function timeAgo(iso){
+  const t=new Date(iso).getTime();
+  if(isNaN(t))return '';
+  const diff=Math.max(0,Date.now()-t);
+  const m=Math.floor(diff/60000);
+  if(m<1)return 'just now';
+  if(m<60)return m+' min'+(m===1?'':'s')+' ago';
+  const h=Math.floor(m/60);
+  if(h<24)return h+' hour'+(h===1?'':'s')+' ago';
+  const d=Math.floor(h/24);
+  if(d<7)return d+' day'+(d===1?'':'s')+' ago';
+  return new Date(t).toLocaleDateString('en-GB');
+}
+function renderPublishedAge(){
+  const el=document.getElementById('publishedAge');
+  if(!el)return;
+  if(!publishedAt){el.innerHTML='';return;}
+  el.innerHTML='<span class="led-dot"></span>Last published <b>'+esc(timeAgo(publishedAt))+'</b>';
+}
 async function syncFromCloud(){
   if(!SB)return;
   try{
     const pub=await SB.loadPublished();
     if(pub){
+      if(pub.updated_at){publishedAt=pub.updated_at;}
       if(pub.allocation&&Object.keys(pub.allocation).length){state.allocation=pub.allocation;saveAllocationLocal();}
       if(pub.constraints&&Object.keys(pub.constraints).length){state.constraints=pub.constraints;try{localStorage.setItem(CONST_KEY,JSON.stringify(state.constraints));}catch(e){}}
       if(Array.isArray(pub.faculty)&&pub.faculty.length){state.faculty=pub.faculty;saveFacultyLocal();}
     }
+    renderPublishedAge();
   }catch(e){setTicker('Cloud load failed: '+e.message,'err');}
 }
 function pushToCloud(){
   if(!SB||!SB.loggedIn)return;
   SB.savePublished(state.allocation||defaultAllocation(),state.constraints||{},getFaculty())
-    .then(()=>setTicker('Published for all users ✓','ok'))
+    .then(()=>{publishedAt=new Date().toISOString();renderPublishedAge();setTicker('Published for all users ✓','ok');})
     .catch(err=>setTicker('Cloud sync failed: '+err.message,'err'));
 }
 function saveAllocation(){

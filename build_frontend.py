@@ -1429,5 +1429,51 @@ rep("""function pushToCloud(){
 }""")
 
 
+# ---- 25) "Last published" indicator (how fresh is the shared data) ----------
+# CSS
+rep("#cpsatStatus{margin-left:auto;color:#9db5a8}",
+    "#cpsatStatus{margin-left:auto;color:#9db5a8}\n#publishedAge{font-family:var(--mono);font-size:11px;color:#9db5a8;white-space:nowrap;margin-left:12px}\n#publishedAge b{color:#ffd97a;font-weight:600}\n#publishedAge .led-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#4ade80;box-shadow:0 0 6px #4ade80;margin-right:4px;vertical-align:1px}")
+
+# HTML: place the indicator at the end of the console status row
+rep('<span id="cpsatStatus">CP-SAT: idle — press “Compute optimal” to call the backend</span>',
+    '<span id="cpsatStatus">CP-SAT: idle — press “Compute optimal” to call the backend</span>\n    <span id="publishedAge"></span>')
+
+# helpers + state, injected just before syncFromCloud
+rep("async function syncFromCloud(){\n  if(!SB)return;",
+    """let publishedAt=null;
+function timeAgo(iso){
+  const t=new Date(iso).getTime();
+  if(isNaN(t))return '';
+  const diff=Math.max(0,Date.now()-t);
+  const m=Math.floor(diff/60000);
+  if(m<1)return 'just now';
+  if(m<60)return m+' min'+(m===1?'':'s')+' ago';
+  const h=Math.floor(m/60);
+  if(h<24)return h+' hour'+(h===1?'':'s')+' ago';
+  const d=Math.floor(h/24);
+  if(d<7)return d+' day'+(d===1?'':'s')+' ago';
+  return new Date(t).toLocaleDateString('en-GB');
+}
+function renderPublishedAge(){
+  const el=document.getElementById('publishedAge');
+  if(!el)return;
+  if(!publishedAt){el.innerHTML='';return;}
+  el.innerHTML='<span class="led-dot"></span>Last published <b>'+esc(timeAgo(publishedAt))+'</b>';
+}
+async function syncFromCloud(){\n  if(!SB)return;""")
+
+# capture updated_at after loadPublished
+rep("    const pub=await SB.loadPublished();\n    if(pub){",
+    "    const pub=await SB.loadPublished();\n    if(pub){\n      if(pub.updated_at){publishedAt=pub.updated_at;}")
+
+# refresh the indicator after the sync try block
+rep("  }catch(e){setTicker('Cloud load failed: '+e.message,'err');}\n}",
+    "    renderPublishedAge();\n  }catch(e){setTicker('Cloud load failed: '+e.message,'err');}\n}")
+
+# on admin publish, mark as 'just now'
+rep(".then(()=>setTicker('Published for all users ✓','ok'))",
+    ".then(()=>{publishedAt=new Date().toISOString();renderPublishedAge();setTicker('Published for all users ✓','ok');})")
+
+
 io.open(DST, "w", encoding="utf-8").write(src)
 print("OK → wrote", DST, "(", len(src), "bytes )")
