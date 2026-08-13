@@ -11,6 +11,7 @@ Objective: minimize subject-slot shuffling (weighted by weekly credits).
 """
 import random
 import json
+import os
 from collections import defaultdict
 from ortools.sat.python import cp_model
 
@@ -273,7 +274,8 @@ def generate_ranked(n_seeds=2, time_per_seed=45, max_solutions=0):
         solver = cp_model.CpSolver()
         solver.parameters.random_seed = 1000 + seed
         solver.parameters.max_time_in_seconds = time_per_seed
-        solver.parameters.num_search_workers = 8
+        # On low-CPU hosts (e.g. Render free tier: 0.1 vCPU) fewer workers is faster.
+        solver.parameters.num_search_workers = int(os.environ.get("CP_SAT_WORKERS", "8"))
         status = solver.Solve(m, cb)
         if status == cp_model.OPTIMAL:
             any_optimal = True

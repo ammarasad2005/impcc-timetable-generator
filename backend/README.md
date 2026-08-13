@@ -35,6 +35,15 @@ Response:
 }
 ```
 
+## Deploy to Render (free, no credit card)
+
+The repo root has `render.yaml` + `RENDER_GUIDE.md`. One-click deploy:
+**Render dashboard → New + → Blueprint → connect GitHub → pick this repo → Apply.**
+
+- Free tier: 512 MB RAM, 0.1 vCPU, sleeps after 15 min idle (cold start ~30–60 s).
+- `render.yaml` sets `CP_SAT_WORKERS=4` (fewer solver threads for the small instance).
+- Recommended request body on Render: `{ "time_limit": 20, "n_seeds": 1, "max_solutions": 0 }`.
+
 ## Deploy to Google Cloud Run
 
 ```bash

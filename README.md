@@ -115,13 +115,16 @@ The website also ships an optional **"Compute optimal (CP-SAT)"** button. Point 
 FastAPI backend and it fetches the proven-optimal set (score 560) and merges it into the
 ranked chooser (union — nothing is dropped).
 
-1. Deploy the backend to Cloud Run (see `backend/README.md`): `PROJECT_ID=… ./deploy.sh`
-2. Set the URL in `app.js` (`const API_URL = "https://…a.run.app"`) or inject
-   `window.IMPCC_API_URL` at page load, then rebuild with `python3 build_site.py`.
+**Two ways to host the backend:**
 
-Cloud Run free tier (calendar-month reset): 2M requests, 180k vCPU-sec, 360k GiB-sec/month
-→ roughly 2,000–3,000 optimal generations per month at **$0** (billing must be enabled;
-deploy to `us-central1`; keep `--min-instances 0`).
+- **Render (free, no credit card)** — see `RENDER_GUIDE.md`. Uses `render.yaml` for one-click
+  Blueprint deploy. Free tier is 512 MB / 0.1 vCPU and sleeps after 15 min idle (cold start
+  ~30–60 s), tuned via `CP_SAT_WORKERS=4`.
+- **Google Cloud Run (free tier, faster)** — see `backend/README.md` + `deploy.sh`.
+  Needs a physical bank card (Google rejects virtual/prepaid cards).
+
+Either way, set the URL in `app.js` (`const API_URL = "…"`) or inject `window.IMPCC_API_URL`
+at page load, then rebuild with `python3 build_site.py`.
 
 ---
 
