@@ -1,28 +1,34 @@
-"""Vercel serverless entry point for the IMPCC CP-SAT backend.
+"""Vercel serverless entry point for the IMPCC CP-SAT backend + frontend host.
 
-Vercel serves the `app` object (FastAPI/ASGI). The routes live under
-`/api/index/*` and are exposed at clean URLs (`/health`, `/generate`, `/docs`)
-via the rewrites in vercel.json.
+Serves:
+  GET  /            → the frontend (index.html)
+  GET  /solver.js   → the in-browser solver script
+  GET  /health      → liveness
+  POST /generate    → CP-SAT solve (ranked, valid timetables)
+  GET  /docs        → Swagger UI
 
-The solver modules (cp_solver.py, solver.py) live at the repo root and are
-bundled into this function via `includeFiles` in vercel.json.
+The solver modules (cp_solver.py, solver.py) and the static assets (index.html,
+solver.js) live at the repo root and are bundled into this function via
+`includeFiles` in vercel.json.
 """
 import os
 import sys
 import time
+import pathlib
 
 # Make the repo root importable (parent of api/) so cp_solver / solver resolve.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 import cp_solver as CS
 from solver import UNITS, SECTIONS, TEACHER_FULL, DAYS, SLOTS
 
 app = FastAPI(
-    title="IMPCC Timetable Generator API (Vercel)",
+    title="IMPCC Timetable Generator API",
     description="CP-SAT solver for IMPCC (H-8) Inter 1st-shift timetables (ICS & I.Com).",
     version="1.0.0",
 )
@@ -35,11 +41,44 @@ app.add_middleware(
 )
 
 
+def _find_root() -> pathlib.Path:
+    """Locate the directory holding index.html / solver.js (robust to bundling)."""
+    here = pathlib.Path(__file__).resolve()
+    candidates = [
+        here.parent.parent,   # api/.. = project root
+        here.parent,          # api/ (if assets were copied alongside)
+        pathlib.Path.cwd(),
+    ]
+    for c in candidates:
+        if (c / "index.html").exists() or (c / "solver.js").exists():
+            return c
+    return here.parent.parent
+
+
+@app.get("/", include_in_schema=False)
+def home():
+    root = _find_root()
+    index = root / "index.html"
+    if index.exists():
+        return FileResponse(index, media_type="text/html")
+    return JSONResponse({"ok": True, "service": "impcc-timetable-generator",
+                         "hint": "frontend assets not bundled"}, status_code=404)
+
+
+@app.get("/solver.js", include_in_schema=False)
+def solver_js():
+    root = _find_root()
+    f = root / "solver.js"
+    if f.exists():
+        return FileResponse(f, media_type="application/javascript")
+    return JSONResponse({"detail": "solver.js not found"}, status_code=404)
+
+
 class GenerateRequest(BaseModel):
     # Vercel Hobby gives 1 vCPU + a 300s cap, so defaults are tuned for that:
     # 20s reliably returns the best-known 560 without needing a 45s prove-optimal run.
-    time_limit: int = Field(default=20, ge=1, le=300,
-                            description="seconds per CP-SAT seed")
+    time_limit: int = Field(default=45, ge=1, le=300,
+                            description="seconds per CP-SAT seed (45s returns best 560; ~120s proves optimality)")
     n_seeds: int = Field(default=1, ge=1, le=4,
                          description="number of randomized optimization seeds")
     max_solutions: int = Field(default=0, ge=0,

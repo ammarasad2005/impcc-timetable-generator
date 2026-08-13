@@ -18,8 +18,8 @@ platform as your frontend.
 
 | File | Purpose |
 |---|---|
-| `api/index.py` | FastAPI app (the function Vercel runs) — `POST /generate`, `GET /health`, `GET /docs` |
-| `vercel.json` | rewrites `/generate` & `/health` to the function; `maxDuration: 300`, `memory: 1024 MB`, and `includeFiles` so `cp_solver.py`/`solver.py` get bundled |
+| `api/index.py` | FastAPI app (the function Vercel runs) — serves the frontend at `/` + `/solver.js`, and `POST /generate`, `GET /health`, `GET /docs` |
+| `vercel.json` | `maxDuration: 300` + `includeFiles` so `cp_solver.py`/`solver.py`/`index.html`/`solver.js` get bundled |
 | `requirements.txt` | `ortools` + `fastapi` (Vercel installs these at build) |
 
 ## Part 1 — Deploy
@@ -28,7 +28,7 @@ platform as your frontend.
 2. Click **Add New…** → **Project**.
 3. **Import Git Repository** → if your GitHub isn't linked yet, click **Import Third-Party Git Repository** (or **Connect GitHub**) → authorize → pick **`ammarasad2005/impcc-timetable-generator`**.
 4. On the **Configure Project** screen:
-   - **Framework Preset:** choose **Other** (it's a static site + Python functions, not a Next.js app).
+   - **Framework Preset:** **FastAPI** (Vercel auto-detects it — keep it; the FastAPI app serves both the frontend and the API, so everything lives at the root: `/`, `/health`, `/generate`, `/docs`).
    - **Root Directory:** leave as `.` (do **not** set it to `api/` — the function imports `cp_solver.py` from the root).
    - **Build Command / Output Directory / Install Command:** leave empty — no build step; Vercel auto-installs `requirements.txt` for the Python function.
 5. (Optional) **Environment Variables** → add `CP_SAT_WORKERS` = `4` (fewer solver threads for the 1-vCPU function — slightly less memory churn).
@@ -72,7 +72,7 @@ platform as your frontend.
 |---|---|---|
 | `maxDuration` | 300 s | already in `vercel.json` — a 20 s solve fits with huge headroom |
 | `memory` | 1024 MB | already set; Hobby allows up to 2048 MB |
-| `time_limit` in requests | **20 s** (default in `api/index.py`) | 20 s reliably returns the **560** best-known on 1 vCPU |
+| `time_limit` in requests | **45 s** (default in `api/index.py`) | 45 s reliably returns the **560** best-known; ~120 s proves optimality |
 | `n_seeds` | 1 | keeps each call ~20 s |
 | Monthly CPU budget | roughly a few CPU-hours + 1M invocations | a 20 s solve ≈ 20 CPU-seconds → hundreds of solves/month, plenty for a college |
 | Cold start | ~1–3 s | Python boot + ortools import; no "sleep" like Render |
@@ -85,7 +85,7 @@ Cloud Run's 900 s / Render's no-hard-cap would matter.
 | Symptom | Fix |
 |---|---|
 | `MODULE_NOT_FOUND: cp_solver` in logs | `includeFiles` in `vercel.json` must list `cp_solver.py` and `solver.py` — verify it wasn't removed |
-| `404` on `/health` | rewrites not applied → use `/api/index/health` directly, or check `vercel.json` deployed |
+| `404` on `/health` | the FastAPI app must be mounted at the root (framework = fastapi) — if you switched the framework to "Other", set it back to fastapi |
 | `504 FUNCTION_INVOCATION_TIMEOUT` | solve exceeded `maxDuration`. Lower `time_limit` to 20, `n_seeds` to 1 |
 | Function killed (memory) | lower `CP_SAT_WORKERS` to 2 via Environment Variables |
 | "Python version not supported" | add `"runtime": "python3.12"`? Not needed — Vercel defaults are fine; if you see this, set Python 3.12 in Project → Settings → General |

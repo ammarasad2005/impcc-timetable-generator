@@ -1043,7 +1043,7 @@ function runCpsat(){
   state.cpsatBusy=true;
   btnCpsat.disabled=true;
   btnCpsat.innerHTML='<span class="spin"></span> running CP-SAT…';
-  setCpsatStatus('running CP-SAT… (POST /generate · time_limit 45s · n_seeds 2)','warn');
+  setCpsatStatus('running CP-SAT… (POST /generate · time_limit 120s · n_seeds 1)','warn');
   setTicker('calling CP-SAT backend — hold','run',true);
   const base=(typeof window.IMPCC_API_URL==='string')?window.IMPCC_API_URL:'';
   const fail=(msg)=>{state.cpsatBusy=false;btnCpsat.disabled=false;btnCpsat.innerHTML='<span class="g">✦</span> Compute optimal (CP-SAT)';setCpsatStatus('CP-SAT backend unreachable ('+msg+') — using in-browser generation only','err');setTicker('CP-SAT backend unreachable — in-browser generation still works','ok');};
@@ -1051,7 +1051,7 @@ function runCpsat(){
   fetch(base+'/generate',{
     method:'POST',
     headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({time_limit:45,n_seeds:2,max_solutions:0})
+    body:JSON.stringify({time_limit:120,n_seeds:1,max_solutions:0})
   })
   .then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
   .then(data=>{
