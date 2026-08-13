@@ -216,3 +216,19 @@ identity, and every timetable/faculty view falls back to the raw name.
 > preferences can be changed or dropped, not just added. Applying an LLM translation now
 > **merges** into the edits instead of replacing the whole set (fixes a case where
 > translating one rule silently dropped the others).
+
+---
+
+## Image (PNG → ZIP) exports
+
+Beyond the per-section / per-teacher PNG buttons:
+
+- **Department:** each stream header (I.Com / ICS) has a **ZIP** button — downloads all that
+  department's section images, each named `IMPCC_<section>.png`.
+- **Whole platform:** the **⇩ All sections (ZIP)** button downloads one zip containing two
+  department folders (`I-Com/…`, `ICS/…`), each holding that department's section images.
+- **All faculty:** the **⇩ Faculty images (ZIP)** button downloads a zip of every faculty
+  member's personal schedule image (`IMPCC_personal-timetable_<name>.png`).
+
+The ZIP is built in-browser with a dependency-free store-method writer (no compression needed
+since the PNGs are already compressed) — validated against Python's `zipfile`.

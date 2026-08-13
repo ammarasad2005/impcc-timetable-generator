@@ -598,7 +598,7 @@ function wrapLines(ctx,text,maxW,font){
   if(cur)lines.push(cur);
   return lines;
 }
-async function exportSectionImage(secId){
+async function drawSectionCanvas(secId){
   const c=getSel();if(!c)return;
   const sec=SECTIONS.find(s=>s.id===secId);if(!sec)return;
   const grid=c.tt[secId];
@@ -685,17 +685,16 @@ async function exportSectionImage(secId){
     y+=rowH;
   }
 
-  canvas.toBlob(function(blob){
-    if(!blob)return;
-    const url=URL.createObjectURL(blob);
-    const a=document.createElement('a');
-    a.href=url;a.download='IMPCC_'+secId+'.png';
-    document.body.appendChild(a);a.click();a.remove();
-    setTimeout(function(){URL.revokeObjectURL(url);},800);
-  },'image/png');
-  setTicker('Exported image — '+sec.label+' (landscape PNG)','ok');
+  return {canvas:canvas, filename:'IMPCC_'+secId+'.png'};
 }
-async function exportTeacherImage(name){
+async function exportSectionImage(secId){
+  const sec=SECTIONS.find(s=>s.id===secId);
+  const r=await drawSectionCanvas(secId);
+  if(!r)return;
+  await downloadCanvas(r.canvas, r.filename);
+  setTicker('Exported image — '+(sec?sec.label:secId)+' (landscape PNG)','ok');
+}
+async function drawTeacherCanvas(name){
   const c=getSel();if(!c)return;
   const entries=(buildTeacherIndex(c.tt)[name])||[];
   const m={};entries.forEach(e=>{m[e.d+'_'+e.s]=e;});
@@ -781,14 +780,12 @@ async function exportTeacherImage(name){
     y+=rowH;
   }
 
-  canvas.toBlob(function(blob){
-    if(!blob)return;
-    const url=URL.createObjectURL(blob);
-    const a=document.createElement('a');
-    a.href=url;a.download='IMPCC_personal-timetable_'+slug(name)+'.png';
-    document.body.appendChild(a);a.click();a.remove();
-    setTimeout(function(){URL.revokeObjectURL(url);},800);
-  },'image/png');
+  return {canvas:canvas, filename:'IMPCC_personal-timetable_'+slug(name)+'.png'};
+}
+async function exportTeacherImage(name){
+  const r=await drawTeacherCanvas(name);
+  if(!r)return;
+  await downloadCanvas(r.canvas, r.filename);
   setTicker('Exported image — '+name+' (landscape PNG)','ok');
 }
 
@@ -1622,6 +1619,28 @@ rep(".cons-status{font-family:var(--mono);font-size:10.5px;color:var(--ink2);min
 rep("$('spPrint').addEventListener('click',()=>{if(state.spot)exportTeacherImage(state.spot);});",
     "$('spPrint').addEventListener('click',()=>{if(state.spot)exportTeacherImage(state.spot);});\nmainEl.addEventListener('click',e=>{\n  const chip=e.target.closest('.ed-chip');\n  if(chip){chip.classList.toggle('on');return;}\n  const rm=e.target.closest('.rule-remove');\n  if(rm){const row=rm.closest('.rule-row');removeRule(row.dataset.code,row.dataset.key);return;}\n  const ed=e.target.closest('.rule-edit');\n  if(ed){const row=ed.closest('.rule-row');const code=row.dataset.code,key=row.dataset.key;const eff=(IMPCC_SOLVER.resolveConstraints(state.constraints)[code]||{}).rules||{};row.outerHTML=ruleEditorHTML(code,key,eff[key]);return;}\n  const sv=e.target.closest('.rule-save');\n  if(sv){const box=sv.closest('.rule-ed');saveRuleEdit(box.dataset.code,box.dataset.key,readRuleEditor(box,box.dataset.kind));return;}\n  const cn=e.target.closest('.rule-cancel');\n  if(cn){renderMain();return;}\n});\nmainEl.addEventListener('change',e=>{\n  const at=e.target.closest('.add-rule-type');\n  if(at&&at.value){const code=at.dataset.code;at.closest('.rule-add').insertAdjacentHTML('beforebegin',ruleEditorHTML(code,at.value,null));at.value='';}\n});")
 
+
+ZIP_MODULE = "/* ---------- PNG → ZIP exports (department / whole platform / all faculty) ---------- */\nconst _CRC_TABLE=(function(){const t=new Uint32Array(256);for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=(c&1)?(0xEDB88320^(c>>>1)):(c>>>1);t[n]=c;}return t;})();\nfunction _crc32(u8){let c=0xFFFFFFFF;for(let i=0;i<u8.length;i++)c=_CRC_TABLE[(c^u8[i])&0xFF]^(c>>>8);return (c^0xFFFFFFFF)>>>0;}\nfunction buildZip(files){\n  const enc=new TextEncoder();const parts=[];const central=[];let offset=0;\n  for(const f of files){\n    const nm=enc.encode(f.name);const crc=_crc32(f.data);\n    const lh=new DataView(new ArrayBuffer(30));\n    lh.setUint32(0,0x04034b50,true);lh.setUint16(4,20,true);lh.setUint16(6,0x0800,true);\n    lh.setUint16(8,0,true);lh.setUint16(10,0,true);lh.setUint16(12,0,true);\n    lh.setUint32(14,crc,true);lh.setUint32(18,f.data.length,true);lh.setUint32(22,f.data.length,true);\n    lh.setUint16(26,nm.length,true);lh.setUint16(28,0,true);\n    parts.push(new Uint8Array(lh.buffer),nm,f.data);\n    const ch=new DataView(new ArrayBuffer(46));\n    ch.setUint32(0,0x02014b50,true);ch.setUint16(4,20,true);ch.setUint16(6,20,true);\n    ch.setUint16(8,0x0800,true);ch.setUint16(10,0,true);ch.setUint16(12,0,true);ch.setUint16(14,0,true);\n    ch.setUint32(16,crc,true);ch.setUint32(20,f.data.length,true);ch.setUint32(24,f.data.length,true);\n    ch.setUint16(28,nm.length,true);ch.setUint32(42,offset,true);\n    central.push(new Uint8Array(ch.buffer),nm);\n    offset+=30+nm.length+f.data.length;\n  }\n  let cdSize=0;for(const c of central)cdSize+=c.length;\n  const eocd=new DataView(new ArrayBuffer(22));\n  eocd.setUint32(0,0x06054b50,true);\n  eocd.setUint16(8,files.length,true);eocd.setUint16(10,files.length,true);\n  eocd.setUint32(12,cdSize,true);eocd.setUint32(16,offset,true);\n  const out=new Uint8Array(offset+cdSize+22);let p=0;\n  for(const part of parts){out.set(part,p);p+=part.length;}\n  for(const c of central){out.set(c,p);p+=c.length;}\n  out.set(new Uint8Array(eocd.buffer),p);\n  return out;\n}\nfunction downloadZip(files,zipName){\n  const blob=new Blob([buildZip(files)],{type:'application/zip'});\n  const url=URL.createObjectURL(blob);\n  const a=document.createElement('a');a.href=url;a.download=zipName;\n  document.body.appendChild(a);a.click();a.remove();\n  setTimeout(function(){URL.revokeObjectURL(url);},800);\n}\nfunction downloadCanvas(canvas,filename){\n  return new Promise(function(resolve,reject){\n    canvas.toBlob(function(blob){\n      if(!blob){reject(new Error('canvas export failed'));return;}\n      const url=URL.createObjectURL(blob);\n      const a=document.createElement('a');a.href=url;a.download=filename;\n      document.body.appendChild(a);a.click();a.remove();\n      setTimeout(function(){URL.revokeObjectURL(url);},800);\n      resolve();\n    },'image/png');\n  });\n}\nasync function canvasToU8(canvas){\n  const blob=await new Promise(function(resolve,reject){\n    canvas.toBlob(function(b){b?resolve(b):reject(new Error('no blob'));},'image/png');\n  });\n  const buf=await blob.arrayBuffer();\n  return new Uint8Array(buf);\n}\nasync function exportStreamImages(stream){\n  const c=getSel();if(!c)return;\n  const secs=SECTIONS.filter(function(x){return x.stream===stream;});\n  setTicker('Rendering '+secs.length+' section images…','run',true);\n  const files=[];\n  for(const sec of secs){\n    const r=await drawSectionCanvas(sec.id);\n    if(r)files.push({name:r.filename,data:await canvasToU8(r.canvas)});\n  }\n  downloadZip(files,'IMPCC_'+(stream==='icom'?'ICom':'ICS')+'_schedules.zip');\n  setTicker('Exported '+files.length+' section images (ZIP)','ok');\n}\nasync function exportAllImages(){\n  const c=getSel();if(!c)return;\n  setTicker('Rendering all section images…','run',true);\n  const files=[];\n  for(const sec of SECTIONS){\n    const r=await drawSectionCanvas(sec.id);\n    if(r){const folder=sec.stream==='icom'?'I-Com':'ICS';files.push({name:folder+'/'+r.filename,data:await canvasToU8(r.canvas)});}\n  }\n  downloadZip(files,'IMPCC_all-sections_schedules.zip');\n  setTicker('Exported '+files.length+' section images in department folders (ZIP)','ok');\n}\nasync function exportAllFacultyImages(){\n  const c=getSel();if(!c)return;\n  const names=teacherOrder();\n  if(!names.length){setTicker('No faculty to export','err');return;}\n  setTicker('Rendering '+names.length+' faculty images…','run',true);\n  const files=[];\n  for(const name of names){\n    const r=await drawTeacherCanvas(name);\n    if(r)files.push({name:r.filename,data:await canvasToU8(r.canvas)});\n  }\n  downloadZip(files,'IMPCC_faculty_schedules.zip');\n  setTicker('Exported '+files.length+' faculty images (ZIP)','ok');\n}\n\n"
+
+# ---- 27) PNG→ZIP exports (department, whole platform in folders, all faculty) ----
+# (a) insert the ZIP module before the boot marker
+rep("/* ---------- boot: restore saved results (no auto-generation) ---------- */",
+    ZIP_MODULE + "/* ---------- boot: restore saved results (no auto-generation) ---------- */")
+# (b) department ZIP button in each stream header (plain quotes, as in the source)
+rep("data-pdf-stream=\"'+g.key+'\" title=\"Print this stream / save as PDF\">PDF</button></div><div class=\"sec-grid",
+    "data-pdf-stream=\"'+g.key+'\" title=\"Print this stream / save as PDF\">PDF</button><button class=\"card-img\" data-img-stream=\"'+g.key+'\" title=\"Download this department section images (ZIP)\">ZIP</button></div><div class=\"sec-grid")
+# (c) click handler: route the stream ZIP button
+rep("    if(imgBtn.dataset.imgSec)exportSectionImage(imgBtn.dataset.imgSec);\n    else if(imgBtn.dataset.imgTeacher)exportTeacherImage(imgBtn.dataset.imgTeacher);",
+    "    if(imgBtn.dataset.imgSec)exportSectionImage(imgBtn.dataset.imgSec);\n    else if(imgBtn.dataset.imgTeacher)exportTeacherImage(imgBtn.dataset.imgTeacher);\n    else if(imgBtn.dataset.imgStream)exportStreamImages(imgBtn.dataset.imgStream);")
+# (d) viewbar: add whole-platform + all-faculty ZIP buttons
+rep('<button class="mini-export" id="btnComboCsv" title="Download the selected combination as a CSV file (all 11 sections)">⇩ Export combination CSV</button>',
+    '<button class="mini-export" id="btnComboCsv" title="Download the selected combination as a CSV file (all 11 sections)">⇩ Export combination CSV</button>\n    <button class="mini-export" id="btnAllImages" title="Download every section schedule as PNG images, grouped in department folders (ZIP)">⇩ All sections (ZIP)</button>\n    <button class="mini-export" id="btnFacultyImages" title="Download every faculty member schedule as PNG images (ZIP)">⇩ Faculty images (ZIP)</button>')
+# (e) disable them when no combination exists
+rep("  $('btnComboCsv').disabled=!list.length;",
+    "  $('btnComboCsv').disabled=!list.length;\n  $('btnAllImages').disabled=!list.length;\n  $('btnFacultyImages').disabled=!list.length;")
+# (f) wire listeners
+rep("$('btnComboCsv').addEventListener('click',exportComboCSV);",
+    "$('btnComboCsv').addEventListener('click',exportComboCSV);\n$('btnAllImages').addEventListener('click',exportAllImages);\n$('btnFacultyImages').addEventListener('click',exportAllFacultyImages);")
 
 io.open(DST, "w", encoding="utf-8").write(src)
 print("OK → wrote", DST, "(", len(src), "bytes )")

@@ -518,6 +518,8 @@ footer b{color:var(--green)}
 
     <span class="vb-info" id="vbInfo"></span>
     <button class="mini-export" id="btnComboCsv" title="Download the selected combination as a CSV file (all 11 sections)">⇩ Export combination CSV</button>
+    <button class="mini-export" id="btnAllImages" title="Download every section schedule as PNG images, grouped in department folders (ZIP)">⇩ All sections (ZIP)</button>
+    <button class="mini-export" id="btnFacultyImages" title="Download every faculty member schedule as PNG images (ZIP)">⇩ Faculty images (ZIP)</button>
   </div>
 
   <div id="main"></div>
@@ -873,7 +875,7 @@ function wrapLines(ctx,text,maxW,font){
   if(cur)lines.push(cur);
   return lines;
 }
-async function exportSectionImage(secId){
+async function drawSectionCanvas(secId){
   const c=getSel();if(!c)return;
   const sec=SECTIONS.find(s=>s.id===secId);if(!sec)return;
   const grid=c.tt[secId];
@@ -960,17 +962,16 @@ async function exportSectionImage(secId){
     y+=rowH;
   }
 
-  canvas.toBlob(function(blob){
-    if(!blob)return;
-    const url=URL.createObjectURL(blob);
-    const a=document.createElement('a');
-    a.href=url;a.download='IMPCC_'+secId+'.png';
-    document.body.appendChild(a);a.click();a.remove();
-    setTimeout(function(){URL.revokeObjectURL(url);},800);
-  },'image/png');
-  setTicker('Exported image — '+sec.label+' (landscape PNG)','ok');
+  return {canvas:canvas, filename:'IMPCC_'+secId+'.png'};
 }
-async function exportTeacherImage(name){
+async function exportSectionImage(secId){
+  const sec=SECTIONS.find(s=>s.id===secId);
+  const r=await drawSectionCanvas(secId);
+  if(!r)return;
+  await downloadCanvas(r.canvas, r.filename);
+  setTicker('Exported image — '+(sec?sec.label:secId)+' (landscape PNG)','ok');
+}
+async function drawTeacherCanvas(name){
   const c=getSel();if(!c)return;
   const entries=(buildTeacherIndex(c.tt)[name])||[];
   const m={};entries.forEach(e=>{m[e.d+'_'+e.s]=e;});
@@ -1056,14 +1057,12 @@ async function exportTeacherImage(name){
     y+=rowH;
   }
 
-  canvas.toBlob(function(blob){
-    if(!blob)return;
-    const url=URL.createObjectURL(blob);
-    const a=document.createElement('a');
-    a.href=url;a.download='IMPCC_personal-timetable_'+slug(name)+'.png';
-    document.body.appendChild(a);a.click();a.remove();
-    setTimeout(function(){URL.revokeObjectURL(url);},800);
-  },'image/png');
+  return {canvas:canvas, filename:'IMPCC_personal-timetable_'+slug(name)+'.png'};
+}
+async function exportTeacherImage(name){
+  const r=await drawTeacherCanvas(name);
+  if(!r)return;
+  await downloadCanvas(r.canvas, r.filename);
   setTicker('Exported image — '+name+' (landscape PNG)','ok');
 }
 
@@ -1156,7 +1155,7 @@ function renderSections(tt){
   for(const g of groups){
     const secs=SECTIONS.filter(s=>s.stream===g.key).filter(s=>f==='all'||f===g.key||f===s.id);
     if(!secs.length)continue;
-    html+='<section class="stream '+g.key+'"><div class="stream-head"><span class="swatch"></span><h2>'+g.name+'</h2><span class="cnt">'+secs.length+' section'+(secs.length>1?'s':'')+' · '+secs.length*25+' periods/wk</span><button class="card-csv" data-stream="'+g.key+'" title="Download this stream as CSV">⇩ CSV</button><button class="card-pdf" data-pdf-stream="'+g.key+'" title="Print this stream / save as PDF">PDF</button></div><div class="sec-grid'+(shown.length===1?' solo':'')+'">';
+    html+='<section class="stream '+g.key+'"><div class="stream-head"><span class="swatch"></span><h2>'+g.name+'</h2><span class="cnt">'+secs.length+' section'+(secs.length>1?'s':'')+' · '+secs.length*25+' periods/wk</span><button class="card-csv" data-stream="'+g.key+'" title="Download this stream as CSV">⇩ CSV</button><button class="card-pdf" data-pdf-stream="'+g.key+'" title="Print this stream / save as PDF">PDF</button><button class="card-img" data-img-stream="'+g.key+'" title="Download this department section images (ZIP)">ZIP</button></div><div class="sec-grid'+(shown.length===1?' solo':'')+'">';
     for(const sec of secs){html+=sectionCard(sec,tt[sec.id],idx++);}
     html+='</div></section>';
   }
@@ -1236,6 +1235,8 @@ function renderChrome(){
   }
   btnPrev.disabled=btnNext.disabled=!list.length;
   $('btnComboCsv').disabled=!list.length;
+  $('btnAllImages').disabled=!list.length;
+  $('btnFacultyImages').disabled=!list.length;
   if(!state.cpsatBusy){
     const _signedIn=SB&&SB.loggedIn;btnCpsat.innerHTML='<span class="g">'+(_signedIn?'✦':'🔒')+'</span> Compute optimal (CP-SAT)'+(state.cpsatDone?' ✓':'');
     btnCpsat.disabled=!_signedIn;btnCpsat.title=_signedIn?'Call the CP-SAT backend for proven-optimal results':'Sign in to unlock CP-SAT & AI translation';if(!_signedIn&&!state.cpsatDone){setCpsatStatus('CP-SAT: 🔒 sign in to unlock CP-SAT & AI translation','warn');}
@@ -1480,6 +1481,8 @@ btnPrint.addEventListener('click',printCurrent);
 btnPrev.addEventListener('click',()=>stepSel(-1));
 btnNext.addEventListener('click',()=>stepSel(1));
 $('btnComboCsv').addEventListener('click',exportComboCSV);
+$('btnAllImages').addEventListener('click',exportAllImages);
+$('btnFacultyImages').addEventListener('click',exportAllFacultyImages);
 selEl.addEventListener('change',()=>selectCombo(Number(selEl.value)));
 secFilterEl.addEventListener('change',e=>{
   state.sectionFilter=e.target.value;
@@ -1558,6 +1561,7 @@ mainEl.addEventListener('click',e=>{
   if(imgBtn){
     if(imgBtn.dataset.imgSec)exportSectionImage(imgBtn.dataset.imgSec);
     else if(imgBtn.dataset.imgTeacher)exportTeacherImage(imgBtn.dataset.imgTeacher);
+    else if(imgBtn.dataset.imgStream)exportStreamImages(imgBtn.dataset.imgStream);
     return;
   }
   const pdfBtn=e.target.closest('.card-pdf');
@@ -2088,6 +2092,101 @@ function applyTranslation(code){
   delete pendingTranslations[code];
   setTicker('Applied constraints for '+(IMPCC_SOLVER.TEACHER_FULL[code]||code)+' — will affect the next generation','ok');
   renderMain();
+}
+
+/* ---------- PNG → ZIP exports (department / whole platform / all faculty) ---------- */
+const _CRC_TABLE=(function(){const t=new Uint32Array(256);for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=(c&1)?(0xEDB88320^(c>>>1)):(c>>>1);t[n]=c;}return t;})();
+function _crc32(u8){let c=0xFFFFFFFF;for(let i=0;i<u8.length;i++)c=_CRC_TABLE[(c^u8[i])&0xFF]^(c>>>8);return (c^0xFFFFFFFF)>>>0;}
+function buildZip(files){
+  const enc=new TextEncoder();const parts=[];const central=[];let offset=0;
+  for(const f of files){
+    const nm=enc.encode(f.name);const crc=_crc32(f.data);
+    const lh=new DataView(new ArrayBuffer(30));
+    lh.setUint32(0,0x04034b50,true);lh.setUint16(4,20,true);lh.setUint16(6,0x0800,true);
+    lh.setUint16(8,0,true);lh.setUint16(10,0,true);lh.setUint16(12,0,true);
+    lh.setUint32(14,crc,true);lh.setUint32(18,f.data.length,true);lh.setUint32(22,f.data.length,true);
+    lh.setUint16(26,nm.length,true);lh.setUint16(28,0,true);
+    parts.push(new Uint8Array(lh.buffer),nm,f.data);
+    const ch=new DataView(new ArrayBuffer(46));
+    ch.setUint32(0,0x02014b50,true);ch.setUint16(4,20,true);ch.setUint16(6,20,true);
+    ch.setUint16(8,0x0800,true);ch.setUint16(10,0,true);ch.setUint16(12,0,true);ch.setUint16(14,0,true);
+    ch.setUint32(16,crc,true);ch.setUint32(20,f.data.length,true);ch.setUint32(24,f.data.length,true);
+    ch.setUint16(28,nm.length,true);ch.setUint32(42,offset,true);
+    central.push(new Uint8Array(ch.buffer),nm);
+    offset+=30+nm.length+f.data.length;
+  }
+  let cdSize=0;for(const c of central)cdSize+=c.length;
+  const eocd=new DataView(new ArrayBuffer(22));
+  eocd.setUint32(0,0x06054b50,true);
+  eocd.setUint16(8,files.length,true);eocd.setUint16(10,files.length,true);
+  eocd.setUint32(12,cdSize,true);eocd.setUint32(16,offset,true);
+  const out=new Uint8Array(offset+cdSize+22);let p=0;
+  for(const part of parts){out.set(part,p);p+=part.length;}
+  for(const c of central){out.set(c,p);p+=c.length;}
+  out.set(new Uint8Array(eocd.buffer),p);
+  return out;
+}
+function downloadZip(files,zipName){
+  const blob=new Blob([buildZip(files)],{type:'application/zip'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');a.href=url;a.download=zipName;
+  document.body.appendChild(a);a.click();a.remove();
+  setTimeout(function(){URL.revokeObjectURL(url);},800);
+}
+function downloadCanvas(canvas,filename){
+  return new Promise(function(resolve,reject){
+    canvas.toBlob(function(blob){
+      if(!blob){reject(new Error('canvas export failed'));return;}
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement('a');a.href=url;a.download=filename;
+      document.body.appendChild(a);a.click();a.remove();
+      setTimeout(function(){URL.revokeObjectURL(url);},800);
+      resolve();
+    },'image/png');
+  });
+}
+async function canvasToU8(canvas){
+  const blob=await new Promise(function(resolve,reject){
+    canvas.toBlob(function(b){b?resolve(b):reject(new Error('no blob'));},'image/png');
+  });
+  const buf=await blob.arrayBuffer();
+  return new Uint8Array(buf);
+}
+async function exportStreamImages(stream){
+  const c=getSel();if(!c)return;
+  const secs=SECTIONS.filter(function(x){return x.stream===stream;});
+  setTicker('Rendering '+secs.length+' section images…','run',true);
+  const files=[];
+  for(const sec of secs){
+    const r=await drawSectionCanvas(sec.id);
+    if(r)files.push({name:r.filename,data:await canvasToU8(r.canvas)});
+  }
+  downloadZip(files,'IMPCC_'+(stream==='icom'?'ICom':'ICS')+'_schedules.zip');
+  setTicker('Exported '+files.length+' section images (ZIP)','ok');
+}
+async function exportAllImages(){
+  const c=getSel();if(!c)return;
+  setTicker('Rendering all section images…','run',true);
+  const files=[];
+  for(const sec of SECTIONS){
+    const r=await drawSectionCanvas(sec.id);
+    if(r){const folder=sec.stream==='icom'?'I-Com':'ICS';files.push({name:folder+'/'+r.filename,data:await canvasToU8(r.canvas)});}
+  }
+  downloadZip(files,'IMPCC_all-sections_schedules.zip');
+  setTicker('Exported '+files.length+' section images in department folders (ZIP)','ok');
+}
+async function exportAllFacultyImages(){
+  const c=getSel();if(!c)return;
+  const names=teacherOrder();
+  if(!names.length){setTicker('No faculty to export','err');return;}
+  setTicker('Rendering '+names.length+' faculty images…','run',true);
+  const files=[];
+  for(const name of names){
+    const r=await drawTeacherCanvas(name);
+    if(r)files.push({name:r.filename,data:await canvasToU8(r.canvas)});
+  }
+  downloadZip(files,'IMPCC_faculty_schedules.zip');
+  setTicker('Exported '+files.length+' faculty images (ZIP)','ok');
 }
 
 /* ---------- boot: restore saved results (no auto-generation) ---------- */
