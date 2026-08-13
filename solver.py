@@ -6,6 +6,7 @@ validator + scorer. Randomized for variety.
 """
 import random
 import itertools
+import copy
 from collections import defaultdict
 
 DAYS = ["MON", "TUE", "WED", "THU", "FRI"]
@@ -173,11 +174,41 @@ def _slotset(a):
 def _dayset(a):
     return {DAY_OF[x] for x in (a or [])}
 
-UNITS = []
-for sec in SECTIONS:
-    for subj, teacher, count in sec["subs"]:
-        UNITS.append({"sec": sec["key"], "subject": subj,
-                      "teacher": teacher, "count": count})
+DEFAULT_SECTIONS = copy.deepcopy(SECTIONS)
+
+def build_units(secs):
+    out = []
+    for sec in secs:
+        for subj, teacher, count in sec["subs"]:
+            out.append({"sec": sec["key"], "subject": subj,
+                        "teacher": teacher, "count": count})
+    return out
+
+UNITS = build_units(SECTIONS)
+
+def normalize_sections(alloc=None):
+    """External allocation form -> solver sections (teacher names -> codes)."""
+    if not alloc:
+        return copy.deepcopy(DEFAULT_SECTIONS)
+    out = []
+    for sec in DEFAULT_SECTIONS:
+        a = alloc.get(sec["key"]) if isinstance(alloc, dict) else None
+        if a and isinstance(a.get("subjects"), list):
+            subs = []
+            for e in a["subjects"]:
+                t = e.get("teacher") or "Staff"
+                code = "PARALLEL" if ("/" in str(t)) else NAME_TO_CODE.get(t, t)
+                subs.append([e.get("subject"), code, max(1, min(5, int(e.get("periods") or 1)))])
+        else:
+            subs = copy.deepcopy(sec["subs"])
+        out.append({"key": sec["key"], "subs": subs})
+    return out
+
+def set_active_sections(alloc=None):
+    global SECTIONS, UNITS
+    SECTIONS = normalize_sections(alloc)
+    UNITS = build_units(SECTIONS)
+
 SEC_MAP = {s["key"]: s for s in SECTIONS}
 
 # ------------------------------------------------------------------

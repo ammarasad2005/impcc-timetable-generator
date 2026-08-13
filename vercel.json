@@ -2,7 +2,7 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
     "api/index.py": {
-      "includeFiles": "{api/**,cp_solver.py,solver.py,llm_translate.py,index.html,solver.js}",
+      "includeFiles": "{api/**,cp_solver.py,solver.py,llm_translate.py,index.html,solver.js,supabase.js}",
       "maxDuration": 300
     }
   }

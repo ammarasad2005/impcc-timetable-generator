@@ -1006,5 +1006,160 @@ rep("/* ---------- boot: restore saved results (no auto-generation) ---------- *
     constraints_js + "/* ---------- boot: restore saved results (no auto-generation) ---------- */")
 
 
+# ---- 19) Supabase: auth, cloud-synced allocation + constraints ----------
+# (a) load supabase client after solver
+rep('<script src="solver.js"></script>',
+    '<script src="solver.js"></script>\n<script src="supabase.js"></script>')
+
+# (b) masthead auth + modal (before the single literal </header>)
+rep('</header>',
+    '  <div class="mast-auth" id="authUi"></div>\n</header>\n<div class="auth-modal" id="authModal">\n  <div class="auth-box">\n    <h3>Sign in to IMPCC Timetable</h3>\n    <p>Your allocation and constraints are synced across devices.</p>\n    <input id="authEmail" type="email" placeholder="Email">\n    <input id="authPass" type="password" placeholder="Password">\n    <div class="auth-row">\n      <button class="btn primary" id="authSignInBtn">Sign in</button>\n      <button class="btn" id="authSignUpBtn">Create account</button>\n      <button class="btn" id="authClose">Cancel</button>\n    </div>\n    <div class="cons-status" id="authMsg"></div>\n  </div>\n</div>')
+
+# (c) CSS for auth + allocation
+rep('.cons-status{font-family:var(--mono);font-size:10.5px;color:var(--ink2);min-height:14px}',
+    '.cons-status{font-family:var(--mono);font-size:10.5px;color:var(--ink2);min-height:14px}\n.mast-auth{margin-left:auto;display:flex;align-items:center;gap:8px}\n.mast-auth .auth-name{font-family:var(--mono);font-size:11px;color:var(--green-deep)}\n.auth-modal{position:fixed;inset:0;background:rgba(14,59,41,.45);z-index:200;display:none;align-items:center;justify-content:center}\n.auth-box{background:var(--surface);border-radius:14px;padding:22px 26px;width:min(420px,92vw);box-shadow:0 24px 60px rgba(0,0,0,.3)}\n.auth-box h3{font-family:var(--disp);font-weight:900;font-size:20px;color:var(--green-deep);margin:0 0 4px}\n.auth-box p{font-size:12.5px;color:var(--ink2);margin:0 0 14px}\n.auth-box input{display:block;width:100%;margin-bottom:10px;padding:9px 11px;border:1px solid var(--line2);border-radius:8px;font-size:14px}\n.auth-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:4px}\n.auth-row .btn{color:var(--ink);background:var(--surface2);border-color:var(--line2)}\n.auth-row .btn.primary{color:#fff;background:var(--green)}\n.alloc-rows{display:flex;flex-direction:column;gap:5px}\n.alloc-row{display:grid;grid-template-columns:1fr 1.3fr 64px 28px;gap:5px;align-items:center}\n.alloc-row input,.alloc-row select{font-size:12px;padding:5px 7px;border:1px solid var(--line2);border-radius:6px;background:#fff;color:var(--ink)}\n.alloc-row input.alloc-per{width:100%}')
+
+# (d) Allocation tab
+rep('<button id="viewConstraints">⚙ Constraints</button>',
+    '<button id="viewConstraints">⚙ Constraints</button>\n      <button id="viewAllocation">🗂 Allocation</button>')
+rep("$('viewConstraints').addEventListener('click',()=>setView('constraints'));",
+    "$('viewConstraints').addEventListener('click',()=>setView('constraints'));\n$('viewAllocation').addEventListener('click',()=>setView('allocation'));")
+rep("  $('viewConstraints').classList.toggle('on',v==='constraints');",
+    "  $('viewConstraints').classList.toggle('on',v==='constraints');\n  $('viewAllocation').classList.toggle('on',v==='allocation');")
+rep("  if(state.view==='constraints'){renderConstraints();return;}",
+    "  if(state.view==='constraints'){renderConstraints();return;}\n  if(state.view==='allocation'){renderAllocation();return;}")
+
+# (e) generation + CP-SAT use live allocation/constraints
+rep("const res=IMPCC_SOLVER.generate({maxCount:0,timeMs:320,seed:(Math.random()*2147483647)|0,constraints:currentConstraints()});",
+    "const res=IMPCC_SOLVER.generate({maxCount:0,timeMs:320,seed:(Math.random()*2147483647)|0,constraints:currentConstraints(),sections:currentAllocation()});")
+rep("body:JSON.stringify({time_limit:120,n_seeds:1,max_solutions:0})",
+    "body:JSON.stringify({time_limit:120,n_seeds:1,max_solutions:0,constraints:currentConstraints(),sections:currentAllocation()})")
+
+# (f) cloud sync: persist constraints/allocation to Supabase when signed in
+rep("function saveConstraints(){\n  try{\n    if(state.constraints)localStorage.setItem(CONST_KEY,JSON.stringify(state.constraints));\n    else localStorage.removeItem(CONST_KEY);\n  }catch(e){}\n}",
+    "function saveConstraints(){\n  try{\n    if(state.constraints)localStorage.setItem(CONST_KEY,JSON.stringify(state.constraints));\n    else localStorage.removeItem(CONST_KEY);\n  }catch(e){}\n  pushToCloud();\n}")
+
+# (g) boot: load allocation + auth + cloud refresh
+rep("/* ---------- boot: restore saved results (no auto-generation) ---------- */\nloadConstraints();\nconst restored=restore();",
+    "/* ---------- boot: restore saved results (no auto-generation) ---------- */\nloadConstraints();\nloadAllocation();\nrenderAuth();\nconst restored=restore();\nif(SB&&SB.loggedIn){syncFromCloud().then(()=>{renderMain();renderChrome();});}")
+
+# (h) the auth + cloud + allocation module (insert before the constraints module)
+auth_module = """/* ---------- auth + cloud sync + allocation page ---------- */
+const SB = (typeof IMPCC_SUPABASE!=='undefined') ? IMPCC_SUPABASE : null;
+function rosterNames(){
+  const names=[];
+  for(const code in IMPCC_SOLVER.TEACHER_FULL) names.push(IMPCC_SOLVER.TEACHER_FULL[code]);
+  return Array.from(new Set(names)).sort();
+}
+function defaultAllocation(){
+  const a={};
+  for(const sec of IMPCC_SOLVER.DEFAULT_SECTIONS){
+    a[sec.key]={subjects:sec.subs.map(t=>({subject:t[0],teacher:IMPCC_SOLVER.TEACHER_FULL[t[1]],periods:t[2]}))};
+  }
+  return a;
+}
+function loadAllocation(){
+  try{const raw=localStorage.getItem('impcc-allocation-v1');if(raw){state.allocation=JSON.parse(raw);return true;}}catch(e){}
+  state.allocation=null;return false;
+}
+function saveAllocationLocal(){
+  try{if(state.allocation)localStorage.setItem('impcc-allocation-v1',JSON.stringify(state.allocation));else localStorage.removeItem('impcc-allocation-v1');}catch(e){}
+}
+function currentAllocation(){return state.allocation||undefined;}
+function sectionTotal(subs){return (subs||[]).reduce((n,e)=>n+(e.periods|0),0);}
+function getWorkingAllocation(){if(!state.allocation)state.allocation=defaultAllocation();return state.allocation;}
+
+function renderAuth(){
+  const el=document.getElementById('authUi');if(!el)return;
+  if(SB&&SB.loggedIn){
+    el.innerHTML='<span class="auth-name">'+esc(SB.user.email)+'</span><button class="mini-export" id="authSignOut">Sign out</button>';
+    document.getElementById('authSignOut').addEventListener('click',()=>{
+      SB.logout().then(()=>{renderAuth();setTicker('Signed out — using local data','ok');});
+    });
+  }else{
+    el.innerHTML='<button class="mini-export" id="authSignIn">Sign in</button>';
+    document.getElementById('authSignIn').addEventListener('click',()=>{document.getElementById('authModal').style.display='flex';});
+  }
+}
+function setAuthMsg(m){const el=document.getElementById('authMsg');if(el)el.textContent=m;}
+function authSubmit(mode){
+  const email=document.getElementById('authEmail').value.trim();
+  const pass=document.getElementById('authPass').value;
+  if(!email||!pass){setAuthMsg('Enter email and password.');return;}
+  if(!SB){setAuthMsg('Supabase unavailable in this environment.');return;}
+  setAuthMsg(mode==='in'?'Signing in…':'Creating account…');
+  const p=mode==='in'?SB.login(email,pass):SB.signup(email,pass);
+  p.then(async()=>{
+    setAuthMsg('Signed in — loading your workspace…');
+    await syncFromCloud();
+    document.getElementById('authModal').style.display='none';
+    renderAuth();renderMain();renderChrome();
+    setTicker('Signed in as '+SB.user.email+' — workspace synced','ok');
+  }).catch(err=>setAuthMsg('Error: '+err.message));
+}
+async function syncFromCloud(){
+  if(!SB||!SB.loggedIn)return;
+  try{
+    const ws=await SB.loadWorkspace();
+    if(ws){
+      if(ws.constraints&&Object.keys(ws.constraints).length){state.constraints=ws.constraints;saveConstraints();}
+      if(ws.allocation&&Object.keys(ws.allocation).length){state.allocation=ws.allocation;saveAllocationLocal();}
+    }
+  }catch(e){setTicker('Cloud load failed: '+e.message,'err');}
+}
+function pushToCloud(){
+  if(!SB||!SB.loggedIn)return;
+  SB.saveWorkspace(state.allocation||defaultAllocation(),state.constraints||{})
+    .then(()=>setTicker('Saved to Supabase ✓','ok'))
+    .catch(err=>setTicker('Cloud sync failed: '+err.message,'err'));
+}
+function saveAllocation(){
+  const a=getWorkingAllocation();
+  const bad=[];
+  for(const sec of SECTIONS){const t=sectionTotal(a[sec.id]?a[sec.id].subjects:[]);if(t!==25)bad.push(sec.id+'='+t);}
+  saveAllocationLocal();pushToCloud();
+  setTicker(bad.length?('Saved, but '+bad.join(', ')+' not 25 periods'):'Allocation saved',bad.length?'':'ok');
+}
+function renderAllocation(){
+  const a=getWorkingAllocation();const roster=rosterNames();
+  let h='<div class="cons-note"><b>Course allocation is data.</b> Set the teacher and weekly periods for each subject. Every section must total <b>25 periods</b>. '+(SB&&SB.loggedIn?'Signed in — saving syncs to Supabase across devices.':'Not signed in — saved locally (sign in to sync).')+'<span class="cons-actions"><button class="mini-export" id="allocSave">💾 Save allocation</button></span></div>';
+  h+='<div class="cons-grid">';
+  for(const sec of SECTIONS){
+    const key=sec.id;const subs=(a[key]&&a[key].subjects)||[];const total=sectionTotal(subs);
+    h+='<article class="cons-card'+(total!==25?' edited':'')+'"><header><h4>'+esc(sec.label)+'</h4><span class="stag" data-total="'+key+'" style="'+(total===25?'':'color:var(--red);border-color:var(--red)')+'">'+total+'/25</span></header><div class="alloc-rows">';
+    subs.forEach((e,idx)=>{
+      h+='<div class="alloc-row">'+
+        '<input class="alloc-subj" data-k="'+key+'" data-i="'+idx+'" value="'+esc(e.subject)+'">'+
+        '<select class="alloc-tchr" data-k="'+key+'" data-i="'+idx+'">'+roster.map(n=>'<option'+(n===e.teacher?' selected':'')+'>'+esc(n)+'</option>').join('')+'</select>'+
+        '<input class="alloc-per" type="number" min="1" max="5" data-k="'+key+'" data-i="'+idx+'" value="'+(e.periods|0)+'">'+
+        '<button class="card-csv" data-alloc-del="'+key+'" data-i="'+idx+'" title="Remove subject">✕</button>'+
+      '</div>';
+    });
+    h+='</div><button class="mini-export" data-alloc-add="'+key+'">＋ Add subject</button></article>';
+  }
+  h+='</div>';
+  mainEl.innerHTML=h;
+  document.getElementById('allocSave').addEventListener('click',saveAllocation);
+}
+function allocInputHandler(el){
+  const key=el.dataset.k,i=+el.dataset.i;const a=getWorkingAllocation();
+  a[key]=a[key]||{subjects:[]};
+  if(!a[key].subjects[i])a[key].subjects[i]={subject:'',teacher:rosterNames()[0],periods:1};
+  if(el.classList.contains('alloc-subj'))a[key].subjects[i].subject=el.value;
+  else if(el.classList.contains('alloc-tchr'))a[key].subjects[i].teacher=el.value;
+  else if(el.classList.contains('alloc-per'))a[key].subjects[i].periods=Math.max(1,Math.min(5,+el.value||1));
+  const b=document.querySelector('.stag[data-total="'+key+'"]');
+  if(b){const t=sectionTotal(a[key].subjects);b.textContent=t+'/25';b.style.cssText=t===25?'':'color:var(--red);border-color:var(--red)';}
+}
+
+"""
+rep("/* ---------- constraints page (data-driven faculty constraints + LLM) ---------- */",
+    auth_module + "/* ---------- constraints page (data-driven faculty constraints + LLM) ---------- */")
+
+# (i) delegation for allocation inputs + auth modal buttons (append inside mainEl click handler region — add new listeners near others)
+rep("$('spPrint').addEventListener('click',()=>{if(state.spot)exportTeacherImage(state.spot);});",
+    "$('spPrint').addEventListener('click',()=>{if(state.spot)exportTeacherImage(state.spot);});\nmainEl.addEventListener('input',e=>{if(e.target.classList.contains('alloc-subj')||e.target.classList.contains('alloc-tchr')||e.target.classList.contains('alloc-per'))allocInputHandler(e.target);});\nmainEl.addEventListener('change',e=>{if(e.target.classList.contains('alloc-tchr'))allocInputHandler(e.target);});\nmainEl.addEventListener('click',e=>{\n  const del=e.target.closest('[data-alloc-del]');\n  if(del){const a=getWorkingAllocation();a[del.dataset.allocDel].subjects.splice(+del.dataset.i,1);renderAllocation();return;}\n  const add=e.target.closest('[data-alloc-add]');\n  if(add){const a=getWorkingAllocation();a[add.dataset.allocAdd]=a[add.dataset.allocAdd]||{subjects:[]};a[add.dataset.allocAdd].subjects.push({subject:'New Subject',teacher:rosterNames()[0],periods:1});renderAllocation();return;}\n});\nconst _ab1=document.getElementById('authSignInBtn');if(_ab1)_ab1.addEventListener('click',()=>authSubmit('in'));\nconst _ab2=document.getElementById('authSignUpBtn');if(_ab2)_ab2.addEventListener('click',()=>authSubmit('up'));\nconst _ab3=document.getElementById('authClose');if(_ab3)_ab3.addEventListener('click',()=>{document.getElementById('authModal').style.display='none';});")
+
+
 io.open(DST, "w", encoding="utf-8").write(src)
 print("OK → wrote", DST, "(", len(src), "bytes )")

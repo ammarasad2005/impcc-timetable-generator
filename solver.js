@@ -19,7 +19,7 @@
   const SLOTS = ["P1", "P2", "P3", "P4", "P5"];
 
   // ---------------------------------------------------------------- data
-  const SECTIONS = [
+  let SECTIONS = [
     { key: "I.COM-I-A", subs: [
       ["English", "UmairAbid", 4], ["Urdu", "Basit", 4],
       ["Tarjama-tul-Quran", "V1", 2], ["Islamic Education", "V2", 2],
@@ -88,6 +88,9 @@
       ["Computer Science", "Faisal", 4], ["Mathematics", "Najam", 5],
       ["Economics/Statistics", "PARALLEL", 4]] }
   ];
+
+  // The default course allocation (deep copy). `generate({sections})` can override it.
+  const DEFAULT_SECTIONS = JSON.parse(JSON.stringify(SECTIONS));
 
   const TEACHER_FULL = {
     Sikhani: "Prof. M. Waseem Sikhani",
@@ -190,11 +193,39 @@
     return out;
   }
 
-  const UNITS = [];
-  for (const sec of SECTIONS) {
-    for (const [subject, teacher, count] of sec.subs) {
-      UNITS.push({ sec: sec.key, subject, teacher, count });
+  let UNITS = [];
+  function buildUnits(secs) {
+    const out = [];
+    for (const sec of secs) {
+      for (const [subject, teacher, count] of sec.subs) {
+        out.push({ sec: sec.key, subject, teacher, count });
+      }
     }
+    return out;
+  }
+  UNITS = buildUnits(SECTIONS);
+
+  // Convert the external allocation form (full teacher names) into solver sections.
+  // External form: { "I.COM-I-A": { "subjects": [ {subject, teacher, periods}, ... ] }, ... }
+  function normalizeSections(alloc) {
+    if (!alloc) return JSON.parse(JSON.stringify(DEFAULT_SECTIONS));
+    const out = [];
+    for (const sec of DEFAULT_SECTIONS) {
+      const a = alloc[sec.key];
+      let subs;
+      if (a && Array.isArray(a.subjects)) {
+        subs = a.subjects.map(e => {
+          const code = (typeof e.teacher === "string" && e.teacher.indexOf("/") >= 0)
+            ? "PARALLEL"
+            : (NAME_TO_CODE[e.teacher] || e.teacher || "Staff");
+          return [e.subject, code, Math.max(1, Math.min(5, e.periods | 0))];
+        });
+      } else {
+        subs = JSON.parse(JSON.stringify(sec.subs));
+      }
+      out.push({ key: sec.key, subs });
+    }
+    return out;
   }
 
   // ------------------------------------------------------------- helpers
@@ -887,7 +918,7 @@
   }
 
   // ------------------------------------------------------------ generate
-  let _RKey = null, _STATIC = null;
+  let _Key = null, _STATIC = null;
   function generate(opts) {
     // No hard count cutoff by default: keep every distinct valid solution
     // until the time budget is exhausted. Pass maxCount>0 only to cap explicitly.
@@ -895,8 +926,15 @@
     const timeMs = (opts && opts.timeMs) || 15000;
     const seed = (opts && opts.seed) || (Date.now() % 2147483647);
     const R = resolveConstraints(opts && opts.constraints);
-    const rkey = JSON.stringify(R);
-    let STATIC = (_RKey === rkey) ? _STATIC : (_RKey = rkey, _STATIC = buildStatic(R));
+    const SECTIONS2 = normalizeSections(opts && opts.sections);
+    const key = JSON.stringify(SECTIONS2) + "|" + JSON.stringify(R);
+    if (_Key !== key) {
+      SECTIONS = SECTIONS2;
+      UNITS = buildUnits(SECTIONS);
+      _Key = key;
+      _STATIC = buildStatic(R);
+    }
+    let STATIC = _STATIC;
     const rng = makeRng(seed);
     const seen = {};
     const solutions = [];
@@ -930,6 +968,7 @@
   return {
     DAYS, SLOTS, SECTIONS, TEACHER_FULL, RULES, UNITS,
     SLOT_OF, DAY_OF, DEFAULT_CONSTRAINTS, NAME_TO_CODE, resolveConstraints,
+    DEFAULT_SECTIONS, normalizeSections, buildUnits,
     generate, validate, score, canonical, toTimetable
   };
 });

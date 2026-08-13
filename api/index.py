@@ -75,6 +75,15 @@ def solver_js():
     return JSONResponse({"detail": "solver.js not found"}, status_code=404)
 
 
+@app.get("/supabase.js", include_in_schema=False)
+def supabase_js():
+    root = _find_root()
+    f = root / "supabase.js"
+    if f.exists():
+        return FileResponse(f, media_type="application/javascript")
+    return JSONResponse({"detail": "supabase.js not found"}, status_code=404)
+
+
 class GenerateRequest(BaseModel):
     # Vercel Hobby gives 1 vCPU + a 300s cap, so defaults are tuned for that:
     # 20s reliably returns the best-known 560 without needing a 45s prove-optimal run.
@@ -86,6 +95,8 @@ class GenerateRequest(BaseModel):
                                description="cap on returned solutions (0 = no cap)")
     constraints: dict = Field(default=None,
                               description="optional faculty-constraint overrides (see constraints_schema.md)")
+    sections: dict = Field(default=None,
+                           description="optional course-allocation overrides (section -> subjects)")
 
 
 class TranslateRequest(BaseModel):
@@ -136,6 +147,7 @@ def generate(req: GenerateRequest):
         time_per_seed=req.time_limit,
         max_solutions=req.max_solutions,
         constraints=req.constraints,
+        sections=req.sections,
     )
     solutions = []
     for sc, g in ranked:

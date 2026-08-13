@@ -161,3 +161,24 @@ Edited constraints **immediately** affect the in-browser solver *and* the CP-SAT
 | `LLM_MODEL` *(optional)* | `gpt-4o-mini` |
 
 The key stays **server-side** — the browser only calls `POST /translate`.
+
+---
+
+## Supabase: auth + cloud-synced allocation & constraints
+
+A new **🗂 Allocation** page lets management edit the course allocation (teacher + weekly
+periods per subject, 25 periods/section required). Allocation **and** constraints are
+stored in **Supabase** per signed-in account, so changing devices keeps everything in sync.
+
+- **Project:** `https://xdckubhqhglmorwmxtfs.supabase.co` (region ap-south-1) — table
+  `public.workspace(user_id PK→auth.users, allocation jsonb, constraints jsonb, updated_at)`
+  with RLS policies so each account only sees its own row.
+- **Sign in / Create account** (top-right) uses Supabase Auth (email/password, auto-confirm on).
+- When signed in: **Save** (allocation) and every constraint **Apply** upsert to Supabase;
+  signing in on any device pulls the shared allocation + constraints back down.
+- When signed out: everything still works, saved to localStorage only.
+- Both solvers accept the live data: the in-browser generator and the CP-SAT backend
+  (`POST /generate` with `sections` + `constraints` payloads).
+- `supabase.js` is a dependency-free Supabase client (GoTrue + PostgREST via fetch) — the
+  anon key is embedded (public by design; RLS protects data). The service-role key and the
+  dashboard PAT are **not** committed.

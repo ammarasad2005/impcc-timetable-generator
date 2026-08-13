@@ -15,6 +15,7 @@ import os
 from collections import defaultdict
 from ortools.sat.python import cp_model
 
+import solver as _solver
 from solver import UNITS, SECTIONS, TEACHER_FULL, DAYS, SLOTS
 from solver import SLOT_OF, DAY_OF, resolve_constraints
 from solver import validate, score, canonical
@@ -277,12 +278,17 @@ def generate_many(n_seeds=12, time_per_seed=15, verbose=True):
     return ranked
 
 
-def generate_ranked(n_seeds=2, time_per_seed=45, max_solutions=0, constraints=None):
+def generate_ranked(n_seeds=2, time_per_seed=45, max_solutions=0, constraints=None, sections=None):
     """API entry point: run CP-SAT over several seeds, return
     (ranked list of (score, grids), any_optimal bool).
-    `constraints` (optional) overrides faculty constraints (see constraints_schema.md)."""
+    `constraints` / `sections` (optional) override faculty constraints and the
+    course allocation (see constraints_schema.md)."""
+    global UNITS, SECTIONS
     from solver import score as _score, canonical as _canonical, validate as _validate
     R = resolve_constraints(constraints)
+    _solver.set_active_sections(sections)
+    SECTIONS = _solver.SECTIONS
+    UNITS = _solver.UNITS
     seen = {}
     any_optimal = False
     for seed in range(n_seeds):

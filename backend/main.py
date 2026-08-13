@@ -46,6 +46,8 @@ class GenerateRequest(BaseModel):
                                description="cap on returned solutions (0 = no cap)")
     constraints: dict = Field(default=None,
                               description="optional faculty-constraint overrides (see constraints_schema.md)")
+    sections: dict = Field(default=None,
+                           description="optional course-allocation overrides (section -> subjects)")
 
 
 class TranslateRequest(BaseModel):
@@ -94,6 +96,7 @@ def generate(req: GenerateRequest):
         time_per_seed=req.time_limit,
         max_solutions=req.max_solutions,
         constraints=req.constraints,
+        sections=req.sections,
     )
     solutions = []
     for sc, g in ranked:
