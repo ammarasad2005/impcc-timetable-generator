@@ -81,6 +81,24 @@
         headers: Object.assign({}, this._headers(), { "Prefer": "resolution=merge-duplicates,return=representation" }),
         body: JSON.stringify(body)
       });
+    },
+
+    // Global published state (allocation/constraints/faculty) — readable by EVERYONE,
+    // writable only by signed-in users (RLS). Generated timetable combos are NOT stored.
+    async loadPublished() {
+      const rows = await this._req("/rest/v1/published?id=eq.1&select=allocation,constraints,faculty,updated_at", {
+        method: "GET", headers: this._headers()
+      });
+      return (Array.isArray(rows) && rows.length) ? rows[0] : null;
+    },
+
+    async savePublished(allocation, constraints, faculty) {
+      const body = { id: 1, allocation: allocation || {}, constraints: constraints || {}, faculty: faculty || [], updated_at: new Date().toISOString() };
+      return this._req("/rest/v1/published?on_conflict=id", {
+        method: "POST",
+        headers: Object.assign({}, this._headers(), { "Prefer": "resolution=merge-duplicates,return=representation" }),
+        body: JSON.stringify(body)
+      });
     }
   };
 

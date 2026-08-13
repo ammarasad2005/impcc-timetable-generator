@@ -203,3 +203,9 @@ consistent as faculty come and go. The roster syncs to Supabase (per signed-in a
 stored in `workspace.faculty`) and falls back to localStorage. Teachers who aren't in the
 built-in list still render correctly everywhere — the solver treats their name as the
 identity, and every timetable/faculty view falls back to the raw name.
+
+> **Shared (published) data:** allocation, constraints and the faculty directory are a
+> **global** state — the signed-in admin's saves are written to a public-read `published`
+> table, and **every visitor (signed in or not) loads them on page load**. Generated
+> timetable combinations are deliberately **not** shared (they stay per-device). Writes
+> remain admin-only via RLS (`anon` can SELECT only).

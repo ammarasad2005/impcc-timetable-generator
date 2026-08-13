@@ -1385,5 +1385,49 @@ rep("/* ---------- constraints page (data-driven faculty constraints + LLM) ----
     dir_js + "/* ---------- constraints page (data-driven faculty constraints + LLM) ---------- */")
 
 
+# ---- 24) global published data (all visitors see admin's allocation/constraints/faculty) ----
+# Boot: everyone (signed in or not) loads the published state; generated combos stay local.
+rep("if(SB&&SB.loggedIn){syncFromCloud().then(()=>{renderMain();renderChrome();});}",
+    "syncFromCloud().then(()=>{renderMain();renderChrome();});")
+
+# syncFromCloud: read the GLOBAL published row (works for everyone; no sign-in needed)
+rep("""async function syncFromCloud(){
+  if(!SB||!SB.loggedIn)return;
+  try{
+    const ws=await SB.loadWorkspace();
+    if(ws){
+      if(ws.constraints&&Object.keys(ws.constraints).length){state.constraints=ws.constraints;saveConstraints();}
+      if(ws.allocation&&Object.keys(ws.allocation).length){state.allocation=ws.allocation;saveAllocationLocal();}
+      if(ws.faculty&&ws.faculty.length){state.faculty=ws.faculty;saveFacultyLocal();}
+    }
+  }catch(e){setTicker('Cloud load failed: '+e.message,'err');}
+}""",
+    """async function syncFromCloud(){
+  if(!SB)return;
+  try{
+    const pub=await SB.loadPublished();
+    if(pub){
+      if(pub.allocation&&Object.keys(pub.allocation).length){state.allocation=pub.allocation;saveAllocationLocal();}
+      if(pub.constraints&&Object.keys(pub.constraints).length){state.constraints=pub.constraints;try{localStorage.setItem(CONST_KEY,JSON.stringify(state.constraints));}catch(e){}}
+      if(Array.isArray(pub.faculty)&&pub.faculty.length){state.faculty=pub.faculty;saveFacultyLocal();}
+    }
+  }catch(e){setTicker('Cloud load failed: '+e.message,'err');}
+}""")
+
+# pushToCloud: publish globally (still sign-in-gated on the write side)
+rep("""function pushToCloud(){
+  if(!SB||!SB.loggedIn)return;
+  SB.saveWorkspace(state.allocation||defaultAllocation(),state.constraints||{},getFaculty())
+    .then(()=>setTicker('Saved to Supabase ✓','ok'))
+    .catch(err=>setTicker('Cloud sync failed: '+err.message,'err'));
+}""",
+    """function pushToCloud(){
+  if(!SB||!SB.loggedIn)return;
+  SB.savePublished(state.allocation||defaultAllocation(),state.constraints||{},getFaculty())
+    .then(()=>setTicker('Published for all users ✓','ok'))
+    .catch(err=>setTicker('Cloud sync failed: '+err.message,'err'));
+}""")
+
+
 io.open(DST, "w", encoding="utf-8").write(src)
 print("OK → wrote", DST, "(", len(src), "bytes )")

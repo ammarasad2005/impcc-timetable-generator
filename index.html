@@ -1643,20 +1643,20 @@ function authSubmit(mode){
   }).catch(err=>setAuthMsg('Error: '+err.message));
 }
 async function syncFromCloud(){
-  if(!SB||!SB.loggedIn)return;
+  if(!SB)return;
   try{
-    const ws=await SB.loadWorkspace();
-    if(ws){
-      if(ws.constraints&&Object.keys(ws.constraints).length){state.constraints=ws.constraints;saveConstraints();}
-      if(ws.allocation&&Object.keys(ws.allocation).length){state.allocation=ws.allocation;saveAllocationLocal();}
-      if(ws.faculty&&ws.faculty.length){state.faculty=ws.faculty;saveFacultyLocal();}
+    const pub=await SB.loadPublished();
+    if(pub){
+      if(pub.allocation&&Object.keys(pub.allocation).length){state.allocation=pub.allocation;saveAllocationLocal();}
+      if(pub.constraints&&Object.keys(pub.constraints).length){state.constraints=pub.constraints;try{localStorage.setItem(CONST_KEY,JSON.stringify(state.constraints));}catch(e){}}
+      if(Array.isArray(pub.faculty)&&pub.faculty.length){state.faculty=pub.faculty;saveFacultyLocal();}
     }
   }catch(e){setTicker('Cloud load failed: '+e.message,'err');}
 }
 function pushToCloud(){
   if(!SB||!SB.loggedIn)return;
-  SB.saveWorkspace(state.allocation||defaultAllocation(),state.constraints||{},getFaculty())
-    .then(()=>setTicker('Saved to Supabase ✓','ok'))
+  SB.savePublished(state.allocation||defaultAllocation(),state.constraints||{},getFaculty())
+    .then(()=>setTicker('Published for all users ✓','ok'))
     .catch(err=>setTicker('Cloud sync failed: '+err.message,'err'));
 }
 function saveAllocation(){
@@ -1937,7 +1937,7 @@ loadAllocation();
 loadFaculty();
 renderAuth();
 const restored=restore();
-if(SB&&SB.loggedIn){syncFromCloud().then(()=>{renderMain();renderChrome();});}
+syncFromCloud().then(()=>{renderMain();renderChrome();});
 if(restored){
   const list=sortedList();
   if(state.selected===null)state.selected=list[0].id;
