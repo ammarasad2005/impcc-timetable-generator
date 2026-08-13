@@ -26,6 +26,11 @@
   const PERIODS = ["Period-1", "Period-2", "Period-3", "Break", "Period-4", "Period-5"];
   const EXTEND_MS = 15000;   // each "Generate more" adds this much time
 
+  // CP-SAT backend (optional). Set to your Cloud Run URL to enable the
+  // "Compute optimal" button, or inject window.IMPCC_API_URL at page load.
+  // Example: "https://impcc-cp-sat-xxxxxxxxxx-uc.a.run.app"
+  const API_URL = (typeof window.IMPCC_API_URL === "string" && window.IMPCC_API_URL) || "";
+
   function sectionTitle(k) {
     const p = k.split("-");
     return p[0] + "-" + p[1] + " (Section-" + p[2] + ")";
@@ -150,6 +155,46 @@
     });
   }
 
+  // ------------------------------------------------------------ CP-SAT backend
+  async function computeOptimal() {
+    if (!API_URL) return;
+    $("#optbtn").disabled = true;
+    $("#optbtn").textContent = "Solving (CP-SAT)…";
+    $("#optbadge").textContent = "running CP-SAT on the server…";
+    try {
+      const r = await fetch(API_URL + "/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ time_limit: 45, n_seeds: 2, max_solutions: 0 })
+      });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const data = await r.json();
+
+      // merge into the existing set (union, never drop), then re-rank
+      const seen = new Map();
+      for (const s of state.solutions) seen.set(JSON.stringify(s.timetable), s);
+      let added = 0;
+      for (const sol of data.solutions || []) {
+        const k = JSON.stringify(sol.timetable);
+        if (!seen.has(k)) { seen.set(k, sol); added++; }
+      }
+      state.solutions = Array.from(seen.values());
+      rankAll();
+      updateProgress(true);
+      populateSelector();
+      render(0);
+
+      $("#optbadge").textContent = data.optimal
+        ? "CP-SAT: proven optimal — best score " + data.best_score + " (" + (data.total_found || 0) + " solutions; +" + added + " merged)"
+        : "CP-SAT: best score " + data.best_score + " (" + (data.total_found || 0) + " solutions; +" + added + " merged)";
+    } catch (e) {
+      $("#optbadge").textContent = "CP-SAT backend unreachable (" + e.message + ") — using the in-browser solver only.";
+    } finally {
+      $("#optbtn").disabled = false;
+      $("#optbtn").textContent = "Compute optimal (CP-SAT)";
+    }
+  }
+
   // ------------------------------------------------------------ rendering
   function renderSections(sol) {
     const grid = $("#grid");
@@ -236,6 +281,11 @@
 
   // ------------------------------------------------------------ wiring
   $("#genbtn").addEventListener("click", startRun);
+  $("#optbtn").addEventListener("click", computeOptimal);
+  if (!API_URL) {
+    $("#optbtn").style.display = "none";
+    $("#optbadge").textContent = "CP-SAT backend not configured (set API_URL / window.IMPCC_API_URL to enable).";
+  }
   $("#combo").addEventListener("change", e => render(+e.target.value));
   $("#prevbtn").addEventListener("click", () => render(state.current - 1));
   $("#nextbtn").addEventListener("click", () => render(state.current + 1));

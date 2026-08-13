@@ -1,0 +1,4 @@
+# IMPCC timetable generator — backend dependencies
+fastapi>=0.110
+uvicorn[standard]>=0.29
+ortools>=9.10

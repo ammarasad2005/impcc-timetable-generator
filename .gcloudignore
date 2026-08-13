@@ -1,0 +1,16 @@
+.gcloudignore
+.git
+.gitignore
+__pycache__/
+*.pyc
+node_modules/
+.arena/
+timetables.xlsx
+solutions.json
+index.html
+app.js
+build_site.py
+test_solver.js
+analysis_notes.md
+compliance_report.md
+README.md

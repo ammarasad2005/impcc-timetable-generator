@@ -243,3 +243,45 @@ def generate_many(n_seeds=12, time_per_seed=15, verbose=True):
                   f"best_this={best} status={status}")
     ranked = sorted(seen.values(), key=lambda x: x[0])
     return ranked
+
+
+def generate_ranked(n_seeds=2, time_per_seed=45, max_solutions=0):
+    """API entry point: run CP-SAT over several seeds, return
+    (ranked list of (score, grids), any_optimal bool).
+    `max_solutions` caps the returned list (0 = no cap)."""
+    from solver import score as _score, canonical as _canonical, validate as _validate
+    seen = {}
+    any_optimal = False
+    for seed in range(n_seeds):
+        m, slot_of, piece_slots, piece_days, piece_keys = build()
+
+        class Collect(cp_model.CpSolverSolutionCallback):
+            def __init__(self):
+                super().__init__()
+                self.found = []
+            def on_solution_callback(self):
+                try:
+                    g = decode(self, slot_of, piece_slots, piece_days, piece_keys)
+                    if _validate(g)[0]:
+                        key = _canonical(g)
+                        sc = _score(g)
+                        self.found.append((sc, key, g))
+                except Exception:
+                    pass
+
+        cb = Collect()
+        solver = cp_model.CpSolver()
+        solver.parameters.random_seed = 1000 + seed
+        solver.parameters.max_time_in_seconds = time_per_seed
+        solver.parameters.num_search_workers = 8
+        status = solver.Solve(m, cb)
+        if status == cp_model.OPTIMAL:
+            any_optimal = True
+        for sc, key, g in cb.found:
+            if key not in seen:
+                seen[key] = (sc, g)
+
+    ranked = sorted(seen.values(), key=lambda x: x[0])
+    if max_solutions and max_solutions > 0:
+        ranked = ranked[:max_solutions]
+    return ranked, any_optimal

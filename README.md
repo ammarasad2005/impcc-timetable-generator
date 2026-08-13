@@ -71,7 +71,9 @@ python3 make_report.py        # compliance_report.md
 | `app.js` | Website UI (generation loop, views, print). |
 | `build_site.py` | Inlines `solver.js` + `app.js` into `index.html`. |
 | `solver.py` | Python data model + (early) constructive solver. |
-| `cp_solver.py` | **CP-SAT model** (OR-Tools) — the offline reference solver. |
+| `cp_solver.py` | **CP-SAT model** (OR-Tools) — the offline reference solver + `generate_ranked()` API entry point. |
+| `backend/` | **FastAPI service** wrapping `cp_solver.py` for Cloud Run (see `backend/README.md`). |
+| `Dockerfile`, `.dockerignore`, `.gcloudignore`, `deploy.sh` | Container + one-command Cloud Run deployment. |
 | `gen_all.py` | Runs CP-SAT over many seeds → `solutions.json`. |
 | `export_xlsx.py` | Builds `timetables.xlsx` in the college's template layout. |
 | `metrics.py`, `make_report.py` | Shuffle metrics + `compliance_report.md`. |
@@ -104,6 +106,22 @@ Prof. Tanveer Ahmed — Thursday & Friday only, P1–P3.
 
 **General instructions:** start 08:30 · 5 × 40-min periods · break 25 min after 3rd period · no subject
 twice in a day · high-credit subjects anchored to one slot · Accounting vs Economics non-overriding in I.Com-I.
+
+---
+
+## Optional: run real CP-SAT behind the site (provably optimal)
+
+The website also ships an optional **"Compute optimal (CP-SAT)"** button. Point it at the
+FastAPI backend and it fetches the proven-optimal set (score 560) and merges it into the
+ranked chooser (union — nothing is dropped).
+
+1. Deploy the backend to Cloud Run (see `backend/README.md`): `PROJECT_ID=… ./deploy.sh`
+2. Set the URL in `app.js` (`const API_URL = "https://…a.run.app"`) or inject
+   `window.IMPCC_API_URL` at page load, then rebuild with `python3 build_site.py`.
+
+Cloud Run free tier (calendar-month reset): 2M requests, 180k vCPU-sec, 360k GiB-sec/month
+→ roughly 2,000–3,000 optimal generations per month at **$0** (billing must be enabled;
+deploy to `us-central1`; keep `--min-instances 0`).
 
 ---
 

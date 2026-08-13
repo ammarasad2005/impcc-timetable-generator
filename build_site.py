@@ -33,6 +33,8 @@ HEAD = """<!DOCTYPE html>
   .viewtoggle button.on{background:var(--accent);color:#fff}
   button#genbtn{background:#1d4ed8;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:.9rem;cursor:pointer;font-weight:600}
   button#genbtn.stop{background:#c2410c}
+  button#optbtn{background:#7c3aed;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:.9rem;cursor:pointer;font-weight:600}
+  button#optbtn:disabled{opacity:.6;cursor:default}
   button#genbtn:disabled{opacity:.6;cursor:default}
   .nav{display:inline-flex;gap:4px}
   .nav button{background:#fff;border:1px solid var(--line);border-radius:8px;padding:6px 10px;cursor:pointer;font-size:.95rem}
@@ -78,6 +80,7 @@ HEAD = """<!DOCTYPE html>
 <div class="wrap">
   <div class="bar">
     <button id="genbtn">Generating…</button>
+    <button id="optbtn">Compute optimal (CP-SAT)</button>
     <span class="lbl">Combination</span>
     <span class="nav">
       <button id="prevbtn" disabled>◀</button>
@@ -94,6 +97,7 @@ HEAD = """<!DOCTYPE html>
     <button id="printbtn">Print / PDF</button>
   </div>
   <div id="semantic"></div>
+  <div id="optbadge" class="meta" style="padding:0 2px;"></div>
   <div id="grid" class="grid"></div>
   <div class="note">
     <b>How to read the score.</b> Every combination already satisfies <b>all</b> hard rules (faculty constraints,
@@ -109,6 +113,8 @@ HEAD = """<!DOCTYPE html>
       as in the allocation sheet. Use the <b>Teachers</b> view to check any faculty member's weekly schedule against their
       personal constraints. The <b>combination chooser</b> lists every generated solution with its rank, score, and a plain-language
       description of where it stands (near-optimal, good, …); the panel above the grids repeats this with a percentile.
+      If a CP-SAT backend is configured (<code>API_URL</code>), the <b>“Compute optimal (CP-SAT)”</b> button fetches the
+      provably-optimal set (score 560) from Cloud Run and merges it into the ranking.
     </details>
   </div>
 </div>
