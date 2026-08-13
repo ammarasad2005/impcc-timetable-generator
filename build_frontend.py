@@ -23,6 +23,15 @@ except FileNotFoundError:
     print("usage: python3 build_frontend.py [path/to/prototype.html]")
     sys.exit(1)
 
+import base64 as _b64
+def _data_uri(path):
+    try:
+        return "data:image/png;base64," + _b64.b64encode(io.open(path, "rb").read()).decode()
+    except Exception:
+        return ""
+LOGO_URI = _data_uri("impcc-logo.png")
+FAV_URI  = _data_uri("favicon.png")
+
 def rep(old, new, count=1):
     global src
     n = src.count(old)
@@ -32,13 +41,17 @@ def rep(old, new, count=1):
     src = src.replace(old, new, count)
 
 # ---- 1) title / labels -------------------------------------------------
-rep("<title>IMPCC · Weekly Timetable Generator — Demo Prototype</title>",
-    "<title>IMPCC · Weekly Timetable Generator</title>")
+if FAV_URI:
+    rep("<title>IMPCC · Weekly Timetable Generator — Demo Prototype</title>",
+        '<title>IMPCC · Weekly Timetable Generator</title>\n<link rel="icon" type="image/png" href="' + FAV_URI + '">')
+else:
+    rep("<title>IMPCC · Weekly Timetable Generator — Demo Prototype</title>",
+        "<title>IMPCC · Weekly Timetable Generator</title>")
 # Clean, minimal masthead: drop the stats chips and the "proven optimum" block.
 _i = src.index('<header class="mast">')
 _j = src.index('</header>', _i) + len('</header>')
 _mast = ('<header class="mast">\n'
-         '  <div class="seal"><b>IMPCC</b><span>H-8 · ISB</span></div>\n'
+         '  <img class="logo" src="'+LOGO_URI+'" alt="IMPCC" style="width:88px;height:88px;object-fit:contain;flex:0 0 auto;filter:drop-shadow(0 5px 14px rgba(14,59,41,.28))"/>\n'
          '  <div class="mast-txt">\n'
          '    <div class="overline">Islamabad Model Postgraduate College of Commerce · H-8</div>\n'
          '    <h1>Weekly Timetable <em>Generator</em></h1>\n'
