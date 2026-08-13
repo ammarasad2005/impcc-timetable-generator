@@ -25,7 +25,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 import cp_solver as CS
-from solver import UNITS, SECTIONS, TEACHER_FULL, DAYS, SLOTS
+import llm_translate
+from solver import UNITS, SECTIONS, TEACHER_FULL, DAYS, SLOTS, DEFAULT_CONSTRAINTS
 
 app = FastAPI(
     title="IMPCC Timetable Generator API",
@@ -83,6 +84,13 @@ class GenerateRequest(BaseModel):
                          description="number of randomized optimization seeds")
     max_solutions: int = Field(default=0, ge=0,
                                description="cap on returned solutions (0 = no cap)")
+    constraints: dict = Field(default=None,
+                              description="optional faculty-constraint overrides (see constraints_schema.md)")
+
+
+class TranslateRequest(BaseModel):
+    text: str = Field(..., description="the natural-language constraint statement")
+    teacher: str = Field(default=None, description="optional faculty member name")
 
 
 def grids_to_dict(grids):
@@ -105,6 +113,21 @@ def health():
     return {"ok": True, "service": "impcc-timetable-generator", "solver": "cp-sat"}
 
 
+@app.get("/constraints")
+def constraints():
+    """Return the default faculty constraints (the 'system language' data)."""
+    return {"defaults": DEFAULT_CONSTRAINTS, "schema_url": "/constraints"}
+
+
+@app.post("/translate")
+def translate(req: TranslateRequest):
+    """Translate a natural-language constraint into the system schema via the LLM."""
+    if not (req.text or "").strip():
+        return {"error": "text is required"}
+    result = llm_translate.translate_constraints(req.text.strip(), req.teacher)
+    return result
+
+
 @app.post("/generate")
 def generate(req: GenerateRequest):
     t0 = time.time()
@@ -112,6 +135,7 @@ def generate(req: GenerateRequest):
         n_seeds=req.n_seeds,
         time_per_seed=req.time_limit,
         max_solutions=req.max_solutions,
+        constraints=req.constraints,
     )
     solutions = []
     for sc, g in ranked:

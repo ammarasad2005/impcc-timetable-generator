@@ -15,39 +15,45 @@ import os
 from collections import defaultdict
 from ortools.sat.python import cp_model
 
-from solver import UNITS, SECTIONS, TEACHER_FULL, ALLOWED, DAYS, SLOTS
+from solver import UNITS, SECTIONS, TEACHER_FULL, DAYS, SLOTS
+from solver import SLOT_OF, DAY_OF, resolve_constraints
 from solver import validate, score, canonical
 
 # which teachers' units are "big" (single slot, no split)
-def slot_domain(u):
+def slot_domain(u, R=None):
     t = u["teacher"]; subj = u["subject"]
-    if t == "Naeem" and subj == "Principles of Accounting":
-        return [2, 3, 4]
-    if t == "Naeem" and subj == "Principles of Commerce":
-        return [0, 1]
-    if t == "Assad" and subj == "Business Mathematics":
-        return [2]
-    if t == "Assad" and subj == "Mathematics":
-        return [0, 1, 3, 4]
-    if t == "Ishfaq":
-        return [0, 1, 2, 3]
     if t == "PARALLEL":
         return [2, 3]
-    if t == "Tanveer":
-        return [0, 1, 2]
-    if t == "Basit":
-        return [0, 1, 2, 3]
-    return list(ALLOWED.get(t, [0, 1, 2, 3, 4]))
+    r = ((R or {}).get(t) or {}).get("rules") or {}
+    if r.get("subject_slots"):
+        for e in r["subject_slots"]:
+            if e["subject"] == subj:
+                return [SLOT_OF[x] for x in e["slots"]]
+    dom = [0, 1, 2, 3, 4]
+    if r.get("allowed_slots"):
+        aset = {SLOT_OF[x] for x in r["allowed_slots"]}
+        dom = [x for x in dom if x in aset]
+    if r.get("forbidden_slots"):
+        fset = {SLOT_OF[x] for x in r["forbidden_slots"]}
+        dom = [x for x in dom if x not in fset]
+    return dom
 
-def day_domain(u):
+def day_domain(u, R=None):
     t = u["teacher"]; subj = u["subject"]
-    if t == "Tanveer":
-        return [3, 4]
-    if t == "Assad" and subj == "Business Mathematics":
-        return [0, 1, 2, 3]          # P3, never Friday
-    if t == "Naeem" and subj == "Principles of Commerce":
-        return [1, 2, 3, 4]          # never Monday (P1/P2 free)
-    return [0, 1, 2, 3, 4]
+    r = ((R or {}).get(t) or {}).get("rules") or {}
+    dom = [0, 1, 2, 3, 4]
+    if r.get("allowed_days"):
+        aset = {DAY_OF[x] for x in r["allowed_days"]}
+        dom = [d for d in dom if d in aset]
+    if r.get("forbidden_days"):
+        fset = {DAY_OF[x] for x in r["forbidden_days"]}
+        dom = [d for d in dom if d not in fset]
+    if r.get("subject_forbidden_days"):
+        for e in r["subject_forbidden_days"]:
+            if e["subject"] == subj:
+                fset = {DAY_OF[x] for x in e["days"]}
+                dom = [d for d in dom if d not in fset]
+    return dom
 
 def _eq_bool(m, a, val, name):
     v = m.NewBoolVar(name)
@@ -61,7 +67,9 @@ def _neq_bool(m, a, b, name):
     m.Add(a == b).OnlyEnforceIf(v.Not())
     return v
 
-def build():
+def build(R=None):
+    if R is None:
+        R = resolve_constraints()
     m = cp_model.CpModel()
     slot_of = {}     # unit -> (single slot var) for count>=4, else None
     piece_slots = {} # unit -> list of slot vars per piece
@@ -74,8 +82,8 @@ def build():
     # special teacher alias for the parallel block
     for i, u in enumerate(UNITS):
         c = u["count"]
-        sd = slot_domain(u)
-        dd = day_domain(u)
+        sd = slot_domain(u, R)
+        dd = day_domain(u, R)
         pieces = []
 
         if c == 5:
@@ -129,27 +137,50 @@ def build():
         if len(keys) >= 2:
             m.AddAllDifferent(keys)
 
-    # ---- structural: early-slot fill rules ----
-    math_units = [i for i, u in enumerate(UNITS)
-                  if u["teacher"] == "Assad" and u["subject"] == "Mathematics"]
-    cs_units = [i for i, u in enumerate(UNITS)
-                if u["teacher"] == "Babar" and u["subject"] == "Computer Science"]
-    ish_units = [i for i, u in enumerate(UNITS)
-                 if u["teacher"] == "Ishfaq"]
-    basit_units = [i for i, u in enumerate(UNITS)
-                   if u["teacher"] == "Basit"]
+    # ---- rule-driven: slot presence / engagement requirements ----
+    for code, entry in R.items():
+        rules = entry.get("rules") or {}
+        units = [i for i, u in enumerate(UNITS) if u["teacher"] == code]
+        for e in (rules.get("min_days_in_slot") or []):
+            si = SLOT_OF[e["slot"]]
+            terms = [_eq_bool(m, piece_slots[i][p], si, f"mds_{code}_{si}_{i}_{p}")
+                     for i in units for p in range(UNITS[i]["count"])]
+            if terms:
+                m.Add(sum(terms) >= 1)
+        for e in (rules.get("stream_slots_required") or []):
+            stream = e["stream"]
+            sunits = [i for i in units if UNITS[i]["sec"].startswith("ICS" if stream == "ICS" else "I.COM")]
+            for sl in e["slots"]:
+                si = SLOT_OF[sl]
+                terms = [_eq_bool(m, piece_slots[i][p], si, f"ssr_{code}_{si}_{i}_{p}")
+                         for i in sunits for p in range(UNITS[i]["count"])]
+                if terms:
+                    m.Add(sum(terms) >= 1)
+        if rules.get("min_days_engaged"):
+            need = rules["min_days_engaged"]
+            day_bools = []
+            for d in range(5):
+                db = m.NewBoolVar(f"mde_{code}_{d}")
+                terms = [_eq_bool(m, day, d, f"mde_{code}_{d}_{i}_{p}")
+                         for i in units for p, day in enumerate(piece_days[i])]
+                m.Add(sum(terms) >= 1).OnlyEnforceIf(db)
+                m.Add(sum(terms) == 0).OnlyEnforceIf(db.Not())
+                day_bools.append(db)
+            m.Add(sum(day_bools) >= need)
 
-    m.Add(sum(_eq_bool(m, slot_of[i], 0, f"as_p1_{i}") for i in math_units) >= 1)
-    m.Add(sum(_eq_bool(m, slot_of[i], 1, f"as_p2_{i}") for i in math_units) >= 1)
-    m.Add(sum(_eq_bool(m, slot_of[i], 0, f"bb_p1_{i}") for i in cs_units) >= 1)
-    m.Add(sum(_eq_bool(m, slot_of[i], 1, f"bb_p2_{i}") for i in cs_units) >= 1)
-    m.Add(sum(_eq_bool(m, slot_of[i], 0, f"is_p1_{i}") for i in ish_units) >= 1)
-    m.Add(sum(_eq_bool(m, slot_of[i], 0, f"bs_p1_{i}") for i in basit_units) >= 1)
-
-    # Basit: engaged every day
-    for d in range(5):
-        m.Add(sum(_eq_bool(m, day, d, f"bs_d{d}_{i}_{p}")
-                  for i in basit_units for p, day in enumerate(piece_days[i])) >= 1)
+    # forbidden_slots_on_days: k encodes slot*5+day for every piece
+    for code, entry in R.items():
+        rules = entry.get("rules") or {}
+        for e in (rules.get("forbidden_slots_on_days") or []):
+            dset = {DAY_OF[x] for x in e["days"]}
+            sset = {SLOT_OF[x] for x in e["slots"]}
+            for i, u in enumerate(UNITS):
+                if u["teacher"] != code:
+                    continue
+                for p in range(u["count"]):
+                    for d in dset:
+                        for s_ in sset:
+                            m.Add(piece_keys[i][p] != s_ * 5 + d)
 
     # ---- objective: minimize shuffling ----
     obj = []
@@ -246,15 +277,16 @@ def generate_many(n_seeds=12, time_per_seed=15, verbose=True):
     return ranked
 
 
-def generate_ranked(n_seeds=2, time_per_seed=45, max_solutions=0):
+def generate_ranked(n_seeds=2, time_per_seed=45, max_solutions=0, constraints=None):
     """API entry point: run CP-SAT over several seeds, return
     (ranked list of (score, grids), any_optimal bool).
-    `max_solutions` caps the returned list (0 = no cap)."""
+    `constraints` (optional) overrides faculty constraints (see constraints_schema.md)."""
     from solver import score as _score, canonical as _canonical, validate as _validate
+    R = resolve_constraints(constraints)
     seen = {}
     any_optimal = False
     for seed in range(n_seeds):
-        m, slot_of, piece_slots, piece_days, piece_keys = build()
+        m, slot_of, piece_slots, piece_days, piece_keys = build(R)
 
         class Collect(cp_model.CpSolverSolutionCallback):
             def __init__(self):
@@ -263,7 +295,7 @@ def generate_ranked(n_seeds=2, time_per_seed=45, max_solutions=0):
             def on_solution_callback(self):
                 try:
                     g = decode(self, slot_of, piece_slots, piece_days, piece_keys)
-                    if _validate(g)[0]:
+                    if _validate(g, R)[0]:
                         key = _canonical(g)
                         sc = _score(g)
                         self.found.append((sc, key, g))

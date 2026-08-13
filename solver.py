@@ -121,6 +121,58 @@ ALLOWED = {
     "PARALLEL": {2, 3},
 }
 
+SLOT_OF = {"P1": 0, "P2": 1, "P3": 2, "P4": 3, "P5": 4}
+DAY_OF = {"MON": 0, "TUE": 1, "WED": 2, "THU": 3, "FRI": 4}
+
+# Faculty constraints as DATA (see constraints_schema.md). Keyed by teacher code.
+DEFAULT_CONSTRAINTS = {
+    "Yasir":  {"name": "Prof. Dr. Yasir Kareem", "rules": {"allowed_slots": ["P1", "P2", "P4"]}},
+    "Amir":   {"name": "Prof. Amir Rasheed",     "rules": {"forbidden_slots": ["P1", "P5"]}},
+    "Husnul": {"name": "Prof. Husnul Amin",      "rules": {"forbidden_slots": ["P1", "P5"]}},
+    "Millat": {"name": "Prof. Millat Khan",      "rules": {"forbidden_slots": ["P1"]}},
+    "Basit":  {"name": "Prof. Abdul Basit",      "rules": {"forbidden_slots": ["P5"],
+                "min_days_in_slot": [{"slot": "P1", "min_days": 4}], "min_days_engaged": 5}},
+    "NaeemAsghar": {"name": "Prof. Naeem Asghar", "rules": {"forbidden_slots": ["P1", "P2"]}},
+    "Tanveer": {"name": "Prof. Tanveer Ahmed",   "rules": {"allowed_days": ["THU", "FRI"],
+                "allowed_slots": ["P1", "P2", "P3"]}},
+    "Ishfaq":  {"name": "Prof. Ishfaq Ahmed",    "rules": {"forbidden_slots": ["P5"],
+                "min_days_in_slot": [{"slot": "P1", "min_days": 4}]}},
+    "Naeem":   {"name": "Prof. Muhammad Naeem",  "rules": {
+                "forbidden_slots_on_days": [{"days": ["MON"], "slots": ["P1", "P2"]}],
+                "subject_slots": [{"subject": "Principles of Accounting", "slots": ["P3", "P4", "P5"]},
+                                  {"subject": "Principles of Commerce", "slots": ["P1", "P2"]}],
+                "subject_forbidden_days": [{"subject": "Principles of Commerce", "days": ["MON"]}]}},
+    "Assad":   {"name": "Prof. Syed Assad Abbas", "rules": {
+                "subject_slots": [{"subject": "Business Mathematics", "slots": ["P3"]},
+                                  {"subject": "Mathematics", "slots": ["P1", "P2", "P4", "P5"]}],
+                "subject_forbidden_days": [{"subject": "Business Mathematics", "days": ["FRI"]}],
+                "stream_slots_required": [{"stream": "ICS", "slots": ["P1", "P2"]}]}},
+    "Babar":   {"name": "Prof. Babar Jahangir",  "rules": {"stream_slots_required": [{"stream": "ICS", "slots": ["P1", "P2"]}]}},
+}
+
+NAME_TO_CODE = {}
+for _code, _full in TEACHER_FULL.items():
+    if _code != "PARALLEL":
+        NAME_TO_CODE[_full] = _code
+
+def resolve_constraints(C=None):
+    import json as _json
+    out = {}
+    for code, entry in DEFAULT_CONSTRAINTS.items():
+        out[code] = {"name": entry["name"], "rules": _json.loads(_json.dumps(entry["rules"]))}
+    if C:
+        for k, v in C.items():
+            code = NAME_TO_CODE.get(k, k)
+            out[code] = {"name": (v or {}).get("name") or (out.get(code) or {}).get("name") or k,
+                         "rules": (v or {}).get("rules") or {}}
+    return out
+
+def _slotset(a):
+    return {SLOT_OF[x] for x in (a or [])}
+
+def _dayset(a):
+    return {DAY_OF[x] for x in (a or [])}
+
 UNITS = []
 for sec in SECTIONS:
     for subj, teacher, count in sec["subs"]:
@@ -365,7 +417,9 @@ def solve_once(slot, days, locked, rng, node_budget=600000):
 # ------------------------------------------------------------------
 # VALIDATION & SCORING
 # ------------------------------------------------------------------
-def validate(grids):
+def validate(grids, R=None):
+    if R is None:
+        R = resolve_constraints()
     issues = []
     for sec in SECTIONS:
         g = grids[sec["key"]]
@@ -403,25 +457,42 @@ def validate(grids):
                 issues.append(f"teacher {t} double-booked {DAYS[d]} {SLOTS[s]}")
             seen.add((d, s))
 
+    # rule-driven checks (availability + engagement + placement), per current R
     for t, lst in occ.items():
+        rr = (R.get(t) or {}).get("rules")
+        if not rr:
+            continue
+        aset = _slotset(rr.get("allowed_slots")) if rr.get("allowed_slots") is not None else None
+        fset = _slotset(rr.get("forbidden_slots")) if rr.get("forbidden_slots") is not None else None
+        aday = _dayset(rr.get("allowed_days")) if rr.get("allowed_days") is not None else None
+        fday = _dayset(rr.get("forbidden_days")) if rr.get("forbidden_days") is not None else None
         for (d, s, k) in lst:
-            if t == "Naeem" and s in (0, 1) and d == 0:
-                issues.append(f"Naeem Mon P1/P2 ({k})")
-            if t == "Amir" and s in (0, 4):
-                issues.append(f"Amir P1/P5 ({k})")
-            if t == "Husnul" and s in (0, 4):
-                issues.append(f"Husnul P1/P5 ({k})")
-            if t == "Millat" and s == 0:
-                issues.append(f"Millat P1 ({k})")
-            if t == "Yasir" and s not in (0, 1, 3):
-                issues.append(f"Yasir slot ({k})")
-            if t == "Basit" and s == 4:
-                issues.append(f"Basit P5 ({k})")
-            if t == "NaeemAsghar" and s in (0, 1):
-                issues.append(f"NaeemAsghar P1/P2 ({k})")
-            if t == "Tanveer" and (d not in (3, 4) or s not in (0, 1, 2)):
-                issues.append(f"Tanveer Thu/Fri P1-3 ({k})")
+            if aset is not None and s not in aset:
+                issues.append(f"{t} slot not allowed {SLOTS[s]} ({k})")
+            if fset is not None and s in fset:
+                issues.append(f"{t} forbidden slot {SLOTS[s]} ({k})")
+            if aday is not None and d not in aday:
+                issues.append(f"{t} day not allowed {DAYS[d]} ({k})")
+            if fday is not None and d in fday:
+                issues.append(f"{t} forbidden day {DAYS[d]} ({k})")
+            for e in (rr.get("forbidden_slots_on_days") or []):
+                if d in _dayset(e["days"]) and s in _slotset(e["slots"]):
+                    issues.append(f"{t} forbidden {DAYS[d]} {SLOTS[s]} ({k})")
+        for e in (rr.get("min_days_in_slot") or []):
+            days = {d for (d, s, k) in lst if s == SLOT_OF[e["slot"]]}
+            if len(days) < (e.get("min_days") or 1):
+                issues.append(f"{t} {e['slot']} only {len(days)} days (<{e.get('min_days') or 1})")
+        if rr.get("min_days_engaged"):
+            days = {d for (d, s, k) in lst}
+            if len(days) < rr["min_days_engaged"]:
+                issues.append(f"{t} engaged only {len(days)} days (<{rr['min_days_engaged']})")
+        for e in (rr.get("stream_slots_required") or []):
+            for sl in e["slots"]:
+                days = {d for (d, s, k) in lst if s == SLOT_OF[sl]}
+                if len(days) < 4:
+                    issues.append(f"{t} {e['stream']} {sl} only {len(days)} days")
 
+    # subject placement rules
     for sec in SECTIONS:
         g = grids[sec["key"]]
         for d in range(5):
@@ -430,41 +501,15 @@ def validate(grids):
                 if uid is None:
                     continue
                 u = UNITS[uid]
-                if u["teacher"] == "Assad" and u["subject"] == "Business Mathematics":
-                    if s != 2:
-                        issues.append(f"Assad BM not P3 ({sec['key']})")
-                    if d == 4:
-                        issues.append(f"Assad BM Friday ({sec['key']})")
-
-    for d in range(5):
-        if not any((dd, ss) == (d, 0) for (dd, ss, k) in occ["Assad"]):
-            issues.append(f"Assad not P1 {DAYS[d]}")
-        if not any((dd, ss) == (d, 1) for (dd, ss, k) in occ["Assad"]):
-            issues.append(f"Assad not P2 {DAYS[d]}")
-    if len({d for (d, s, k) in occ["Babar"] if s == 0}) < 4:
-        issues.append("Babar P1 <4 days")
-    if len({d for (d, s, k) in occ["Babar"] if s == 1}) < 4:
-        issues.append("Babar P2 <4 days")
-
-    basit_days = defaultdict(int); basit_p1 = set()
-    for (d, s, k) in occ["Basit"]:
-        basit_days[d] += 1
-        if s == 0:
-            basit_p1.add(d)
-    for d in range(5):
-        if basit_days[d] == 0:
-            issues.append(f"Basit off {DAYS[d]}")
-    if len(basit_p1) < 4:
-        issues.append(f"Basit P1 only {len(basit_p1)}")
-
-    ish_p1 = set()
-    for (d, s, k) in occ["Ishfaq"]:
-        if s == 0:
-            ish_p1.add(d)
-        if s == 4:
-            issues.append(f"Ishfaq P5 ({k})")
-    if len(ish_p1) < 4:
-        issues.append(f"Ishfaq P1 only {len(ish_p1)}")
+                rr = (R.get(u["teacher"]) or {}).get("rules")
+                if not rr:
+                    continue
+                for e in (rr.get("subject_slots") or []):
+                    if e["subject"] == u["subject"] and s not in _slotset(e["slots"]):
+                        issues.append(f"{u['teacher']} {u['subject']} not in {e['slots']} ({sec['key']})")
+                for e in (rr.get("subject_forbidden_days") or []):
+                    if e["subject"] == u["subject"] and d in _dayset(e["days"]):
+                        issues.append(f"{u['teacher']} {u['subject']} on {DAYS[d]} ({sec['key']})")
 
     par = occ["PARALLEL"]
     if len(par) != 4:

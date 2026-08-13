@@ -137,3 +137,27 @@ set `window.IMPCC_API_URL` before the page scripts run (e.g. in the HTML head).
 - **Website:** any modern browser (no dependencies).
 - **Python pipeline:** Python 3.10+, `ortools>=9.10`, `openpyxl>=3.1` (see `requirements.txt`).
 - **JS test harness:** Node.js 18+ (`node test_solver.js`).
+
+---
+
+## Faculty constraints as data + LLM translation
+
+Faculty preferences are **not hard-coded** — they are data (see `constraints_schema.md` for the
+full "system language"). A dedicated **⚙ Constraints** page lets you:
+
+- view every faculty member's current rules (the college defaults ship in `default_constraints.json`),
+- type a member's plain-language note and press **✦ Translate with AI** — the backend sends it to an
+  OpenAI-compatible LLM and returns structured rules (with confidence + notes), which you review and **Apply**,
+- download / upload `constraints.json`, or reset to defaults.
+
+Edited constraints **immediately** affect the in-browser solver *and* the CP-SAT backend
+(`POST /generate` accepts a `constraints` payload). To enable translation, set these on the backend
+(Vercel → Settings → Environment Variables):
+
+| Variable | Example |
+|---|---|
+| `LLM_API_KEY` | `sk-...` (OpenAI/Groq/OpenRouter key) |
+| `LLM_BASE_URL` *(optional)* | `https://api.openai.com/v1` |
+| `LLM_MODEL` *(optional)* | `gpt-4o-mini` |
+
+The key stays **server-side** — the browser only calls `POST /translate`.

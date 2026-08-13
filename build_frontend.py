@@ -804,5 +804,207 @@ rep('id="spPrint" title="Print this personal timetable / save as PDF">',
 rep('</svg>\n        PDF\n      </button>',
     '</svg>\n        PNG\n      </button>')
 
+# ---- 18) Constraints page (data-driven faculty constraints + LLM translate) ----
+# (a) CSS for the constraints panel
+rep('.card-img:hover{background:var(--ics);color:#fff}',
+    '.card-img:hover{background:var(--ics);color:#fff}\n.cons-note{background:var(--surface);border:1px solid var(--line);border-left:7px solid var(--green);border-radius:12px;padding:12px 16px;margin-bottom:16px;font-size:13px;color:var(--ink2)}\n.cons-note b{color:var(--green-deep)}\n.cons-actions{margin-left:auto;display:inline-flex;gap:6px;float:right}\n.cons-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:16px}\n.cons-card{background:var(--surface);border:1px solid var(--line);border-radius:11px;padding:14px 16px;display:flex;flex-direction:column;gap:10px}\n.cons-card.edited{border-color:var(--amber);box-shadow:0 0 0 1px var(--amber)}\n.cons-card header{display:flex;align-items:center;gap:8px}\n.cons-card header h4{font-family:var(--disp);font-weight:700;font-size:15px;margin:0;color:var(--ink)}\n.cons-card .stag.edited{background:var(--amber-tint);color:var(--amber-deep);border-color:var(--amber)}\n.cons-rules{display:flex;flex-wrap:wrap;gap:5px}\n.cons-rule{font-family:var(--mono);font-size:10px;padding:2px 8px;border-radius:6px;background:var(--green-tint);color:var(--green-deep);border:1px solid var(--line2)}\n.cons-rule.none{background:transparent;border-style:dashed;color:var(--ink2)}\n.cons-nl{width:100%;min-height:52px;font-family:var(--body);font-size:12.5px;padding:8px 10px;border:1px solid var(--line2);border-radius:8px;background:#fff;resize:vertical;color:var(--ink)}\n.cons-btns{display:flex;gap:6px;flex-wrap:wrap}\n.cons-status{font-family:var(--mono);font-size:10.5px;color:var(--ink2);min-height:14px}')
+
+# (b) viewbar: add Constraints tab
+rep('<button id="viewTeachers">◉ Faculty</button>',
+    '<button id="viewTeachers">◉ Faculty</button>\n      <button id="viewConstraints">⚙ Constraints</button>')
+
+# (c) setView handles 'constraints'
+rep("""  $('secFilterWrap').classList.toggle('hidden',v!=='sections');
+  renderChrome();persist();""",
+    """  $('secFilterWrap').classList.toggle('hidden',v!=='sections'&&v!=='constraints');
+  $('viewConstraints').classList.toggle('on',v==='constraints');
+  renderChrome();persist();""")
+
+# (d) renderMain renders constraints view before the empty-combos guard
+rep("""function renderMain(){
+  const c=getSel();""",
+    """function renderMain(){
+  if(state.view==='constraints'){renderConstraints();return;}
+  const c=getSel();""")
+
+# (e) runSlice passes the current constraints into the solver
+rep("  const res=IMPCC_SOLVER.generate({maxCount:0,timeMs:320,seed:(Math.random()*2147483647)|0});",
+    "  const res=IMPCC_SOLVER.generate({maxCount:0,timeMs:320,seed:(Math.random()*2147483647)|0,constraints:currentConstraints()});")
+
+# (f) click handler: constraints buttons (insert before the csv-btn block)
+rep("""  const csvBtn=e.target.closest('.card-csv');""",
+    """  const consBtn=e.target.closest('[data-translate],[data-apply],[data-reset-one],#consDownload,#consUpload,#consReset');
+  if(consBtn){
+    if(consBtn.id==='consReset'){resetConstraints();return;}
+    if(consBtn.id==='consDownload'){downloadConstraints();return;}
+    if(consBtn.id==='consUpload'){$('consUploadInput').click();return;}
+    const code=consBtn.dataset.translate||consBtn.dataset.apply||consBtn.dataset.resetOne;
+    if(consBtn.dataset.translate)translateOne(code);
+    else if(consBtn.dataset.apply)applyTranslation(code);
+    else if(consBtn.dataset.resetOne)resetOneConstraint(code);
+    return;
+  }
+  const csvBtn=e.target.closest('.card-csv');""")
+
+# (g) boot: load saved constraints
+rep("/* ---------- boot: restore saved results (no auto-generation) ---------- */\nconst restored=restore();",
+    "/* ---------- boot: restore saved results (no auto-generation) ---------- */\nloadConstraints();\nconst restored=restore();")
+
+# (h0) wire the Constraints tab listener
+rep("$('viewTeachers').addEventListener('click',()=>setView('teachers'));",
+    "$('viewTeachers').addEventListener('click',()=>setView('teachers'));\n$('viewConstraints').addEventListener('click',()=>setView('constraints'));")
+
+# (h) the constraints module JS (insert before the boot section)
+constraints_js = """/* ---------- constraints page (data-driven faculty constraints + LLM) ---------- */
+const CONST_KEY='impcc-constraints-v1';
+let pendingTranslations={};
+function loadConstraints(){
+  try{
+    const raw=localStorage.getItem(CONST_KEY);
+    if(raw){state.constraints=JSON.parse(raw);return true;}
+  }catch(e){}
+  state.constraints=null;
+  return false;
+}
+function saveConstraints(){
+  try{
+    if(state.constraints)localStorage.setItem(CONST_KEY,JSON.stringify(state.constraints));
+    else localStorage.removeItem(CONST_KEY);
+  }catch(e){}
+}
+function currentConstraints(){return state.constraints||undefined;}
+function resetConstraints(){
+  state.constraints=null;saveConstraints();
+  setTicker('Constraints reset to the college defaults','ok');
+  renderMain();
+}
+function resetOneConstraint(code){
+  if(!state.constraints)return;
+  delete state.constraints[code];
+  if(!Object.keys(state.constraints).length)state.constraints=null;
+  saveConstraints();
+  setTicker('Reset '+IMPCC_SOLVER.TEACHER_FULL[code]+' to defaults','ok');
+  renderMain();
+}
+function downloadConstraints(){
+  const payload=state.constraints||IMPCC_SOLVER.DEFAULT_CONSTRAINTS;
+  const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');a.href=url;a.download='constraints.json';
+  document.body.appendChild(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),800);
+  setTicker('Downloaded constraints.json','ok');
+}
+function uploadConstraintsFile(file){
+  const rd=new FileReader();
+  rd.onload=()=>{
+    try{
+      const data=JSON.parse(rd.result);
+      state.constraints=data;saveConstraints();
+      setTicker('Uploaded '+Object.keys(data).length+' constraint set(s)','ok');
+      renderMain();
+    }catch(e){setTicker('Upload failed: invalid JSON','err');}
+  };
+  rd.readAsText(file);
+}
+function constraintEntries(){
+  const cur=state.constraints||{};
+  const list=[];
+  for(const code in IMPCC_SOLVER.TEACHER_FULL){
+    if(code==='PARALLEL')continue;
+    const def=IMPCC_SOLVER.DEFAULT_CONSTRAINTS[code];
+    const over=cur[code];
+    list.push({
+      code,
+      name:IMPCC_SOLVER.TEACHER_FULL[code],
+      hasDefault:!!def,
+      natural:(over&&over.natural)||'',
+      rules:over?(over.rules||{}):(def?def.rules:{}),
+      overridden:!!over
+    });
+  }
+  return list.sort((a,b)=>(b.overridden?1:0)-(a.overridden?1:0)||(b.hasDefault?1:0)-(a.hasDefault?1:0)||a.name.localeCompare(b.name));
+}
+function rulesSummary(rules){
+  const r=rules||{},out=[];
+  if(r.allowed_slots)out.push('only '+r.allowed_slots.join(', '));
+  if(r.forbidden_slots)out.push('never '+r.forbidden_slots.join(', '));
+  if(r.allowed_days)out.push('only '+r.allowed_days.join(', '));
+  if(r.forbidden_days)out.push('not on '+r.forbidden_days.join(', '));
+  (r.forbidden_slots_on_days||[]).forEach(e=>out.push(e.days.join('/')+' '+e.slots.join(', ')+' free'));
+  (r.min_days_in_slot||[]).forEach(e=>out.push(e.slot+' on ≥'+e.min_days+' days'));
+  if(r.min_days_engaged)out.push('teach ≥'+r.min_days_engaged+' days');
+  if(r.max_periods_per_day)out.push('≤'+r.max_periods_per_day+' periods/day');
+  (r.subject_slots||[]).forEach(e=>out.push(e.subject+' → '+e.slots.join(', ')));
+  (r.subject_forbidden_days||[]).forEach(e=>out.push(e.subject+' not '+e.days.join(', ')));
+  (r.stream_slots_required||[]).forEach(e=>out.push(e.stream+' fills '+e.slots.join(', ')));
+  return out;
+}
+function renderConstraints(){
+  const entries=constraintEntries();
+  let h='<div class="cons-note"><b>Faculty constraints are data.</b> Type a member\u2019s plain-language note and press <b>✦ Translate with AI</b> to convert it into the system\u2019s structured rules, review the preview, then <b>Apply</b>. Changes take effect on the next generation — nothing is hard-coded anymore.<span class="cons-actions"><button class="mini-export" id="consDownload">⇩ Download</button><button class="mini-export" id="consUpload">⇧ Upload</button><button class="mini-export" id="consReset">Reset to defaults</button></span></div>';
+  h+='<input type="file" id="consUploadInput" accept="application/json" style="display:none">';
+  h+='<div class="cons-grid">';
+  for(const e of entries){
+    const sum=rulesSummary(e.rules);
+    h+='<article class="cons-card'+(e.overridden?' edited':'')+'">'+
+      '<header><h4>'+esc(e.name)+'</h4>'+(e.hasDefault?'<span class="stag">default</span>':'')+(e.overridden?'<span class="stag edited">edited</span>':'')+'</header>'+
+      '<div class="cons-rules">'+(sum.length?sum.map(x=>'<div class="cons-rule">'+esc(x)+'</div>').join(''):'<div class="cons-rule none">No constraints</div>')+'</div>'+
+      '<textarea class="cons-nl" data-code="'+e.code+'" placeholder="Describe their constraint in plain language…">'+esc(e.natural)+'</textarea>'+
+      '<div class="cons-btns">'+
+        '<button class="mini-export" data-translate="'+e.code+'">✦ Translate with AI</button>'+
+        '<button class="mini-export" data-apply="'+e.code+'"'+(pendingTranslations[e.code]?'':' disabled')+'>Apply</button>'+
+        '<button class="mini-export" data-reset-one="'+e.code+'"'+(e.overridden?'':' disabled')+'>Reset</button>'+
+      '</div>'+
+      '<div class="cons-status" data-status="'+e.code+'">'+esc(pendingTranslations[e.code]||'')+'</div>'+
+    '</article>';
+  }
+  h+='</div>';
+  mainEl.innerHTML=h;
+  $('consUploadInput').addEventListener('change',ev=>{if(ev.target.files&&ev.target.files[0])uploadConstraintsFile(ev.target.files[0]);});
+}
+function translateOne(code){
+  const ta=document.querySelector('.cons-nl[data-code="'+code+'"]');
+  const text=ta?ta.value.trim():'';
+  const st=document.querySelector('.cons-status[data-status="'+code+'"]');
+  if(!text){if(st)st.textContent='Type a plain-language note first.';return;}
+  if(st)st.textContent='Translating…';
+  const base=(typeof window.IMPCC_API_URL==='string')?window.IMPCC_API_URL:'';
+  if(typeof fetch!=='function'){if(st)st.textContent='Translation needs the backend (set IMPCC_API_URL or deploy with api/).';return;}
+  fetch(base+'/translate',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({text:text,teacher:IMPCC_SOLVER.TEACHER_FULL[code]})
+  })
+  .then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
+  .then(d=>{
+    if(d.error){if(st)st.textContent='⚠ '+d.error;return;}
+    const sum=rulesSummary(d.rules||{});
+    const preview=sum.join(' · ')||'(no rules)';
+    pendingTranslations[code]=d;
+    if(st)st.textContent='✓ '+preview+(d.confidence?(' · confidence '+Math.round(d.confidence*100)+'%'):'')+(d.unmapped&&d.unmapped.length?(' · unmapped: '+d.unmapped.join(', ')):'');
+    const applyBtn=document.querySelector('[data-apply="'+code+'"]');
+    if(applyBtn)applyBtn.disabled=false;
+  })
+  .catch(err=>{if(st)st.textContent='⚠ Translation failed: '+err.message;});
+}
+function applyTranslation(code){
+  const d=pendingTranslations[code];
+  if(!d)return;
+  const ta=document.querySelector('.cons-nl[data-code="'+code+'"]');
+  const natural=ta?ta.value.trim():d.natural;
+  if(!state.constraints)state.constraints={};
+  state.constraints[code]={name:IMPCC_SOLVER.TEACHER_FULL[code],natural:natural,rules:d.rules||{}};
+  saveConstraints();
+  delete pendingTranslations[code];
+  setTicker('Applied constraints for '+IMPCC_SOLVER.TEACHER_FULL[code]+' — will affect the next generation','ok');
+  renderMain();
+}
+
+"""
+rep("/* ---------- boot: restore saved results (no auto-generation) ---------- */",
+    constraints_js + "/* ---------- boot: restore saved results (no auto-generation) ---------- */")
+
+
 io.open(DST, "w", encoding="utf-8").write(src)
 print("OK → wrote", DST, "(", len(src), "bytes )")

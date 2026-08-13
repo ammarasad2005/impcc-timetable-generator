@@ -1,0 +1,23 @@
+{
+  "Yasir":  { "name": "Prof. Dr. Yasir Kareem", "rules": { "allowed_slots": ["P1", "P2", "P4"] } },
+  "Amir":   { "name": "Prof. Amir Rasheed",     "rules": { "forbidden_slots": ["P1", "P5"] } },
+  "Husnul": { "name": "Prof. Husnul Amin",      "rules": { "forbidden_slots": ["P1", "P5"] } },
+  "Millat": { "name": "Prof. Millat Khan",      "rules": { "forbidden_slots": ["P1"] } },
+  "Basit":  { "name": "Prof. Abdul Basit",      "rules": { "forbidden_slots": ["P5"], "min_days_in_slot": [{ "slot": "P1", "min_days": 4 }], "min_days_engaged": 5 } },
+  "NaeemAsghar": { "name": "Prof. Naeem Asghar", "rules": { "forbidden_slots": ["P1", "P2"] } },
+  "Tanveer": { "name": "Prof. Tanveer Ahmed",   "rules": { "allowed_days": ["THU", "FRI"], "allowed_slots": ["P1", "P2", "P3"] } },
+  "Ishfaq":  { "name": "Prof. Ishfaq Ahmed",    "rules": { "forbidden_slots": ["P5"], "min_days_in_slot": [{ "slot": "P1", "min_days": 4 }] } },
+  "Naeem":   { "name": "Prof. Muhammad Naeem",  "rules": {
+      "forbidden_slots_on_days": [{ "days": ["MON"], "slots": ["P1", "P2"] }],
+      "subject_slots": [{ "subject": "Principles of Accounting", "slots": ["P3", "P4", "P5"] },
+                        { "subject": "Principles of Commerce", "slots": ["P1", "P2"] }],
+      "subject_forbidden_days": [{ "subject": "Principles of Commerce", "days": ["MON"] }]
+  } },
+  "Assad":   { "name": "Prof. Syed Assad Abbas", "rules": {
+      "subject_slots": [{ "subject": "Business Mathematics", "slots": ["P3"] },
+                        { "subject": "Mathematics", "slots": ["P1", "P2", "P4", "P5"] }],
+      "subject_forbidden_days": [{ "subject": "Business Mathematics", "days": ["FRI"] }],
+      "stream_slots_required": [{ "stream": "ICS", "slots": ["P1", "P2"] }]
+  } },
+  "Babar":   { "name": "Prof. Babar Jahangir",  "rules": { "stream_slots_required": [{ "stream": "ICS", "slots": ["P1", "P2"] }] } }
+}

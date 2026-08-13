@@ -141,6 +141,55 @@
     "Visiting-3": "placeholder visiting faculty"
   };
 
+  // --------------------------------------------------- constraints (data)
+  const SLOT_OF = { P1:0, P2:1, P3:2, P4:3, P5:4 };
+  const DAY_OF  = { MON:0, TUE:1, WED:2, THU:3, FRI:4 };
+
+  // Faculty constraints as DATA (see constraints_schema.md). Keyed by teacher code.
+  // Editing these (or passing custom constraints to generate()) changes behaviour.
+  const DEFAULT_CONSTRAINTS = {
+    Yasir:  { name:"Prof. Dr. Yasir Kareem", rules:{ allowed_slots:["P1","P2","P4"] } },
+    Amir:   { name:"Prof. Amir Rasheed",     rules:{ forbidden_slots:["P1","P5"] } },
+    Husnul: { name:"Prof. Husnul Amin",      rules:{ forbidden_slots:["P1","P5"] } },
+    Millat: { name:"Prof. Millat Khan",      rules:{ forbidden_slots:["P1"] } },
+    Basit:  { name:"Prof. Abdul Basit",      rules:{ forbidden_slots:["P5"],
+              min_days_in_slot:[{slot:"P1",min_days:4}], min_days_engaged:5 } },
+    NaeemAsghar:{ name:"Prof. Naeem Asghar", rules:{ forbidden_slots:["P1","P2"] } },
+    Tanveer:{ name:"Prof. Tanveer Ahmed",    rules:{ allowed_days:["THU","FRI"], allowed_slots:["P1","P2","P3"] } },
+    Ishfaq: { name:"Prof. Ishfaq Ahmed",     rules:{ forbidden_slots:["P5"],
+              min_days_in_slot:[{slot:"P1",min_days:4}] } },
+    Naeem:  { name:"Prof. Muhammad Naeem",   rules:{
+              forbidden_slots_on_days:[{days:["MON"],slots:["P1","P2"]}],
+              subject_slots:[{subject:"Principles of Accounting",slots:["P3","P4","P5"]},
+                             {subject:"Principles of Commerce",slots:["P1","P2"]}],
+              subject_forbidden_days:[{subject:"Principles of Commerce",days:["MON"]}] } },
+    Assad:  { name:"Prof. Syed Assad Abbas", rules:{
+              subject_slots:[{subject:"Business Mathematics",slots:["P3"]},
+                             {subject:"Mathematics",slots:["P1","P2","P4","P5"]}],
+              subject_forbidden_days:[{subject:"Business Mathematics",days:["FRI"]}],
+              stream_slots_required:[{stream:"ICS",slots:["P1","P2"]}] } },
+    Babar:  { name:"Prof. Babar Jahangir",   rules:{ stream_slots_required:[{stream:"ICS",slots:["P1","P2"]}] } }
+  };
+
+  const NAME_TO_CODE = {};
+  for (const code in TEACHER_FULL) if (code !== "PARALLEL") NAME_TO_CODE[TEACHER_FULL[code]] = code;
+
+  const _slotSet = a => new Set((a||[]).map(x => SLOT_OF[x]));
+  const _daySet  = a => new Set((a||[]).map(x => DAY_OF[x]));
+
+  function resolveConstraints(C){
+    const out = {};
+    for (const code in DEFAULT_CONSTRAINTS)
+      out[code] = { name: DEFAULT_CONSTRAINTS[code].name,
+                    rules: JSON.parse(JSON.stringify(DEFAULT_CONSTRAINTS[code].rules)) };
+    if (C) for (const k in C) {
+      const code = NAME_TO_CODE[k] || k;
+      out[code] = { name: (C[k] && C[k].name) || (out[code] && out[code].name) || k,
+                    rules: (C[k] && C[k].rules) ? C[k].rules : {} };
+    }
+    return out;
+  }
+
   const UNITS = [];
   for (const sec of SECTIONS) {
     for (const [subject, teacher, count] of sec.subs) {
@@ -185,28 +234,34 @@
   }
 
   // ------------------------------------------------------------- domains
-  function slotDomainT(t, subj) {
-    if (t === "Naeem" && subj === "Principles of Accounting") return [2, 3, 4];
-    if (t === "Naeem" && subj === "Principles of Commerce") return [0, 1];
-    if (t === "Assad" && subj === "Business Mathematics") return [2];
-    if (t === "Assad" && subj === "Mathematics") return [0, 1, 3, 4];
-    if (t === "Ishfaq") return [0, 1, 2, 3];
-    if (t === "PARALLEL") return [2, 3];
-    if (t === "Tanveer") return [0, 1, 2];
-    if (t === "Basit") return [0, 1, 2, 3];
-    return ALLOWED[t] ? ALLOWED[t].slice() : [0, 1, 2, 3, 4];
+  function slotDomainT(t, subj, R) {
+    if (t === "PARALLEL") return [2, 3];                       // structural option block
+    const r = R && R[t] && R[t].rules;
+    if (r && r.subject_slots) {
+      const m = r.subject_slots.find(e => e.subject === subj);
+      if (m) return m.slots.map(x => SLOT_OF[x]);
+    }
+    let dom = [0, 1, 2, 3, 4];
+    if (r && r.allowed_slots)   dom = dom.filter(x => _slotSet(r.allowed_slots).has(x));
+    if (r && r.forbidden_slots) dom = dom.filter(x => !_slotSet(r.forbidden_slots).has(x));
+    return dom;
   }
-  function slotDomain(u) { return slotDomainT(u.teacher, u.subject); }
-  function dayDomainT(t, subj) {
-    if (t === "Tanveer") return [3, 4];
-    if (t === "Assad" && subj === "Business Mathematics") return [0, 1, 2, 3];
-    if (t === "Naeem" && subj === "Principles of Commerce") return [1, 2, 3, 4];
-    return [0, 1, 2, 3, 4];
+  function slotDomain(u, R) { return slotDomainT(u.teacher, u.subject, R); }
+  function dayDomainT(t, subj, R) {
+    const r = R && R[t] && R[t].rules;
+    let dom = [0, 1, 2, 3, 4];
+    if (r && r.allowed_days)   dom = dom.filter(d => _daySet(r.allowed_days).has(d));
+    if (r && r.forbidden_days) dom = dom.filter(d => !_daySet(r.forbidden_days).has(d));
+    if (r && r.subject_forbidden_days) {
+      const m = r.subject_forbidden_days.find(e => e.subject === subj);
+      if (m) dom = dom.filter(d => !_daySet(m.days).has(d));
+    }
+    return dom;
   }
-  function dayDomain(u) { return dayDomainT(u.teacher, u.subject); }
+  function dayDomain(u, R) { return dayDomainT(u.teacher, u.subject, R); }
 
   // -------------------------------------------------- packings (Stage 1)
-  function enumeratePackings(subjs) {
+  function enumeratePackings(subjs, R) {
     const slotUsed = [0, 0, 0, 0, 0];
     const out = [];
     const cur = subjs.map(() => null);
@@ -216,7 +271,7 @@
         return;
       }
       const [subject, teacher, count] = subjs[idx];
-      const sd = slotDomainT(teacher, subject);
+      const sd = slotDomainT(teacher, subject, R);
       for (const s of sd) {
         if (slotUsed[s] + count <= 5) {
           slotUsed[s] += count; cur[idx] = [{ slot: s, k: count }];
@@ -255,150 +310,154 @@
     return out;
   }
 
-  function makeGroups() {
+  function makeGroups(R) {
     const byT = {};
     for (let i = 0; i < UNITS.length; i++) {
       const t = UNITS[i].teacher;
       (byT[t] = byT[t] || []).push(i);
     }
-    const math = byT.Assad.filter(i => UNITS[i].subject === "Mathematics");
-    const cs = byT.Babar.slice();
-    const ish = byT.Ishfaq.slice();
-    const bs = byT.Basit.slice();
-    const groups = [
-      { units: math, needs: [0, 1] },
-      { units: cs, needs: [0, 1] },
-      { units: ish, needs: [0] },
-      { units: bs, needs: [0] }
-    ];
+    const groups = [];
+    for (const code in (R || {})) {
+      const rules = (R[code] && R[code].rules) || {};
+      if (rules.min_days_in_slot) {
+        for (const e of rules.min_days_in_slot) {
+          const units = (byT[code] || []).slice();
+          if (units.length) groups.push({ units, needs: [SLOT_OF[e.slot]] });
+        }
+      }
+      if (rules.stream_slots_required) {
+        for (const e of rules.stream_slots_required) {
+          const units = (byT[code] || []).filter(i => {
+            const key = UNITS[i].sec;
+            return e.stream === "ICS" ? key.indexOf("ICS") === 0 : key.indexOf("I.COM") === 0;
+          });
+          if (units.length) groups.push({ units, needs: e.slots.map(x => SLOT_OF[x]) });
+        }
+      }
+    }
     const groupOf = {};
     for (const g of groups) for (const id of g.units) groupOf[id] = g;
     return { groups, groupOf, byT };
   }
 
-  const secUnits = {};   // section key -> [unit indices] (in subs order)
-  const PACKINGS = {};   // section key -> [ packing ]
-  const PACK_SIGS = {};  // section key -> [ signature: [pairIdx, days] ]
-  const PACK_GREQ = {};  // section key -> [ [groupIdx, needMask] ]
-  const PACK_COST = {};  // section key -> [ cost ]
-  const MINCOST = {};    // section key -> min packing cost
-  const TEACHER_IDX = {};
   const TEACHER_CODES = Object.keys(TEACHER_FULL);
+  const TEACHER_IDX = {};
   TEACHER_CODES.forEach((c, i) => { TEACHER_IDX[c] = i; });
-  // per-teacher per-slot capacity = |union of dayDomains of units that can sit there|
-  const CAP2D = TEACHER_CODES.map(c => [0, 0, 0, 0, 0]);
-  (function computeCaps() {
-    const byT = {};
-    for (let i = 0; i < UNITS.length; i++) {
-      const t = UNITS[i].teacher;
-      (byT[t] = byT[t] || []).push(i);
-    }
-    const unitsFor = t => {
-      const u = (byT[t] || []).slice();
-      if (t === "Ishfaq" || t === "NaeemAsghar") for (const p of (byT.PARALLEL || [])) u.push(p);
-      return u;
-    };
-    for (let ti = 0; ti < TEACHER_CODES.length; ti++) {
-      const t = TEACHER_CODES[ti];
-      for (let s = 0; s < 5; s++) {
-        const union = new Set();
-        for (const ui of unitsFor(t)) {
-          const u = UNITS[ui];
-          if (slotDomain(u).includes(s)) {
-            for (const d of dayDomain(u)) union.add(d);
-          }
-        }
-        CAP2D[ti][s] = Math.min(5, union.size);
-      }
-    }
-  })();
 
-  const { groups: GROUPS } = makeGroups();
-  const hasUnitInGroup = {};   // secKey -> Set(groupIdx)
+  // All per-constraint-set precomputation. Cached by generate() per R.
+  function buildStatic(R) {
+    const secUnits = {};
+    const PACKINGS = {}, PACK_SIGS = {}, PACK_GREQ = {}, PACK_COST = {}, MINCOST = {};
+    const CAP2D = TEACHER_CODES.map(c => [0, 0, 0, 0, 0]);
+    const GROUPS = makeGroups(R).groups;
+    const hasUnitInGroup = {};
 
-  for (const s of SECTIONS) {
-    secUnits[s.key] = [];
-    for (let i = 0; i < UNITS.length; i++) if (UNITS[i].sec === s.key) secUnits[s.key].push(i);
-    const pkgs = enumeratePackings(s.subs);
-    const costOf = pkg => {
-      let c = 0;
-      for (let j = 0; j < pkg.length; j++) {
-        const cnt = s.subs[j][2];
-        const w = cnt === 3 ? 100 : (cnt === 2 ? 10 : 0);
-        c += (pkg[j].length - 1) * w;
+    (function computeCaps() {
+      const byT = {};
+      for (let i = 0; i < UNITS.length; i++) {
+        const t = UNITS[i].teacher;
+        (byT[t] = byT[t] || []).push(i);
       }
-      return c;
-    };
-    const order = pkgs.map((p, i) => i).sort((a, b) => costOf(pkgs[a]) - costOf(pkgs[b]));
-    PACKINGS[s.key] = order.map(i => pkgs[i]);
-    PACK_COST[s.key] = order.map(i => costOf(pkgs[i]));
-    MINCOST[s.key] = PACK_COST[s.key][0];
-    // cap the packing list (keep lowest-cost) for speed
-    const CAPN = 1200;
-    if (PACKINGS[s.key].length > CAPN) {
-      PACKINGS[s.key] = PACKINGS[s.key].slice(0, CAPN);
-      PACK_COST[s.key] = PACK_COST[s.key].slice(0, CAPN);
-    }
-    PACK_SIGS[s.key] = PACKINGS[s.key].map(pkg => {
-      const sig = [];
-      const delta = {};
-      for (let j = 0; j < pkg.length; j++) {
-        const t = s.subs[j][1];
-        const tlist = t === "PARALLEL" ? ["PARALLEL", "Ishfaq", "NaeemAsghar"] : [t];
-        for (const tt of tlist) {
-          const ti = TEACHER_IDX[tt];
-          for (const o of pkg[j]) {
-            const p = ti * 5 + o.slot;
-            delta[p] = (delta[p] || 0) + o.k;
+      const unitsFor = t => {
+        const u = (byT[t] || []).slice();
+        if (t === "Ishfaq" || t === "NaeemAsghar") for (const p of (byT.PARALLEL || [])) u.push(p);
+        return u;
+      };
+      for (let ti = 0; ti < TEACHER_CODES.length; ti++) {
+        const t = TEACHER_CODES[ti];
+        for (let sl = 0; sl < 5; sl++) {
+          const union = new Set();
+          for (const ui of unitsFor(t)) {
+            const u = UNITS[ui];
+            if (slotDomain(u, R).includes(sl)) for (const d of dayDomain(u, R)) union.add(d);
           }
+          CAP2D[ti][sl] = Math.min(5, union.size);
         }
       }
-      for (const p in delta) sig.push([Number(p), delta[p]]);
-      return sig;
-    });
-    // req contribution per packing
-    PACK_GREQ[s.key] = PACKINGS[s.key].map(pkg => {
-      const entries = [];
-      for (let g = 0; g < GROUPS.length; g++) {
-        const grp = GROUPS[g];
-        let mask = 0;
-        let found = false;
-        for (const v of grp.units) {
-          if (UNITS[v].sec !== s.key) continue;
-          const j = secUnits[s.key].indexOf(v);
-          if (j < 0) continue;
-          for (const o of pkg[j]) {
-            const ni = grp.needs.indexOf(o.slot);
-            if (ni >= 0) mask |= (1 << ni);
-            found = true;
+    })();
+
+    for (const sec of SECTIONS) {
+      secUnits[sec.key] = [];
+      for (let i = 0; i < UNITS.length; i++) if (UNITS[i].sec === sec.key) secUnits[sec.key].push(i);
+      const pkgs = enumeratePackings(sec.subs, R);
+      const costOf = pkg => {
+        let c = 0;
+        for (let j = 0; j < pkg.length; j++) {
+          const cnt = sec.subs[j][2];
+          const w = cnt === 3 ? 100 : (cnt === 2 ? 10 : 0);
+          c += (pkg[j].length - 1) * w;
+        }
+        return c;
+      };
+      const order = pkgs.map((p, i) => i).sort((a, b) => costOf(pkgs[a]) - costOf(pkgs[b]));
+      PACKINGS[sec.key] = order.map(i => pkgs[i]);
+      PACK_COST[sec.key] = order.map(i => costOf(pkgs[i]));
+      MINCOST[sec.key] = PACK_COST[sec.key][0];
+      const CAPN = 1200;
+      if (PACKINGS[sec.key].length > CAPN) {
+        PACKINGS[sec.key] = PACKINGS[sec.key].slice(0, CAPN);
+        PACK_COST[sec.key] = PACK_COST[sec.key].slice(0, CAPN);
+      }
+      PACK_SIGS[sec.key] = PACKINGS[sec.key].map(pkg => {
+        const sig = [];
+        const delta = {};
+        for (let j = 0; j < pkg.length; j++) {
+          const t = sec.subs[j][1];
+          const tlist = t === "PARALLEL" ? ["PARALLEL", "Ishfaq", "NaeemAsghar"] : [t];
+          for (const tt of tlist) {
+            const ti = TEACHER_IDX[tt];
+            for (const o of pkg[j]) {
+              const pk = ti * 5 + o.slot;
+              delta[pk] = (delta[pk] || 0) + o.k;
+            }
           }
         }
-        if (found) entries.push([g, mask]);
-      }
-      return entries;
-    });
-    hasUnitInGroup[s.key] = new Set();
-    for (let g = 0; g < GROUPS.length; g++) {
-      if (GROUPS[g].units.some(v => UNITS[v].sec === s.key)) hasUnitInGroup[s.key].add(g);
+        for (const pk in delta) sig.push([Number(pk), delta[pk]]);
+        return sig;
+      });
+      PACK_GREQ[sec.key] = PACKINGS[sec.key].map(pkg => {
+        const entries = [];
+        for (let g = 0; g < GROUPS.length; g++) {
+          const grp = GROUPS[g];
+          let mask = 0;
+          let found = false;
+          for (const v of grp.units) {
+            if (UNITS[v].sec !== sec.key) continue;
+            const j = secUnits[sec.key].indexOf(v);
+            if (j < 0) continue;
+            for (const o of pkg[j]) {
+              const ni = grp.needs.indexOf(o.slot);
+              if (ni >= 0) mask |= (1 << ni);
+              found = true;
+            }
+          }
+          if (found) entries.push([g, mask]);
+        }
+        return entries;
+      });
+      hasUnitInGroup[sec.key] = new Set();
+      for (let g = 0; g < GROUPS.length; g++)
+        if (GROUPS[g].units.some(v => UNITS[v].sec === sec.key)) hasUnitInGroup[sec.key].add(g);
     }
+    return { secUnits, PACKINGS, PACK_SIGS, PACK_GREQ, PACK_COST, MINCOST, CAP2D, GROUPS, hasUnitInGroup };
   }
 
-  function stage1(rng, nodeBudget) {
+  function stage1(rng, nodeBudget, R, S) {
     const tchSlot = new Array(TEACHER_CODES.length * 5).fill(0);
-    const covMask = new Array(GROUPS.length).fill(0);
-    const remUnits = GROUPS.map(g => g.units.length);
+    const covMask = new Array(S.GROUPS.length).fill(0);
+    const remUnits = S.GROUPS.map(g => g.units.length);
     const x = {};
     const placedSections = new Set();
 
     function packingFits(secKey, sig, greq) {
       for (const [p, d] of sig) {
         const ti = (p / 5) | 0, sl = p % 5;
-        if (tchSlot[p] + d > CAP2D[ti][sl]) return false;
+        if (tchSlot[p] + d > S.CAP2D[ti][sl]) return false;
       }
       for (const [g, mask] of greq) {
         const nm = covMask[g] | mask;
         let missing = 0;
-        for (let i = 0; i < GROUPS[g].needs.length; i++) {
+        for (let i = 0; i < S.GROUPS[g].needs.length; i++) {
           if (!((nm >> i) & 1)) missing++;
         }
         if (missing > remUnits[g] - 1) return false;
@@ -406,8 +465,7 @@
       return true;
     }
     function applySection(secKey, pkg, sign) {
-      const sig = sign === 1 ? null : null;
-      const uList = secUnits[secKey];
+      const uList = S.secUnits[secKey];
       if (sign === 1) {
         for (let j = 0; j < uList.length; j++) {
           const ui = uList[j];
@@ -418,16 +476,15 @@
             for (const o of pkg[j]) tchSlot[ti * 5 + o.slot] += o.k;
           }
         }
-        for (let g = 0; g < GROUPS.length; g++) {
-          if (!hasUnitInGroup[secKey].has(g)) continue;
+        for (let g = 0; g < S.GROUPS.length; g++) {
+          if (!S.hasUnitInGroup[secKey].has(g)) continue;
           remUnits[g]--;
-          // recompute mask contribution from this section's packing
           let mask = 0;
-          for (const v of GROUPS[g].units) {
+          for (const v of S.GROUPS[g].units) {
             if (UNITS[v].sec !== secKey) continue;
-            const j = secUnits[secKey].indexOf(v);
+            const j = S.secUnits[secKey].indexOf(v);
             for (const o of pkg[j]) {
-              const ni = GROUPS[g].needs.indexOf(o.slot);
+              const ni = S.GROUPS[g].needs.indexOf(o.slot);
               if (ni >= 0) mask |= (1 << ni);
             }
           }
@@ -443,24 +500,20 @@
           }
           delete x[ui];
         }
-        for (let g = 0; g < GROUPS.length; g++) {
-          if (!hasUnitInGroup[secKey].has(g)) continue;
+        for (let g = 0; g < S.GROUPS.length; g++) {
+          if (!S.hasUnitInGroup[secKey].has(g)) continue;
           remUnits[g]++;
         }
-        // recompute covMask from scratch for correctness (cheap: GROUPS small)
-        for (let g = 0; g < GROUPS.length; g++) covMask[g] = 0;
+        for (let g = 0; g < S.GROUPS.length; g++) covMask[g] = 0;
         for (const sk of placedSections) {
-          const pk = PACKINGS[sk];
-          const idx = PACK_SIGS[sk].indexOf;
-          // recompute via stored x for units in this section
-          for (let g = 0; g < GROUPS.length; g++) {
-            if (!hasUnitInGroup[sk].has(g)) continue;
+          for (let g = 0; g < S.GROUPS.length; g++) {
+            if (!S.hasUnitInGroup[sk].has(g)) continue;
             let mask = 0;
-            for (const v of GROUPS[g].units) {
+            for (const v of S.GROUPS[g].units) {
               if (UNITS[v].sec !== sk) continue;
-              const j = secUnits[sk].indexOf(v);
+              const j = S.secUnits[sk].indexOf(v);
               for (const o of x[v]) {
-                const ni = GROUPS[g].needs.indexOf(o.slot);
+                const ni = S.GROUPS[g].needs.indexOf(o.slot);
                 if (ni >= 0) mask |= (1 << ni);
               }
             }
@@ -487,24 +540,21 @@
         if (curCost < bestCost) { bestCost = curCost; bestX = snapshot(); }
         return "CONT";
       }
-      // lower-bound prune
       let lb = curCost;
-      for (const s of SECTIONS) if (!placedSections.has(s.key)) lb += MINCOST[s.key];
+      for (const sec of SECTIONS) if (!placedSections.has(sec.key)) lb += S.MINCOST[sec.key];
       if (lb >= bestCost) return "CONT";
-      // MRV over sections
       let best = null, bestList = null;
-      for (const s of SECTIONS) {
-        if (placedSections.has(s.key)) continue;
+      for (const sec of SECTIONS) {
+        if (placedSections.has(sec.key)) continue;
         const fl = [];
-        const sigs = PACK_SIGS[s.key], greqs = PACK_GREQ[s.key];
+        const sigs = S.PACK_SIGS[sec.key], greqs = S.PACK_GREQ[sec.key];
         for (let i = 0; i < sigs.length; i++) {
-          if (packingFits(s.key, sigs[i], greqs[i])) fl.push(i);
+          if (packingFits(sec.key, sigs[i], greqs[i])) fl.push(i);
         }
         if (fl.length === 0) return null;
-        if (bestList === null || fl.length < bestList.length) { best = s.key; bestList = fl; }
+        if (bestList === null || fl.length < bestList.length) { best = sec.key; bestList = fl; }
         if (bestList.length === 1) break;
       }
-      // packings are already sorted by cost. Lightly shuffle the head for variety.
       if (bestList.length > 1) {
         const w = Math.min(6, bestList.length);
         const head = bestList.slice(0, w);
@@ -512,12 +562,12 @@
         for (let i = 0; i < w; i++) bestList[i] = head[i];
       }
       for (const pidx of bestList) {
-        const pkg = PACKINGS[best][pidx];
+        const pkg = S.PACKINGS[best][pidx];
         applySection(best, pkg, 1);
         placedSections.add(best);
-        curCost += PACK_COST[best][pidx];
+        curCost += S.PACK_COST[best][pidx];
         const r = bt();
-        curCost -= PACK_COST[best][pidx];
+        curCost -= S.PACK_COST[best][pidx];
         placedSections.delete(best);
         applySection(best, pkg, -1);
         if (r === "BUDGET") return "BUDGET";
@@ -537,22 +587,29 @@
 
   // Stage 2: assign concrete days per (unit, slot) via per-slot bipartite
   // edge coloring. Returns grids or null.
-  function stage2(x, rng, nodeBudget) {
+  function stage2(x, rng, nodeBudget, R) {
     const dayOfSlot = {};     // unit -> { slot: [days] }
     const usedDays = {};      // unit -> Set(days) (for split-unit distinctness)
     for (let ui = 0; ui < UNITS.length; ui++) { dayOfSlot[ui] = {}; usedDays[ui] = new Set(); }
-    const basitTotal = UNITS.reduce((n, u, i) => n + (u.teacher === "Basit" ? u.count : 0), 0);
-    let basitColored = 0;
-    let basitCovered = new Set();
+    const eng = {};   // teacher code -> { minDays, total, colored, covered }
+    for (const code in R) {
+      const rules = (R[code] && R[code].rules) || {};
+      if (rules.min_days_engaged) {
+        const total = UNITS.reduce((n, u) => n + (u.teacher === code ? u.count : 0), 0);
+        if (total > 0) eng[code] = { minDays: rules.min_days_engaged, total, colored: 0, covered: new Set() };
+      }
+    }
     let nodes = 0;
 
-    function basitRecover() {
-      const c = new Set();
-      for (let ui = 0; ui < UNITS.length; ui++) {
-        if (UNITS[ui].teacher !== "Basit") continue;
-        for (const s in dayOfSlot[ui]) for (const d of dayOfSlot[ui][s]) c.add(d);
+    function engRecover() {
+      for (const code in eng) {
+        const c = new Set();
+        for (let ui = 0; ui < UNITS.length; ui++) {
+          if (UNITS[ui].teacher !== code) continue;
+          for (const s in dayOfSlot[ui]) for (const d of dayOfSlot[ui][s]) c.add(d);
+        }
+        eng[code].covered = c;
       }
-      return c;
     }
 
     function btSlot(s) {
@@ -576,12 +633,19 @@
         if (secUsed[u.sec].has(d)) return false;
         const tset = u.teacher === "PARALLEL" ? ["PARALLEL", "NaeemAsghar", "Ishfaq"] : [u.teacher];
         for (const t of tset) if (tU(t).has(d)) return false;
-        if (u.teacher === "Basit") {
-          const nc = new Set(basitCovered); nc.add(d);
-          const remaining = basitTotal - basitColored - 1;
-          const missing = 5 - nc.size;
+        const rr = R[u.teacher] && R[u.teacher].rules;
+        if (rr && rr.forbidden_slots_on_days) {
+          for (const e of rr.forbidden_slots_on_days) {
+            if (_daySet(e.days).has(d) && _slotSet(e.slots).has(s)) return false;
+          }
+        }
+        if (eng[u.teacher]) {
+          const e = eng[u.teacher];
+          const nc = new Set(e.covered); nc.add(d);
+          const remaining = e.total - e.colored - 1;
+          const missing = Math.max(0, e.minDays - nc.size);
           if (missing > remaining) return false;
-          if (remaining === 0 && missing !== 0) return false;
+          if (remaining === 0 && nc.size < e.minDays) return false;
         }
         return true;
       }
@@ -593,14 +657,14 @@
           secUsed[u.sec].add(d);
           const tset = u.teacher === "PARALLEL" ? ["PARALLEL", "NaeemAsghar", "Ishfaq"] : [u.teacher];
           for (const t of tset) tU(t).add(d);
-          if (u.teacher === "Basit") { basitColored++; basitCovered.add(d); }
+          if (eng[u.teacher]) { eng[u.teacher].colored++; eng[u.teacher].covered.add(d); }
         } else {
           usedDays[ui].delete(d);
           dayOfSlot[ui][s].pop();
           secUsed[u.sec].delete(d);
           const tset = u.teacher === "PARALLEL" ? ["PARALLEL", "NaeemAsghar", "Ishfaq"] : [u.teacher];
           for (const t of tset) tU(t).delete(d);
-          if (u.teacher === "Basit") { basitColored--; basitCovered = basitRecover(); }
+          if (eng[u.teacher]) { eng[u.teacher].colored--; } engRecover();
         }
       }
 
@@ -614,7 +678,7 @@
         let bestE = -1, bestAllowed = null;
         for (const e of remaining) {
           const ui = edges[e];
-          const al = dayDomain(UNITS[ui]).filter(d => edgeOk(ui, d));
+          const al = dayDomain(UNITS[ui], R).filter(d => edgeOk(ui, d));
           if (al.length === 0) return null;               // forward check
           if (bestAllowed === null || al.length < bestAllowed.length) { bestE = e; bestAllowed = al; }
           if (bestAllowed.length === 1) break;
@@ -653,15 +717,9 @@
     return grids;
   }
 
-  function solveOnce(rng, nodeBudget) {
-    const s1 = stage1(rng, 200000);
-    if (s1 === null) return null;
-    const grids = stage2(s1.x, rng, 200000);
-    return grids;
-  }
-
   // ------------------------------------------------------------ validate
-  function validate(grids) {
+  function validate(grids, R) {
+    if (!R) R = resolveConstraints();
     const issues = [];
     for (const sec of SECTIONS) {
       const g = grids[sec.key];
@@ -701,52 +759,53 @@
         seen.add(k);
       }
     }
+    // rule-driven checks (availability + engagement + placement), per current R
     for (const t in occ) {
+      const rr = R[t] && R[t].rules;
+      if (!rr) continue;
+      const as = rr.allowed_slots ? _slotSet(rr.allowed_slots) : null;
+      const fs = rr.forbidden_slots ? _slotSet(rr.forbidden_slots) : null;
+      const ad = rr.allowed_days ? _daySet(rr.allowed_days) : null;
+      const fd = rr.forbidden_days ? _daySet(rr.forbidden_days) : null;
       for (const [d, s, k] of occ[t]) {
-        if (t === "Naeem" && s <= 1 && d === 0) issues.push(`Naeem Mon P1/P2 (${k})`);
-        if (t === "Amir" && (s === 0 || s === 4)) issues.push(`Amir P1/P5 (${k})`);
-        if (t === "Husnul" && (s === 0 || s === 4)) issues.push(`Husnul P1/P5 (${k})`);
-        if (t === "Millat" && s === 0) issues.push(`Millat P1 (${k})`);
-        if (t === "Yasir" && [0, 1, 3].indexOf(s) < 0) issues.push(`Yasir slot (${k})`);
-        if (t === "Basit" && s === 4) issues.push(`Basit P5 (${k})`);
-        if (t === "NaeemAsghar" && s <= 1) issues.push(`NaeemAsghar P1/P2 (${k})`);
-        if (t === "Tanveer" && (d < 3 || d > 4 || s > 2)) issues.push(`Tanveer Thu/Fri P1-3 (${k})`);
-        if (t === "Ishfaq" && s === 4) issues.push(`Ishfaq P5 (${k})`);
+        if (as && !as.has(s)) issues.push(`${t} slot not allowed ${SLOTS[s]} (${k})`);
+        if (fs && fs.has(s)) issues.push(`${t} forbidden slot ${SLOTS[s]} (${k})`);
+        if (ad && !ad.has(d)) issues.push(`${t} day not allowed ${DAYS[d]} (${k})`);
+        if (fd && fd.has(d)) issues.push(`${t} forbidden day ${DAYS[d]} (${k})`);
+        if (rr.forbidden_slots_on_days) for (const e of rr.forbidden_slots_on_days) {
+          if (_daySet(e.days).has(d) && _slotSet(e.slots).has(s)) issues.push(`${t} forbidden ${DAYS[d]} ${SLOTS[s]} (${k})`);
+        }
+      }
+      if (rr.min_days_in_slot) for (const e of rr.min_days_in_slot) {
+        const days = new Set(occ[t].filter(x => x[1] === SLOT_OF[e.slot]).map(x => x[0]));
+        if (days.size < (e.min_days || 1)) issues.push(`${t} ${e.slot} only ${days.size} days (<${e.min_days})`);
+      }
+      if (rr.min_days_engaged) {
+        const days = new Set(occ[t].map(x => x[0]));
+        if (days.size < rr.min_days_engaged) issues.push(`${t} engaged only ${days.size} days (<${rr.min_days_engaged})`);
+      }
+      if (rr.stream_slots_required) for (const e of rr.stream_slots_required) for (const sl of e.slots) {
+        const days = new Set(occ[t].filter(x => x[1] === SLOT_OF[sl]).map(x => x[0]));
+        if (days.size < 4) issues.push(`${t} ${e.stream} ${sl} only ${days.size} days`);
       }
     }
+    // subject placement rules
     for (const sec of SECTIONS) {
       const g = grids[sec.key];
-      for (let d = 0; d < 5; d++) {
-        for (let s = 0; s < 5; s++) {
-          const uid = g[d][s];
-          if (uid === null) continue;
-          const u = UNITS[uid];
-          if (u.teacher === "Assad" && u.subject === "Business Mathematics") {
-            if (s !== 2) issues.push(`Assad BM not P3 (${sec.key})`);
-            if (d === 4) issues.push(`Assad BM Friday (${sec.key})`);
-          }
+      for (let d = 0; d < 5; d++) for (let s = 0; s < 5; s++) {
+        const uid = g[d][s];
+        if (uid === null) continue;
+        const u = UNITS[uid];
+        const rr = R[u.teacher] && R[u.teacher].rules;
+        if (!rr) continue;
+        if (rr.subject_slots) for (const e of rr.subject_slots) {
+          if (e.subject === u.subject && !_slotSet(e.slots).has(s)) issues.push(`${u.teacher} ${u.subject} not in ${e.slots.join("/")} (${sec.key})`);
+        }
+        if (rr.subject_forbidden_days) for (const e of rr.subject_forbidden_days) {
+          if (e.subject === u.subject && _daySet(e.days).has(d)) issues.push(`${u.teacher} ${u.subject} on ${DAYS[d]} (${sec.key})`);
         }
       }
     }
-    const assadP1 = new Set(), assadP2 = new Set();
-    for (const [d, s] of occ.Assad || []) { if (s === 0) assadP1.add(d); if (s === 1) assadP2.add(d); }
-    for (let d = 0; d < 5; d++) {
-      if (!assadP1.has(d)) issues.push(`Assad not P1 ${DAYS[d]}`);
-      if (!assadP2.has(d)) issues.push(`Assad not P2 ${DAYS[d]}`);
-    }
-    const bbP1 = new Set(), bbP2 = new Set();
-    for (const [d, s] of occ.Babar || []) { if (s === 0) bbP1.add(d); if (s === 1) bbP2.add(d); }
-    if (bbP1.size < 4) issues.push("Babar P1 <4 days");
-    if (bbP2.size < 4) issues.push("Babar P2 <4 days");
-
-    const basitDays = new Set(), basitP1 = new Set();
-    for (const [d, s] of occ.Basit || []) { basitDays.add(d); if (s === 0) basitP1.add(d); }
-    for (let d = 0; d < 5; d++) if (!basitDays.has(d)) issues.push(`Basit off ${DAYS[d]}`);
-    if (basitP1.size < 4) issues.push("Basit P1 <4 days");
-
-    const ishP1 = new Set();
-    for (const [d, s] of occ.Ishfaq || []) if (s === 0) ishP1.add(d);
-    if (ishP1.size < 4) issues.push("Ishfaq P1 <4 days");
 
     const par = occ.PARALLEL || [];
     if (par.length !== 4) issues.push(`parallel size ${par.length}`);
@@ -828,12 +887,16 @@
   }
 
   // ------------------------------------------------------------ generate
+  let _RKey = null, _STATIC = null;
   function generate(opts) {
     // No hard count cutoff by default: keep every distinct valid solution
     // until the time budget is exhausted. Pass maxCount>0 only to cap explicitly.
     const maxCount = (opts && opts.maxCount > 0) ? opts.maxCount : Infinity;
     const timeMs = (opts && opts.timeMs) || 15000;
     const seed = (opts && opts.seed) || (Date.now() % 2147483647);
+    const R = resolveConstraints(opts && opts.constraints);
+    const rkey = JSON.stringify(R);
+    let STATIC = (_RKey === rkey) ? _STATIC : (_RKey = rkey, _STATIC = buildStatic(R));
     const rng = makeRng(seed);
     const seen = {};
     const solutions = [];
@@ -842,11 +905,11 @@
 
     while (solutions.length < maxCount && Date.now() - t0 < timeMs) {
       attempts++;
-      const s1 = stage1(rng, 10000);
+      const s1 = stage1(rng, 10000, R, STATIC);
       if (s1 === null) continue;
-      const grids = stage2(s1.x, rng, 25000);
+      const grids = stage2(s1.x, rng, 25000, R);
       if (grids === null) continue;
-      const issues = validate(grids);
+      const issues = validate(grids, R);
       if (issues.length) continue;
       valids++;
       const key = canonical(grids);
@@ -866,6 +929,7 @@
 
   return {
     DAYS, SLOTS, SECTIONS, TEACHER_FULL, RULES, UNITS,
+    SLOT_OF, DAY_OF, DEFAULT_CONSTRAINTS, NAME_TO_CODE, resolveConstraints,
     generate, validate, score, canonical, toTimetable
   };
 });
