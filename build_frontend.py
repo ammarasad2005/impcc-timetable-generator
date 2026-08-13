@@ -378,75 +378,55 @@ if(restored){
   setTicker('Ready — press “Generate” to create timetables','ok');
 }""")
 
-# ---- 17) PDF export system ---------------------------------------------
+# ---- 17) PDF export system (prints the SAME components as the display) ----
 # (a) .card-pdf button style (amber variant of .card-csv)
 rep('.card-csv:hover{background:var(--green);color:#f0f6ef}',
     '.card-csv:hover,.card-pdf:hover{background:var(--green);color:#f0f6ef}\n.card-pdf{margin-left:4px;display:inline-flex;align-items:center;font-family:var(--mono);font-size:9.5px;font-weight:600;color:var(--amber-deep);background:var(--amber-tint);border:1px solid var(--amber);border-radius:6px;padding:3px 8px;transition:all .15s ease;white-space:nowrap;cursor:pointer}\n.card-pdf:hover{background:var(--amber);color:#fff}')
 
-# (b) replace the whole PRINT CSS block with a dedicated print-document stylesheet
+# (b) replace the PRINT CSS block — the printed document reuses the on-screen
+#     components (.sec-card / .tt / .sp-grid …), so the PDF matches the display.
 i = src.index("/* ============ PRINT ============ */")
 j = src.index("\n</style>", i)
-print_css = """/* ============ PRINT (dedicated print document) ============ */
+print_css = """/* ============ PRINT (prints the same components as the display) ============ */
 #printArea{display:none}
 @media print{
   @page{size:A4;margin:12mm}
-  *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  *{-webkit-print-color-adjust:exact;print-color-adjust:exact;animation:none!important;transition:none!important}
   html,body{background:#fff!important}
-  body{font-size:10.5px}
-  .mast,.console,.wrap,footer,.drawer,.drawer-backdrop{display:none!important}
-  #printArea{display:block;font-family:var(--body);color:#111;padding-bottom:16px}
+  body{font-size:11px}
+  .mast,.console,.wrap,footer,.drawer,.drawer-backdrop,.no-print{display:none!important}
+  #printArea{display:block;font-family:var(--body);color:var(--ink)}
 
+  /* print-only cover + footer */
   .pd-cover{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;border-bottom:3px solid #0e3b29;padding-bottom:10px;margin-bottom:14px}
   .pd-brand{display:flex;gap:12px;align-items:center;min-width:0}
   .pd-seal{flex:0 0 auto;width:46px;height:46px;background:#0e3b29;color:#f3e7c4;border:2px solid #a97b0a;border-radius:8px;display:flex;align-items:center;justify-content:center;font-family:var(--disp);font-weight:900;font-size:12px;letter-spacing:.03em}
-  .pd-brand h1{font-family:var(--disp);font-weight:900;font-size:21px;margin:0;color:#0e3b29;line-height:1.05}
+  .pd-brand h1{font-family:var(--disp);font-weight:900;font-size:20px;margin:0;color:#0e3b29;line-height:1.05}
   .pd-brand p{margin:3px 0 0;font-size:9.5px;color:#5b6a61}
   .pd-meta{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;text-align:right}
   .pd-meta span{font-family:var(--mono);font-size:8.5px;border:1px solid #b9c2b4;border-radius:99px;padding:3px 9px;color:#334155;white-space:nowrap}
   .pd-meta span.k{background:#0e3b29;color:#f0f6ef;border-color:#0e3b29}
   .pd-meta span.g{background:#a97b0a;color:#fff;border-color:#a97b0a}
-
-  .pd-stream{margin-top:10px}
-  .pd-stream.pd-new{break-before:page}
-  .pd-stream-head{display:flex;align-items:baseline;gap:10px;border-bottom:2px solid #0e3b29;padding-bottom:4px;margin:6px 0 8px}
-  .pd-stream.ics .pd-stream-head{border-color:#28397c}
-  .pd-stream-head h2{font-family:var(--disp);font-weight:900;font-size:16px;margin:0;color:#0e3b29}
-  .pd-stream.ics .pd-stream-head h2{color:#28397c}
-  .pd-stream-head span{margin-left:auto;font-family:var(--mono);font-size:8.5px;color:#5b6a61}
-
-  .pd-sec{break-inside:avoid;margin-bottom:12px;border:1px solid #cfd6c8;border-radius:8px;overflow:hidden}
-  .pd-sec-head{display:flex;align-items:center;gap:8px;padding:6px 10px;background:#f2f5ee;border-bottom:1px solid #cfd6c8}
-  .pd-sec-head h3{font-family:var(--disp);font-weight:700;font-size:12.5px;margin:0;color:#0e3b29}
-  .pd-stream.ics .pd-sec-head h3{color:#28397c}
-  .pd-sec-head span{margin-left:auto;font-family:var(--mono);font-size:8px;color:#5b6a61}
-
-  .pd-table{width:100%;border-collapse:collapse;table-layout:fixed}
-  .pd-table th,.pd-table td{border:1px solid #cdd5c6;vertical-align:middle;text-align:center}
-  .pd-table thead th{background:#eef2e9;color:#0e3b29;font-family:var(--mono);font-weight:600;font-size:7.5px;letter-spacing:.04em;padding:4px 2px}
-  .pd-table thead th span{display:block;font-weight:400;font-size:6.8px;color:#5b6a61;margin-top:1px}
-  .pd-table.ics thead th{background:#e8ecf8;color:#28397c}
-  .pd-table .pd-day{width:8%;font-family:var(--mono);font-weight:600;font-size:8px;color:#334155;background:#fafbf8}
-  .pd-table thead .pd-bkh{width:6.5%;background:#fdf3dc;color:#8a6210}
-  .pd-table td.pd-bk{width:6.5%;background:#fdf3dc;color:#8a6210;font-family:var(--mono);font-size:7px}
-  .pd-cell{padding:6px 3px;min-height:38px}
-  .pd-subj{display:block;font-weight:700;font-size:9px;color:#111;line-height:1.15}
-  .pd-tchr{display:block;font-size:7.5px;color:#5b6a61;margin-top:2px;line-height:1.15}
-  .pd-cell.pd-dual .pd-subj{color:#1c6b48}
-  .pd-table.ics .pd-cell.pd-dual .pd-subj{color:#28397c}
-  .pd-free{color:#c2c9ba;font-size:9px}
-
-  .pd-tstats{display:flex;gap:8px;margin:12px 0}
-  .pd-stat{flex:1;border:1px solid #cdd5c6;border-radius:8px;padding:7px 8px;text-align:center;break-inside:avoid}
-  .pd-stat b{display:block;font-family:var(--disp);font-size:17px;color:#0e3b29;line-height:1}
-  .pd-stat span{font-family:var(--mono);font-size:7.2px;color:#5b6a61}
-  .pd-tcons{margin:12px 0;border:1px solid #a97b0a;background:#fdf3dc;border-radius:8px;padding:6px 10px;font-size:9px;color:#8a6210}
-  .pd-subh{font-family:var(--disp);font-weight:900;font-size:12.5px;color:#0e3b29;margin:14px 0 6px;border-bottom:1px solid #cfd6c8;padding-bottom:3px}
-  .pd-course{margin:4px 0;break-inside:avoid;font-size:9.5px}
-  .pd-course b{color:#0e3b29}
-  .pd-cmeta{color:#5b6a61;font-size:8px}
-  .pd-chips{font-family:var(--mono);font-size:7.5px;color:#334155}
-
   .pd-footer{position:fixed;bottom:0;left:0;right:0;font-family:var(--mono);font-size:7px;color:#8a8f86;text-align:center;padding:3px 0;border-top:1px solid #e2e6dc;background:#fff}
+
+  /* reused display components — clean print layout, identical look */
+  #printArea .card-csv,#printArea .card-pdf,#printArea .mini-export,#printArea .spot-hint{display:none!important}
+  #printArea .stream{margin:0 0 16px;break-inside:auto}
+  #printArea .stream.pd-new{break-before:page}
+  #printArea .stream-head{margin-bottom:10px}
+  #printArea .sec-grid{grid-template-columns:1fr}
+  #printArea .sec-card{box-shadow:none;break-inside:avoid;margin-bottom:12px}
+  #printArea .tt-wrap{overflow:visible}
+  #printArea .tt{min-width:0}
+  #printArea .filter-note{display:none}
+
+  /* teacher personal timetable (reused spotlight components) */
+  #printArea .sp-gridwrap{overflow:visible;box-shadow:none;break-inside:avoid}
+  #printArea .sp-grid{min-width:0}
+  #printArea .sp-scrollhint{display:none}
+  #printArea .sp-stats{margin:12px 0}
+  #printArea .sp-cons{margin:12px 0;break-inside:avoid}
+  #printArea .sp-course{border:1px solid #cfd6c8;break-inside:avoid}
 }
 """
 src = src[:i] + print_css + src[j:]   # keep the closing </style>
@@ -486,12 +466,10 @@ rep("""  const csvBtn=e.target.closest('.card-csv');
     return;
   }""")
 
-# (f) replace printCurrent with the full PDF engine
+# (f) replace printCurrent with the PDF engine that reuses the display renderers
 i = src.index("/* PDF = print engine. If the spotlight drawer is open, print only that")
-j = src.index("function getSel()") if False else None
-# find the end of printCurrent (the closing brace before the next comment)
 k = src.index("/* ---------- section filter helpers ---------- */")
-engine = """/* ---------- PDF engine (dedicated print document) ---------- */
+engine = """/* ---------- PDF engine (prints the same components as the display) ---------- */
 function pdMeta(c){
   const list=sortedList(),rank=rankOf(c,list),total=list.length;
   return '<div class="pd-meta"><span class="k">#'+rank+' of '+total+'</span><span class="g">score '+c.score+'</span><span>'+(c.via==='cpsat'?'✦ CP-SAT':'in-browser')+'</span><span>'+new Date().toLocaleDateString('en-GB')+'</span></div>';
@@ -499,41 +477,21 @@ function pdMeta(c){
 function pdCover(title,sub,metaHtml){
   return '<header class="pd-cover"><div class="pd-brand"><span class="pd-seal">IMPCC</span><div><h1>'+esc(title)+'</h1><p>'+esc(sub)+'</p></div></div>'+metaHtml+'</header>';
 }
-function pdCell(subj,line2,dual){
-  return '<div class="pd-cell'+(dual?' pd-dual':'')+'"><span class="pd-subj">'+esc(subj)+'</span><span class="pd-tchr">'+esc(line2)+'</span></div>';
-}
-function pdTable(grid,stream){
-  const acc=stream==='ics'?' ics':'';
-  let h='<table class="pd-table'+acc+'"><thead><tr><th class="pd-dayh">Week</th>';
-  for(let i=0;i<3;i++)h+='<th>Period-'+(i+1)+'<span>'+TIMES[i]+'</span></th>';
-  h+='<th class="pd-bkh">Break<span>10:30–10:55</span></th>';
-  for(let i=3;i<5;i++)h+='<th>Period-'+(i+1)+'<span>'+TIMES[i]+'</span></th>';
-  h+='</tr></thead><tbody>';
-  for(let d=0;d<5;d++){
-    h+='<tr><td class="pd-day">'+DAYS[d]+'</td>';
-    for(let s=0;s<5;s++){
-      if(s===3){h+='<td class="pd-bk">Break</td>';continue;}
-      const cell=grid[d][s];
-      h+='<td>'+pdCell(cell.subj,cell.teacher,cell.dual)+'</td>';
-    }
-    h+='</tr>';
-  }
-  return h+'</tbody></table>';
-}
-function pdSectionBlock(sec,grid){
-  return '<div class="pd-sec"><div class="pd-sec-head"><h3>'+esc(sec.label)+'</h3><span>25 periods / week</span></div>'+pdTable(grid,sec.stream)+'</div>';
-}
 function pdFooter(txt){
   return '<div class="pd-footer">IMPCC (H-8) · Intermediate, 1st Shift · '+txt+'</div>';
+}
+function streamHeadHtml(name,secs){
+  return '<div class="stream-head"><span class="swatch"></span><h2>'+esc(name)+'</h2><span class="cnt">'+secs.length+' section'+(secs.length>1?'s':'')+' · '+secs.length*25+' periods/wk</span></div>';
 }
 function buildComboDoc(c){
   let html=pdCover('Weekly Timetable — All Sections','Islamabad Model Postgraduate College of Commerce (H-8) · Intermediate · 1st Shift · ICS & I.Com',pdMeta(c));
   const groups=[{key:'icom',name:'I.Com — Commerce Stream'},{key:'ics',name:'ICS — Computer Science Stream'}];
   groups.forEach((g,gi)=>{
     const secs=SECTIONS.filter(s=>s.stream===g.key);
-    html+='<section class="pd-stream '+g.key+(gi>0?' pd-new':'')+'"><div class="pd-stream-head"><h2>'+g.name+'</h2><span>'+secs.length+' sections · '+secs.length*25+' periods/week</span></div>';
-    for(const sec of secs)html+=pdSectionBlock(sec,c.tt[sec.id]);
-    html+='</section>';
+    html+='<section class="stream '+g.key+(gi?' pd-new':'')+'">'+streamHeadHtml(g.name,secs)+'<div class="sec-grid">';
+    let idx=0;
+    for(const sec of secs)html+=sectionCard(sec,c.tt[sec.id],idx++);
+    html+='</div></section>';
   });
   const list=sortedList(),rank=rankOf(c,list),total=list.length;
   html+=pdFooter('Combination #'+rank+' of '+total+' · shuffle score '+c.score+(c.via==='cpsat'?' · CP-SAT proven-optimal pool':''));
@@ -543,9 +501,10 @@ function buildStreamDoc(c,stream){
   const name=stream==='icom'?'I.Com — Commerce Stream':'ICS — Computer Science Stream';
   const secs=SECTIONS.filter(s=>s.stream===stream);
   let html=pdCover(name,'IMPCC (H-8) · Intermediate · 1st Shift · '+secs.length+' sections · '+secs.length*25+' periods/week',pdMeta(c));
-  html+='<section class="pd-stream '+stream+'">';
-  for(const sec of secs)html+=pdSectionBlock(sec,c.tt[sec.id]);
-  html+='</section>';
+  html+='<section class="stream '+stream+'">'+streamHeadHtml(name,secs)+'<div class="sec-grid">';
+  let idx=0;
+  for(const sec of secs)html+=sectionCard(sec,c.tt[sec.id],idx++);
+  html+='</div></section>';
   const list=sortedList(),rank=rankOf(c,list),total=list.length;
   html+=pdFooter(name+' · Combination #'+rank+' of '+total+' · shuffle score '+c.score);
   return html;
@@ -554,7 +513,7 @@ function buildSectionDoc(c,secId){
   const sec=SECTIONS.find(s=>s.id===secId);
   const st=sec.stream==='icom'?'I.Com — Commerce Stream':'ICS — Computer Science Stream';
   let html=pdCover(sec.label,st+' · 25 periods/week',pdMeta(c));
-  html+='<section class="pd-stream '+sec.stream+'">'+pdSectionBlock(sec,c.tt[secId])+'</section>';
+  html+='<section class="stream '+sec.stream+'"><div class="sec-grid">'+sectionCard(sec,c.tt[secId],0)+'</div></section>';
   const list=sortedList(),rank=rankOf(c,list),total=list.length;
   html+=pdFooter(esc(sec.label)+' · Combination #'+rank+' of '+total+' · shuffle score '+c.score);
   return html;
@@ -567,46 +526,24 @@ function buildTeacherDoc(c,name){
   const busiest=entries.length?DAYS[dayCnt.indexOf(Math.max.apply(null,dayCnt))]:'—';
   const fav=entries.length?SLOTS[slotCnt.indexOf(Math.max.apply(null,slotCnt))]:'—';
   const freeDays=dayCnt.filter(x=>x===0).length;
+  const hasDual=entries.some(e=>e.dual);
+  const list=sortedList(),rank=rankOf(c,list),total=list.length;
 
   let html=pdCover(name+' — Personal Timetable','IMPCC (H-8) · Intermediate · 1st Shift · '+entries.length+' periods/week · '+secSet.size+' section'+(secSet.size===1?'':'s'),pdMeta(c));
-  html+='<div class="pd-tstats">'+
-    '<div class="pd-stat"><b>'+entries.length+'</b><span>periods / week</span></div>'+
-    '<div class="pd-stat"><b>'+secSet.size+'</b><span>sections</span></div>'+
-    '<div class="pd-stat"><b>'+busiest+'</b><span>busiest day</span></div>'+
-    '<div class="pd-stat"><b>'+fav+'</b><span>favourite slot</span></div>'+
-    '<div class="pd-stat"><b>'+freeDays+'</b><span>free day'+(freeDays===1?'':'s')+'</span></div>'+
+  html+='<div class="sp-stats">'+
+    '<div class="stat"><b>'+entries.length+'</b><span>periods / wk</span></div>'+
+    '<div class="stat"><b>'+secSet.size+'</b><span>sections</span></div>'+
+    '<div class="stat"><b>'+busiest+'</b><span>busiest day</span></div>'+
+    '<div class="stat"><b>'+fav+'</b><span>favourite slot</span></div>'+
   '</div>';
-  if(cons)html+='<div class="pd-tcons">⚑ '+esc(cons.text)+' — satisfied by the solver in this combination</div>';
-
-  const m={};entries.forEach(e=>{m[e.d+'_'+e.s]=e;});
-  html+='<table class="pd-table"><thead><tr><th class="pd-dayh">Week</th>';
-  for(let i=0;i<3;i++)html+='<th>Period-'+(i+1)+'<span>'+TIMES[i]+'</span></th>';
-  html+='<th class="pd-bkh">Break<span>10:30–10:55</span></th>';
-  for(let i=3;i<5;i++)html+='<th>Period-'+(i+1)+'<span>'+TIMES[i]+'</span></th>';
-  html+='</tr></thead><tbody>';
-  for(let d=0;d<5;d++){
-    html+='<tr><td class="pd-day">'+DAYS[d]+'</td>';
-    for(let s=0;s<5;s++){
-      if(s===3){html+='<td class="pd-bk">Break</td>';continue;}
-      const e=m[d+'_'+s];
-      if(e)html+='<td><div class="pd-cell'+(e.dual?' pd-dual':'')+'"><span class="pd-subj">'+esc(e.subj)+'</span><span class="pd-tchr">'+esc(e.sec)+'</span></div></td>';
-      else html+='<td><div class="pd-free">·</div></td>';
-    }
-    html+='</tr>';
-  }
-  html+='</tbody></table>';
-
-  const groups={};entries.forEach(e=>{const key=e.sec+'|'+e.subj;(groups[key]=groups[key]||[]).push(e);});
-  const secOrder={};SECTIONS.forEach((s,i)=>{secOrder[s.id]=i;});
-  const keys=Object.keys(groups).sort((a,b)=>secOrder[a.split('|')[0]]-secOrder[b.split('|')[0]]);
-  html+='<h4 class="pd-subh">Courses taught</h4>';
-  keys.forEach(key=>{
-    const sec=key.split('|')[0],subj=key.slice(sec.length+1);
-    const l=groups[key];
-    html+='<div class="pd-course"><b>'+esc(subj)+'</b><span class="pd-cmeta"> · '+esc(sec)+' · '+l.length+'×/week</span><span class="pd-chips"> · '+l.map(e=>DAYS[e.d]+' '+SLOTS[e.s]).join(' · ')+'</span></div>';
-  });
-
-  const list=sortedList(),rank=rankOf(c,list),total=list.length;
+  html+='<div class="sp-block-title">Personal weekly grid <span>— where '+esc(name)+' teaches in this combination ('+freeDays+' free day'+(freeDays===1?'':'s')+')</span></div>';
+  html+='<div class="sp-gridwrap">'+spotlightGrid(entries)+'</div>';
+  if(hasDual)html+='<div class="sp-note">⇄ Includes the shared “Economics / Statistics” option block in ICS-II-B — taught in parallel rooms with Prof. Naeem Asghar / Prof. Ishfaq Ahmed.</div>';
+  html+='<div class="sp-block-title">Courses taught</div>';
+  html+=spotlightCourses(entries);
+  html+=cons
+    ?'<div class="sp-cons">⚑ '+esc(cons.text)+'<span class="ok">✓ enforced by the solver in this combination</span></div>'
+    :'<div class="sp-cons none">No constraint listed for this faculty member.</div>';
   html+=pdFooter('Personal timetable — '+esc(name)+' · Combination #'+rank+' of '+total+' · shuffle score '+c.score);
   return html;
 }
