@@ -2617,7 +2617,12 @@ function applySwap(){
   if(ev.net===0){
     finishSwap(IMPCC_SOLVER.swapApply(raw,ev.circles),ev.circles,[],ev.constraintViolations);
   }else{
-    document.getElementById('swapResolveMsg').innerHTML='Net disruptions: <b>'+ev.net+'</b> — the moves do not form perfect circles'+(ev.doubleBookings.length?' (or would double-book a teacher)':'')+'. A targeted optimization will close the chains with the fewest extra cells to bring disruptions to 0.';
+    document.getElementById('swapResolveMsg').innerHTML=(function(){
+      let why='';
+      if(ev.vacant.length||ev.conflicts.length)why='The moves do not form perfect circles yet — a targeted optimization will close the chains with the fewest extra cells to bring disruptions to 0.';
+      if(ev.doubleBookings.length)why+=(why?' ':'')+'<b>'+ev.doubleBookings.length+' move(s) would double-book a teacher</b> (landing on a period where they already teach another class) — that part cannot be auto-fixed.';
+      return 'Net disruptions: <b>'+ev.net+'</b> — '+why;
+    })();
     document.getElementById('swapModal').style.display='flex';
   }
 }
@@ -2630,7 +2635,8 @@ function doSwapResolve(){
     finishSwap(IMPCC_SOLVER.swapApply(raw,res.circles),res.circles,res.extraMoves,[]);
     setTicker('Targeted optimization closed the chains — swap applied','ok');
   }else{
-    setTicker('Could not resolve '+res.unresolved.length+' disruption(s) — add more cells to the swap or Clear','err');
+    const left=(res.remainingNet!=null)?res.remainingNet:res.unresolved.length;
+    setTicker('Could not resolve — '+left+' disruption(s) remain (double-booked teachers / constraints). Add more cells to the swap or Clear','err');
   }
 }
 function finishSwap(newtt,circles,extra,warnings){

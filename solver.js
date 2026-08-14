@@ -1362,7 +1362,7 @@
     const all = moves.concat(extraMoves);
     const ev2 = swapEvaluate(timetable, all, R);
     if (ev2.net === 0) return { circles: ev2.circles, extraMoves, resolved: true, unresolved: [] };
-    return { circles: ev2.circles, extraMoves, resolved: false, unresolved, remaining: ev2.doubleBookings.concat(ev2.constraintViolations) };
+    return { circles: ev2.circles, extraMoves, resolved: false, unresolved, remainingNet: ev2.net, remaining: ev2.doubleBookings.concat(ev2.constraintViolations) };
   }
 
   // ------------------------------------------------------------ generate
