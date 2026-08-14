@@ -2730,5 +2730,127 @@ async function clearHistory(){
 rep("/* ---------- boot: restore saved results (no auto-generation) ---------- */",
     CLEAR_MODULE + "/* ---------- boot: restore saved results (no auto-generation) ---------- */")
 
+# ---- 37) masthead: avatar menu + faculty live search + edit-strip fix ---------
+# (a) fix: show the Edit/Re-optimize/Clear/Swap strip on first load too
+rep("    $('btnEditMode').textContent=state.editMode?'✎ Editing…':'✎ Edit';",
+    "    $('btnEditMode').textContent=state.editMode?'✎ Editing…':'✎ Edit';\n    $('editControls').style.display=(state.view==='sections')?'':'none';")
+
+# (b) add the faculty search box to the masthead (before the auth area)
+rep('<div class="mast-auth" id="authUi"></div>',
+    '<div class="mast-search" id="facSearchWrap">\n    <input id="facSearchInput" type="text" placeholder="🔍 Search faculty — live location" autocomplete="off">\n    <div class="fac-drop" id="facDrop"></div>\n  </div>\n  <div class="mast-auth" id="authUi"></div>')
+
+# (c) CSS
+rep("</style>", r'''.mast-search{position:relative;flex:0 1 280px;min-width:190px;display:flex;align-items:center}
+.mast-search input{width:100%;padding:8px 14px;border:1px solid var(--line2);border-radius:99px;font-size:12.5px;background:#fff;color:var(--ink);box-shadow:0 1px 3px rgba(14,59,41,.06)}
+.mast-search input:focus{outline:none;border-color:var(--green);box-shadow:0 0 0 3px var(--green-tint)}
+.fac-drop{position:absolute;top:calc(100% + 6px);left:0;right:0;background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:0 16px 48px rgba(14,59,41,.22);z-index:120;max-height:360px;overflow:auto;display:none}
+.fac-drop.open{display:block}
+.fac-item{padding:9px 12px;border-bottom:1px solid var(--line2);cursor:default}
+.fac-item:last-child{border-bottom:none}
+.fac-item:hover{background:var(--green-tint)}
+.fac-item .fn{font-weight:700;font-size:13px;color:var(--ink)}
+.fac-item .fl{font-size:11px;color:var(--green-deep);margin-top:2px}
+.fac-item .ff{font-size:10.5px;color:var(--ink2);margin-top:2px}
+.fac-item .free{color:var(--ink2);font-style:italic}
+.mast-auth{position:relative}
+.avatar{width:40px;height:40px;border-radius:50%;border:2px solid var(--green);background:var(--green-tint);color:var(--green-deep);font-family:var(--disp);font-weight:900;font-size:16px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex:0 0 auto}
+.avatar:hover{background:var(--green);color:#f0f6ef}
+.avatar-menu{position:absolute;top:calc(100% + 8px);right:0;background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:0 16px 48px rgba(14,59,41,.25);z-index:130;min-width:210px;padding:10px;display:none}
+.avatar-menu.open{display:block}
+.avatar-menu .am-email{font-family:var(--mono);font-size:11px;color:var(--ink2);padding:2px 6px 8px;border-bottom:1px solid var(--line2);margin-bottom:6px;word-break:break-all}
+.avatar-menu .mini-export{width:100%;text-align:left;margin-bottom:4px}
+</style>''')
+
+# (d) module: live-location search + avatar menu
+HEADER_MODULE = r'''/* ---------- masthead: avatar menu + faculty live search ---------- */
+function liveNow(){
+  const now=new Date();
+  const dow=now.getDay();
+  const mins=now.getHours()*60+now.getMinutes();
+  if(dow===0||dow===6)return {day:-1,period:-1,phase:'weekend'};
+  const day=dow-1;
+  const b=[[510,550],[550,590],[590,630],[655,695],[695,735]];
+  if(mins<b[0][0])return {day:day,period:-1,phase:'before'};
+  if(mins>=b[4][1])return {day:day,period:-1,phase:'after'};
+  for(let p=0;p<5;p++){if(mins>=b[p][0]&&mins<b[p][1])return {day:day,period:p,phase:'period'};}
+  return {day:day,period:-1,phase:'break'};
+}
+function teacherEntries(name){
+  const c=getSel();if(!c)return [];
+  return (buildTeacherIndex(c.tt)[name])||[];
+}
+function liveLocationOf(name){
+  const c=getSel();
+  if(!c)return {text:'No timetable selected yet',entries:[]};
+  const entries=teacherEntries(name);
+  if(!entries.length)return {text:'No classes in the selected timetable',entries:[]};
+  const lv=liveNow();
+  if(lv.phase==='weekend')return {text:'Weekend — free',entries:entries};
+  if(lv.phase==='before')return {text:'Free — college hours not started',entries:entries};
+  if(lv.phase==='after')return {text:'Free — college hours over',entries:entries};
+  if(lv.phase==='break')return {text:'Break time — free',entries:entries};
+  for(const e of entries){if(e.d===lv.day&&e.s===lv.period)return {text:'In '+engSecLabel(e.sec)+' — '+e.subj,entries:entries};}
+  return {text:'Free',entries:entries};
+}
+function upcomingFixtures(name){
+  const entries=teacherEntries(name);
+  const lv=liveNow();
+  let cur=0;
+  if(lv.phase!=='weekend')cur=lv.day*5+(lv.period>=0?lv.period+1:0);
+  const sorted=entries.slice().sort(function(a,b){return (a.d*5+a.s)-(b.d*5+b.s);});
+  const up=sorted.filter(function(e){return (e.d*5+e.s)>=cur;});
+  return (up.length?up:sorted).slice(0,4);
+}
+function renderFacDrop(){
+  const inp=document.getElementById('facSearchInput');
+  const drop=document.getElementById('facDrop');
+  if(!inp||!drop)return;
+  const q=(inp.value||'').trim().toLowerCase();
+  if(!q){drop.classList.remove('open');drop.innerHTML='';return;}
+  const names=facultyNames().filter(function(n){return n.toLowerCase().indexOf(q)>=0;}).slice(0,8);
+  if(!names.length){drop.innerHTML='<div class="fac-item"><span class="free">No faculty match “'+esc(q)+'”</span></div>';drop.classList.add('open');return;}
+  let h='';
+  for(const nm of names){
+    const loc=liveLocationOf(nm);
+    const up=upcomingFixtures(nm);
+    h+='<div class="fac-item">'+
+      '<div class="fn">'+esc(nm)+'</div>'+
+      '<div class="fl">🕒 '+esc(loc.text)+'</div>'+
+      '<div class="ff">'+(up.length?('▶ '+up.map(function(e){return DAYS[e.d]+' '+SLOTS[e.s]+' · '+esc(e.subj)+' ('+esc(engSecLabel(e.sec))+')';}).join(' · ')):'No upcoming classes')+'</div>'+
+      '</div>';
+  }
+  drop.innerHTML=h;
+  drop.classList.add('open');
+}
+function renderAuth(){
+  const el=document.getElementById('authUi');if(!el)return;
+  if(SB&&SB.loggedIn){
+    const initial=((SB.user&&SB.user.email)||'A').charAt(0).toUpperCase();
+    el.innerHTML='<button class="avatar" id="avatarBtn" title="Account">'+esc(initial)+'</button><div class="avatar-menu" id="avatarMenu"><div class="am-email">'+esc((SB.user&&SB.user.email)||'')+'</div><button class="mini-export" id="authSignOut">Sign out</button></div>';
+    document.getElementById('avatarBtn').addEventListener('click',function(e){e.stopPropagation();document.getElementById('avatarMenu').classList.toggle('open');});
+    document.getElementById('authSignOut').addEventListener('click',function(){SB.logout().then(function(){state.savedList=[];state.history=[];state.source=null;renderAuth();renderChrome();setTicker('Signed out — local data only','ok');});});
+  }else{
+    el.innerHTML='<button class="avatar" id="avatarBtn" title="Sign in">👤</button><div class="avatar-menu" id="avatarMenu"><div class="am-email">Not signed in</div><button class="mini-export" id="authSignIn">Sign in</button></div>';
+    document.getElementById('avatarBtn').addEventListener('click',function(e){e.stopPropagation();document.getElementById('avatarMenu').classList.toggle('open');});
+    document.getElementById('authSignIn').addEventListener('click',function(){document.getElementById('authModal').style.display='flex';});
+  }
+}
+(function wireHeader(){
+  const inp=document.getElementById('facSearchInput');
+  if(inp){inp.addEventListener('input',renderFacDrop);inp.addEventListener('focus',renderFacDrop);}
+  document.addEventListener('click',function(e){
+    const drop=document.getElementById('facDrop');
+    const wrap=document.getElementById('facSearchWrap');
+    if(drop&&wrap&&!wrap.contains(e.target))drop.classList.remove('open');
+    const menu=document.getElementById('avatarMenu');
+    const auth=document.getElementById('authUi');
+    if(menu&&auth&&!auth.contains(e.target))menu.classList.remove('open');
+  });
+})();
+
+'''
+rep("/* ---------- boot: restore saved results (no auto-generation) ---------- */",
+    HEADER_MODULE + "/* ---------- boot: restore saved results (no auto-generation) ---------- */")
+
 io.open(DST, "w", encoding="utf-8").write(src)
 print("OK → wrote", DST, "(", len(src), "bytes )")
