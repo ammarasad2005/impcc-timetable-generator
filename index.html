@@ -505,14 +505,16 @@ footer b{color:var(--green)}
   .wrap{padding:14px 12px 44px}
   footer{padding:0 14px 30px;font-size:10px}
 
-  /* masthead: original light background; compact; avatar pinned to the logo line */
-  .mast{padding:12px 12px 10px;gap:10px;align-items:center}
-  .mast .logo{width:44px;height:44px;flex:0 0 auto}
+  /* masthead: dark green band, a few shades lighter */
+  .mast{max-width:none;margin:0;padding:14px 14px 12px;gap:10px;align-items:center;background:linear-gradient(180deg,#27553c 0%,#1c3e2c 100%);border-bottom:3px solid var(--amber);box-shadow:0 4px 14px rgba(10,20,14,.18)}
+  .mast .logo{width:44px;height:44px;flex:0 0 auto;filter:drop-shadow(0 3px 8px rgba(0,0,0,.35))}
   .mast-txt{flex:1 1 0%;min-width:0}
   .mast-auth{margin-left:auto;flex:0 0 auto;align-self:center}
-  .overline{font-size:8px;letter-spacing:.14em}
-  .mast h1{font-size:clamp(18px,6.2vw,26px);line-height:1.08;margin:1px 0 3px}
-  .sub{font-size:11px}
+  .overline{font-size:8px;letter-spacing:.14em;color:#9db5a8}
+  .mast h1{font-size:clamp(18px,6.2vw,26px);line-height:1.08;margin:1px 0 3px;color:#f2f7f3}
+  .mast h1 em{color:var(--amber)}
+  .sub{font-size:11px;color:#b9c9bf}
+  .avatar{border-color:rgba(255,255,255,.6)}
 
   .mast-search{flex:1 1 100%;order:10;min-width:0;margin-top:8px;background:linear-gradient(135deg,var(--amber),var(--amber-deep));border:2px solid var(--green-deep);border-radius:99px;padding:3px;box-shadow:0 3px 10px rgba(138,98,16,.25)}
   .mast-search input{font-size:13px;padding:9px 15px;border:1px solid transparent;background:#fff;box-shadow:none}
