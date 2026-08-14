@@ -948,6 +948,255 @@
     return out;
   }
 
+  // ------------------------------------------------------------ engagement
+  // Deterministic substitute engine ("engage the slot").
+  //
+  // Given a concrete timetable (the toTimetable() form), the resolved constraints
+  // and a list of unavailable windows { teacher, days?, slots? }, it finds — for
+  // every cell whose slot holder is unavailable in that window — an "engaging
+  // professor" (substitute) who satisfies ALL of:
+  //   1. is NOT the slot holder (and not otherwise unavailable),
+  //   2. has NO class of his own in that day+period (no double-booking), and
+  //   3. satisfies his own availability constraints for that day+period
+  //      (allowed/forbidden days & slots, and forbidden_slots_on_days).
+  //
+  // Coverage is MAXIMISED with an exact maximum bipartite matching per day×period
+  // position (a professor can only be in one room at a time), while the cover load
+  // is spread across the faculty (less-loaded teachers are preferred). Cells with
+  // no eligible substitute are reported in `uncovered` rather than double-booked.
+  function codesOfFullName(name) {
+    if (!name) return [];
+    return String(name).split(" / ").map(function (n) {
+      return NAME_TO_CODE[n] || n.trim();
+    });
+  }
+  function _normIdx(v, map, all) {
+    if (v == null) return all.slice();
+    const out = [];
+    for (const x of v) {
+      if (typeof x === "number") out.push(x);
+      else if (map[x] != null) out.push(map[x]);
+    }
+    return out;
+  }
+  function substituteEligible(code, d, s, R) {
+    const r = (R && R[code] && R[code].rules) || {};
+    if (r.allowed_slots && !_slotSet(r.allowed_slots).has(s)) return false;
+    if (r.forbidden_slots && _slotSet(r.forbidden_slots).has(s)) return false;
+    if (r.allowed_days && !_daySet(r.allowed_days).has(d)) return false;
+    if (r.forbidden_days && _daySet(r.forbidden_days).has(d)) return false;
+    if (r.forbidden_slots_on_days) {
+      for (const e of r.forbidden_slots_on_days) {
+        if (_daySet(e.days).has(d) && _slotSet(e.slots).has(s)) return false;
+      }
+    }
+    return true;
+  }
+  function engage(timetable, R, unavailable, opts) {
+    R = R || resolveConstraints();
+    opts = opts || {};
+    const secKeys = Object.keys(timetable || {});
+    // Substitute pool: default to the college roster; `opts.roster` REPLACES it
+    // (so callers can pass a custom pool, e.g. directory faculty or a test subset).
+    let roster;
+    if (Array.isArray(opts.roster)) {
+      roster = [];
+      for (const nm of opts.roster) {
+        const c = NAME_TO_CODE[nm] || String(nm);
+        if (roster.indexOf(c) < 0) roster.push(c);
+      }
+    } else {
+      roster = [];
+      for (const code in TEACHER_FULL) if (code !== "PARALLEL") roster.push(code);
+    }
+
+    // 1) blocked (teacher,day,slot) triples from the unavailable windows
+    const blocked = {};
+    for (const w of (unavailable || [])) {
+      if (!w || !w.teacher) continue;
+      const codes = codesOfFullName(w.teacher);
+      const days = _normIdx(w.days, DAY_OF, [0, 1, 2, 3, 4]);
+      const slots = _normIdx(w.slots, SLOT_OF, [0, 1, 2, 3, 4]);
+      for (const c of codes) for (const d of days) for (const s of slots)
+        blocked[c + "|" + d + "|" + s] = true;
+    }
+
+    // 2) who is busy at each day×slot (their own class)
+    const busy = {};
+    function markBusy(d, s, code) {
+      const k = d + "|" + s;
+      (busy[k] = busy[k] || new Set()).add(code);
+    }
+    for (const sec of secKeys) {
+      const g = timetable[sec];
+      if (!g) continue;
+      for (let d = 0; d < 5; d++) for (let s = 0; s < 5; s++) {
+        const cell = g[d] && g[d][s];
+        if (!cell) continue;
+        for (const c of codesOfFullName(cell[1])) markBusy(d, s, c);
+      }
+    }
+
+    // 3) affected cells (slot holder unavailable at that day+period)
+    const affected = [];
+    for (const sec of secKeys) {
+      const g = timetable[sec];
+      if (!g) continue;
+      for (let d = 0; d < 5; d++) for (let s = 0; s < 5; s++) {
+        const cell = g[d] && g[d][s];
+        if (!cell) continue;
+        const codes = codesOfFullName(cell[1]);
+        const hit = codes.some(function (c) { return blocked[c + "|" + d + "|" + s]; });
+        if (hit) affected.push({ sec: sec, d: d, s: s, subj: cell[0], teacher: cell[1], codes: codes });
+      }
+    }
+
+    // 4) group affected cells by day×slot position, in a deterministic order
+    const byPos = {};
+    for (const a of affected) {
+      const k = a.d + "|" + a.s;
+      (byPos[k] = byPos[k] || []).push(a);
+    }
+    const positions = Object.keys(byPos).sort(function (a, b) {
+      const pa = a.split("|").map(Number), pb = b.split("|").map(Number);
+      return pa[0] - pb[0] || pa[1] - pb[1];
+    });
+
+    const load = {};   // code -> total covers assigned so far (for spreading)
+
+    function candidateOrder(d, s, cellCodes) {
+      const list = [];
+      const busyHere = busy[d + "|" + s] || new Set();
+      for (const code of roster) {
+        if (busyHere.has(code)) continue;            // has own class in this slot
+        if (blocked[code + "|" + d + "|" + s]) continue; // himself unavailable here
+        if (cellCodes.indexOf(code) >= 0) continue;  // is the slot holder
+        if (!substituteEligible(code, d, s, R)) continue;  // own constraints
+        list.push(code);
+      }
+      list.sort(function (a, b) {
+        const la = load[a] || 0, lb = load[b] || 0;
+        if (la !== lb) return la - lb;
+        const na = TEACHER_FULL[a] || a, nb = TEACHER_FULL[b] || b;
+        return na < nb ? -1 : na > nb ? 1 : 0;
+      });
+      return list;
+    }
+
+    // Exact maximum matching at one position (Kuhn's augmenting path)
+    function maxMatch(cells) {
+      const candPerCell = cells.map(function (cell) {
+        return candidateOrder(cell.d, cell.s, cell.codes);
+      });
+      const taken = {};      // code -> cell index
+      function tryK(cellIdx, seen) {
+        for (let ci = 0; ci < candPerCell[cellIdx].length; ci++) {
+          const code = candPerCell[cellIdx][ci];
+          if (seen.has(code)) continue;
+          seen.add(code);
+          if (!(code in taken) || tryK(taken[code], seen)) {
+            taken[code] = cellIdx;
+            return true;
+          }
+        }
+        return false;
+      }
+      // match the most-constrained cells first (MRV) for a provably maximum match
+      const order = cells.map(function (_, i) { return i; }).sort(function (a, b) {
+        return candPerCell[a].length - candPerCell[b].length;
+      });
+      for (const i of order) {
+        if (candPerCell[i].length) tryK(i, new Set());
+      }
+      return taken; // code -> cell index
+    }
+
+    const assignments = [];
+    const uncovered = [];
+    for (const k of positions) {
+      const cells = byPos[k];
+      const m = maxMatch(cells);
+      for (let i = 0; i < cells.length; i++) {
+        const cell = cells[i];
+        let coverCode = null;
+        for (const code in m) if (m[code] === i) { coverCode = code; break; }
+        if (coverCode != null) {
+          load[coverCode] = (load[coverCode] || 0) + 1;
+          assignments.push({ sec: cell.sec, d: cell.d, s: cell.s, subj: cell.subj,
+            teacher: cell.teacher, cover: TEACHER_FULL[coverCode] || coverCode, coverCode: coverCode });
+        } else {
+          uncovered.push({ sec: cell.sec, d: cell.d, s: cell.s, subj: cell.subj, teacher: cell.teacher });
+        }
+      }
+    }
+
+    return {
+      affected: affected,
+      assignments: assignments,
+      uncovered: uncovered,
+      covered: assignments.length,
+      total: affected.length,
+      load: load
+    };
+  }
+
+  function validateEngagement(timetable, R, assignments, unavailable) {
+    R = R || resolveConstraints();
+    const issues = [];
+    // a cover must not himself be unavailable at that day+period
+    const blocked = {};
+    for (const w of (unavailable || [])) {
+      if (!w || !w.teacher) continue;
+      const codes = codesOfFullName(w.teacher);
+      const days = _normIdx(w.days, DAY_OF, [0, 1, 2, 3, 4]);
+      const slots = _normIdx(w.slots, SLOT_OF, [0, 1, 2, 3, 4]);
+      for (const c of codes) for (const d of days) for (const s of slots)
+        blocked[c + "|" + d + "|" + s] = true;
+    }
+    const busy = {};
+    function markBusy(d, s, code) {
+      const k = d + "|" + s;
+      (busy[k] = busy[k] || new Set()).add(code);
+    }
+    for (const sec of Object.keys(timetable || {})) {
+      const g = timetable[sec];
+      if (!g) continue;
+      for (let d = 0; d < 5; d++) for (let s = 0; s < 5; s++) {
+        const cell = g[d] && g[d][s];
+        if (!cell) continue;
+        for (const c of codesOfFullName(cell[1])) markBusy(d, s, c);
+      }
+    }
+    const atPos = {};
+    for (const a of (assignments || [])) {
+      const k = a.d + "|" + a.s;
+      (atPos[k] = atPos[k] || []).push(a);
+    }
+    for (const a of (assignments || [])) {
+      const coverCode = a.coverCode || NAME_TO_CODE[a.cover] || a.cover;
+      const busyHere = busy[a.d + "|" + a.s] || new Set();
+      const original = codesOfFullName(a.teacher);
+      if (original.indexOf(coverCode) >= 0)
+        issues.push(a.sec + " " + DAYS[a.d] + " " + SLOTS[a.s] + ": cover is the slot holder");
+      if (busyHere.has(coverCode))
+        issues.push(a.sec + " " + DAYS[a.d] + " " + SLOTS[a.s] + ": cover " + a.cover + " has own class in that slot");
+      if (blocked[coverCode + "|" + a.d + "|" + a.s])
+        issues.push(a.sec + " " + DAYS[a.d] + " " + SLOTS[a.s] + ": cover " + a.cover + " is himself unavailable then");
+      if (!substituteEligible(coverCode, a.d, a.s, R))
+        issues.push(a.sec + " " + DAYS[a.d] + " " + SLOTS[a.s] + ": cover " + a.cover + " violates own constraints");
+    }
+    for (const k in atPos) {
+      const seen = new Set();
+      for (const a of atPos[k]) {
+        const coverCode = a.coverCode || NAME_TO_CODE[a.cover] || a.cover;
+        if (seen.has(coverCode))
+          issues.push(DAYS[a.d] + " " + SLOTS[a.s] + ": cover " + a.cover + " assigned twice at the same period");
+        seen.add(coverCode);
+      }
+    }
+    return issues;
+  }
+
   // ------------------------------------------------------------ generate
   let _Key = null, _STATIC = null;
   function generate(opts) {
@@ -1001,6 +1250,7 @@
     DAYS, SLOTS, SECTIONS, TEACHER_FULL, RULES, UNITS,
     SLOT_OF, DAY_OF, DEFAULT_CONSTRAINTS, NAME_TO_CODE, resolveConstraints,
     DEFAULT_SECTIONS, normalizeSections, buildUnits,
-    generate, validate, score, canonical, toTimetable, locksOk
+    generate, validate, score, canonical, toTimetable, locksOk,
+    engage, validateEngagement, codesOfFullName, substituteEligible
   };
 });

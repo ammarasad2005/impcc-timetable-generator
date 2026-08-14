@@ -80,6 +80,9 @@ python3 make_report.py        # builds compliance_report.md
 | `export_xlsx.py` | Offline: builds `timetables.xlsx` in the college's template layout. |
 | `metrics.py`, `make_report.py` | Offline: shuffle metrics + `compliance_report.md`. |
 | `test_solver.js` | Node test harness for `solver.js`. |
+| `test_engagement.js` | Node tests for the engagement (substitute) engine — 37 assertions. |
+| `test_engagement_fuzz.js` | Engagement edge cases + randomized property/fuzz sweep. |
+| `engagement_schema.md` | Spec for the substitute ("engage the slot") engine. |
 
 ---
 
@@ -257,5 +260,12 @@ since the PNGs are already compressed) — validated against Python's `zipfile`.
   or **forbid** (remove a lecture) it; **Re-optimize** re-runs the solver honouring every
   edit and returns the best valid combinations (sections stay full — a removed lecture is
   redistributed, not left empty).
+- **👥 Engagement** — when a slot holder is unavailable (a `Teacher away` tweak for a whole
+  day or a few periods), the Engagement tab finds an **engaging professor** for each
+  affected period of the selected combination. A cover must have **no class of his own**
+  in that slot, must **satisfy his own constraints**, coverage is **maximised** (exact
+  matching per day×period) and the load is spread across the faculty. Affected cells are
+  ringed and badged in the Sections grid; the plan exports as `IMPCC_engagement-plan.csv`.
+  See `engagement_schema.md`.
 - Tweaks sync to Supabase (`published.tweaks`) so they affect every visitor; manual edits
   are session-local.

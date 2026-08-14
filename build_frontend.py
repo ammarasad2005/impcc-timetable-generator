@@ -2141,5 +2141,170 @@ rep("btnUnpush.addEventListener('click',unpushCurrent);",
 rep("/* ---------- boot: restore saved results (no auto-generation) ---------- */",
     TWEAK_MODULE + "/* ---------- boot: restore saved results (no auto-generation) ---------- */")
 
+# ---- 31) engagement (substitute covers for unavailable slot holders) ---------
+ENGAGE_CSS = r'''/* ---------- engagement (substitute covers) ---------- */
+.eng-badge{position:absolute;right:3px;bottom:2px;font-family:var(--mono);font-size:8px;line-height:1;padding:2px 4px;border-radius:4px;pointer-events:none;max-width:88%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.eng-cov{background:var(--green-tint);color:var(--green-deep);border:1px solid var(--green)}
+.eng-noc{background:var(--amber-tint);color:var(--amber-deep);border:1px solid var(--amber)}
+.tg-cell.eng-covered{box-shadow:inset 0 0 0 2px var(--green)}
+.tg-cell.eng-uncovered{box-shadow:inset 0 0 0 2px var(--amber)}
+.eng-summary{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:14px}
+.eng-summary .stat{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 18px;text-align:center;min-width:118px}
+.eng-summary .stat b{display:block;font-family:var(--disp);font-weight:900;font-size:26px;color:var(--green-deep)}
+.eng-summary .stat span{font-family:var(--mono);font-size:10px;color:var(--ink2)}
+.eng-summary .stat.warn b{color:var(--amber-deep)}
+.eng-warn{background:var(--amber-tint);border:1px solid var(--amber);color:var(--amber-deep);border-radius:10px;padding:10px 14px;font-size:12.5px;margin-bottom:14px}
+.eng-groups{display:flex;flex-direction:column;gap:12px}
+.eng-group{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 16px}
+.eng-group h4{font-family:var(--disp);font-weight:700;font-size:14px;margin:0 0 8px;color:var(--ink)}
+.eng-rows{display:flex;flex-direction:column;gap:5px}
+.eng-row{display:grid;grid-template-columns:150px minmax(0,1.3fr) minmax(0,1fr) 26px minmax(0,1.3fr);gap:8px;align-items:center;font-size:12px;padding:6px 8px;border:1px solid var(--line2);border-radius:8px}
+.eng-row .eng-sec{font-family:var(--mono);font-size:10.5px;color:var(--ink2)}
+.eng-row .eng-subj{font-weight:600;color:var(--ink)}
+.eng-row .eng-teacher{color:var(--ink2)}
+.eng-row .eng-arrow{color:var(--line2);text-align:center}
+.eng-row .eng-cover{color:var(--green-deep);font-weight:600}
+.eng-row .eng-cover.none{color:var(--amber-deep)}
+.eng-row.uncovered{border-color:var(--amber);background:var(--amber-tint)}
+'''
+rep("</style>", ENGAGE_CSS + "</style>")
+
+# (a) viewbar: Engagement tab after Tweaks
+rep('<button id="viewTweaks">🛠 Tweaks</button>',
+    '<button id="viewTweaks">🛠 Tweaks</button>\n      <button id="viewEngagement">👥 Engagement</button>')
+# (b) listener
+rep("$('viewTweaks').addEventListener('click',()=>setView('tweaks'));",
+    "$('viewTweaks').addEventListener('click',()=>setView('tweaks'));\n$('viewEngagement').addEventListener('click',()=>setView('engagement'));")
+# (c) setView toggle
+rep("  $('viewTweaks').classList.toggle('on',v==='tweaks');",
+    "  $('viewTweaks').classList.toggle('on',v==='tweaks');\n  $('viewEngagement').classList.toggle('on',v==='engagement');")
+# (d) renderMain dispatch
+rep("  if(state.view==='tweaks'){renderTweaks();return;}",
+    "  if(state.view==='tweaks'){renderTweaks();return;}\n  if(state.view==='engagement'){renderEngagement();return;}")
+# (e) decorate cells right after the sections grid renders
+rep("if(state.view==='sections')renderSections(c.tt);else renderTeachers(c.tt);\n}",
+    "if(state.view==='sections')renderSections(c.tt);else renderTeachers(c.tt);\n  decorateEngagement();\n}")
+
+ENGAGE_MODULE = r'''/* ---------- engagement (substitute covers for unavailable slot holders) ---------- */
+let engCache=null;
+function engagementUnavailable(){
+  const all=['P1','P2','P3','P4','P5'];
+  const out=[];
+  for(const t of activeTweaks()){
+    const e=t.effect||{};
+    if(e.type!=='suspend_teacher'&&e.type!=='suspend_teacher_slots')continue;
+    if(!e.teacher)continue;
+    const days=tweakActiveDays(t);
+    if(!days.length)continue;
+    out.push({teacher:e.teacher,days:days,slots:(e.slots&&e.slots.length)?e.slots:all});
+  }
+  return out;
+}
+function engagementPlan(){
+  const c=getSel();
+  const una=engagementUnavailable();
+  if(!c||!una.length)return null;
+  const key=c.id+'|'+JSON.stringify(una)+'|'+JSON.stringify(state.constraints||null);
+  if(engCache&&engCache.key===key)return engCache.plan;
+  const raw={};
+  for(const k in c.tt)raw[k]=c.tt[k].map(function(r){return r.map(function(x){return [x.subj,x.teacher];});});
+  const plan=IMPCC_SOLVER.engage(raw,effectiveConstraints(),una,{roster:facultyNames()});
+  engCache={key:key,plan:plan};
+  return plan;
+}
+function decorateEngagement(){
+  const plan=engagementPlan();
+  if(!plan)return;
+  const els=document.querySelectorAll('.tg-cell[data-sec]');
+  const m={};
+  for(const a of plan.assignments)m[a.sec+'|'+a.d+'|'+a.s]={cover:a.cover};
+  for(const u of plan.uncovered)m[u.sec+'|'+u.d+'|'+u.s]={cover:null};
+  for(const el of els){
+    const k=el.dataset.sec+'|'+el.dataset.d+'|'+el.dataset.s;
+    const info=m[k];
+    const old=el.querySelector('.eng-badge');
+    if(old)old.remove();
+    el.classList.remove('eng-covered','eng-uncovered');
+    if(!info)continue;
+    if(info.cover){
+      el.classList.add('eng-covered');
+      const b=document.createElement('span');b.className='eng-badge eng-cov';b.textContent='👥 '+info.cover;
+      el.appendChild(b);
+    }else{
+      el.classList.add('eng-uncovered');
+      const b=document.createElement('span');b.className='eng-badge eng-noc';b.textContent='⚠ no cover';
+      el.appendChild(b);
+    }
+  }
+}
+function renderEngagement(){
+  const signedIn=SB&&SB.loggedIn;
+  const una=engagementUnavailable();
+  let h='<div class="cons-note"><b>Engagement.</b> When a slot holder is unavailable (an active <b>Teacher away</b> tweak — whole day or a few periods), this finds an <b>engaging professor</b> for each affected period of the selected combination. A cover must have <b>no class of his own</b> in that period and must <b>satisfy his own constraints</b>; coverage is maximised and the load is spread across the faculty. '+(signedIn?'Manage unavailability in the <b>🛠 Tweaks</b> tab.':'<b style="color:var(--amber-deep)">🔒 Sign in to manage tweaks.</b>')+'</div>';
+  const c=getSel();
+  if(!una.length){
+    h+='<div class="empty"><div class="eic">👥</div><h3>No active unavailability</h3><p>Add a “Teacher away” tweak — for a whole day or for specific periods — and this view will show who engages each affected period.</p></div>';
+    mainEl.innerHTML=h;return;
+  }
+  const plan=engagementPlan();
+  if(!plan||!c){
+    h+='<div class="empty"><div class="eic">🧩</div><h3>Generate a combination first</h3><p>Engagement is computed on the currently selected timetable.</p></div>';
+    mainEl.innerHTML=h;return;
+  }
+  h+='<div class="eng-summary">'+
+    '<div class="stat"><b>'+plan.total+'</b><span>periods affected</span></div>'+
+    '<div class="stat"><b>'+plan.covered+'</b><span>engaged</span></div>'+
+    '<div class="stat'+(plan.uncovered.length?' warn':'')+'"><b>'+plan.uncovered.length+'</b><span>no cover available</span></div>'+
+    '</div>';
+  if(plan.uncovered.length){
+    h+='<div class="eng-warn">⚠ '+plan.uncovered.length+' period'+(plan.uncovered.length===1?'':'s')+' could not be engaged — every eligible professor is either teaching in that period or unavailable himself. Consider adding faculty or narrowing the tweak.</div>';
+  }
+  h+='<div style="text-align:right;margin-bottom:10px"><button class="mini-export" id="engCsv">⇩ Export engagement plan (CSV)</button></div>';
+  const dayOrder=['MON','TUE','WED','THU','FRI'];
+  const slotOrder=['P1','P2','P3','P4','P5'];
+  const grouped={};
+  for(const a of plan.assignments){const k=DAYS[a.d]+' '+SLOTS[a.s];(grouped[k]=grouped[k]||[]).push({sec:a.sec,subj:a.subj,teacher:a.teacher,cover:a.cover});}
+  for(const u of plan.uncovered){const k=DAYS[u.d]+' '+SLOTS[u.s];(grouped[k]=grouped[k]||[]).push({sec:u.sec,subj:u.subj,teacher:u.teacher,cover:null});}
+  const keys=Object.keys(grouped).sort(function(a,b){const pa=a.split(' '),pb=b.split(' ');return dayOrder.indexOf(pa[0])-dayOrder.indexOf(pb[0])||slotOrder.indexOf(pa[1])-slotOrder.indexOf(pb[1]);});
+  h+='<div class="eng-groups">';
+  for(const k of keys){
+    h+='<section class="eng-group"><h4>'+esc(k)+'</h4><div class="eng-rows">';
+    for(const a of grouped[k]){
+      h+='<div class="eng-row'+(a.cover?'':' uncovered')+'">'+
+        '<span class="eng-sec">'+esc(a.sec)+'</span>'+
+        '<span class="eng-subj">'+esc(a.subj)+'</span>'+
+        '<span class="eng-teacher">'+esc(a.teacher)+'</span>'+
+        '<span class="eng-arrow">→</span>'+
+        (a.cover?'<span class="eng-cover">👥 '+esc(a.cover)+'</span>':'<span class="eng-cover none">⚠ no free professor</span>')+
+        '</div>';
+    }
+    h+='</div></section>';
+  }
+  h+='</div>';
+  mainEl.innerHTML=h;
+  const btn=document.getElementById('engCsv');
+  if(btn)btn.addEventListener('click',exportEngagementCSV);
+}
+function exportEngagementCSV(){
+  const plan=engagementPlan();
+  if(!plan){setTicker('No engagement plan to export','err');return;}
+  const rows=[['Section','Day','Period','Subject','Slot holder','Engaging professor','Status']];
+  for(const a of plan.assignments)rows.push([a.sec,DAYS[a.d],SLOTS[a.s],a.subj,a.teacher,a.cover,'engaged']);
+  for(const u of plan.uncovered)rows.push([u.sec,DAYS[u.d],SLOTS[u.s],u.subj,u.teacher,'','UNCOVERED']);
+  downloadCSV('IMPCC_engagement-plan.csv',rows);
+  setTicker('Exported engagement plan (CSV)','ok');
+}
+
+'''
+rep("/* ---------- boot: restore saved results (no auto-generation) ---------- */",
+    ENGAGE_MODULE + "/* ---------- boot: restore saved results (no auto-generation) ---------- */")
+
+# ---- 32) sync tweaks to/from the published cloud state ----------------------
+# (engagement is driven by tweaks, so they must travel with the published data)
+rep("SB.savePublished(state.allocation||defaultAllocation(),state.constraints||{},getFaculty())",
+    "SB.savePublished(state.allocation||defaultAllocation(),state.constraints||{},getFaculty(),state.tweaks||[])")
+rep("      if(Array.isArray(pub.faculty)&&pub.faculty.length){state.faculty=pub.faculty;saveFacultyLocal();}",
+    "      if(Array.isArray(pub.faculty)&&pub.faculty.length){state.faculty=pub.faculty;saveFacultyLocal();}\n      if(Array.isArray(pub.tweaks)){state.tweaks=pub.tweaks;try{localStorage.setItem(TWEAK_KEY,JSON.stringify(state.tweaks));}catch(e){}}")
+
 io.open(DST, "w", encoding="utf-8").write(src)
 print("OK → wrote", DST, "(", len(src), "bytes )")

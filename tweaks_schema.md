@@ -87,7 +87,16 @@ redistributed, not deleted).
 > leave an empty slot. If a genuinely empty period is wanted (no cover available), that is
 > an allocation change (lower the subject's weekly periods in the Allocation page).
 
-## 5. The semantic layer
+## 5. Engaging the vacated slot (substitutes)
+
+Redistribution moves the absent teacher's periods to other days. The **Engagement**
+layer instead keeps the current timetable and finds an *engaging professor* (a
+substitute) for each affected period — required when a teacher is away for a whole
+day (redistribution of a 5/week subject is infeasible). A cover must have **no class
+of his own in that slot**, must **satisfy his own constraints**, and coverage is
+**maximised** (exact matching per day×period). See `engagement_schema.md`.
+
+## 6. The semantic layer
 
 `POST /translate-tweak` sends the plain-language statement to the LLM with this schema and
 returns `{ kind, window, recurring, effect, natural, notes, confidence, unmapped }` —
