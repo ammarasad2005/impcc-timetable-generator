@@ -31,7 +31,7 @@ from solver import UNITS, SECTIONS, TEACHER_FULL, DAYS, SLOTS, DEFAULT_CONSTRAIN
 
 app = FastAPI(
     title="IMPCC Timetable Generator API",
-    description="CP-SAT solver for IMPCC (H-8) Inter 1st-shift timetables (ICS & I.Com).",
+    description="CP-SAT solver for IMPCC (H-8/4) Inter 1st-shift timetables (ICS & I.Com).",
     version="1.0.0",
 )
 

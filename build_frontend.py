@@ -53,7 +53,7 @@ _j = src.index('</header>', _i) + len('</header>')
 _mast = ('<header class="mast">\n'
          '  <img class="logo" src="'+LOGO_URI+'" alt="IMPCC"/>\n'
          '  <div class="mast-txt">\n'
-         '    <div class="overline">Islamabad Model Postgraduate College of Commerce · H-8</div>\n'
+         '    <div class="overline">Islamabad Model Postgraduate College of Commerce · H-8/4</div>\n'
          '    <h1>Weekly Timetable <em>Generator</em></h1>\n'
          '    <div class="sub">Intermediate · 1st Shift · ICS &amp; I.Com</div>\n'
          '  </div>\n'
@@ -502,7 +502,7 @@ rep("""  const csvBtn=e.target.closest('.card-csv');
 i = src.index("/* PDF = print engine. If the spotlight drawer is open, print only that")
 k = src.index("/* ---------- section filter helpers ---------- */")
 engine = """/* ---------- export engine (clean documents — no site/tech info) ---------- */
-const COLLEGE_LINE='Islamabad Model Postgraduate College of Commerce (H-8) · Intermediate · 1st Shift';
+const COLLEGE_LINE='Islamabad Model Postgraduate College of Commerce (H-8/4) · Intermediate · 1st Shift';
 function pdCover(title,sub){
   return '<header class="pd-cover"><h1>'+esc(title)+'</h1><p>'+esc(sub)+'</p></header>';
 }

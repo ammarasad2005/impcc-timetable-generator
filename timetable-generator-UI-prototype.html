@@ -376,9 +376,9 @@ footer b{color:var(--green)}
 
 <!-- ================= MASTHEAD ================= -->
 <header class="mast">
-  <div class="seal"><b>IMPCC</b><span>H-8 · ISB</span></div>
+  <div class="seal"><b>IMPCC</b><span>H-8/4 · ISB</span></div>
   <div class="mast-txt">
-    <div class="overline">Islamabad Model Postgraduate College of Commerce · H-8</div>
+    <div class="overline">Islamabad Model Postgraduate College of Commerce · H-8/4</div>
     <h1>Weekly Timetable <em>Generator</em></h1>
     <div class="sub">Intermediate · 1st Shift — ICS &amp; I.Com · ranked combination explorer · nothing found is ever discarded</div>
     <div class="chips">
@@ -471,7 +471,7 @@ footer b{color:var(--green)}
 
 <footer>
   <b>IMPCC Timetable Generator — demo prototype.</b> All timetables, scores, ranks and solver output on this page are simulated mock data.<br>
-  Islamabad Model Postgraduate College of Commerce (H-8), Islamabad · Intermediate, 1st Shift · ICS &amp; I.Com · 11 sections · Mon–Fri, 5 periods/day.
+  Islamabad Model Postgraduate College of Commerce (H-8/4), Islamabad · Intermediate, 1st Shift · ICS &amp; I.Com · 11 sections · Mon–Fri, 5 periods/day.
 </footer>
 
 <!-- ================= FACULTY SPOTLIGHT DRAWER ================= -->
@@ -943,11 +943,11 @@ function renderChrome(){
     scoreBadge.classList.toggle('best',c.score===list[0].score);
     const shown=sectionsMatching(state.sectionFilter).length;
     $('vbInfo').textContent='Combination #'+rank+' of '+list.length+' · via '+(c.via==='cpsat'?'CP-SAT solver':'in-browser generation')+' · showing '+shown+'/11 sections · 20 faculty · click any card or class cell for personal courses';
-    $('printHead').textContent='IMPCC (H-8) · Intermediate, 1st Shift — Weekly Timetable · Combination #'+rank+' of '+list.length+' · shuffle score '+c.score+(c.via==='cpsat'?' · CP-SAT proven-optimal pool':'')+' · view: '+(state.view==='sections'?'Sections ('+(filterLabel(state.sectionFilter)||'all sections')+')':'Faculty overview')+' · printed '+new Date().toLocaleDateString('en-GB');
+    $('printHead').textContent='IMPCC (H-8/4) · Intermediate, 1st Shift — Weekly Timetable · Combination #'+rank+' of '+list.length+' · shuffle score '+c.score+(c.via==='cpsat'?' · CP-SAT proven-optimal pool':'')+' · view: '+(state.view==='sections'?'Sections ('+(filterLabel(state.sectionFilter)||'all sections')+')':'Faculty overview')+' · printed '+new Date().toLocaleDateString('en-GB');
   }else{
     rankBadge.textContent='RANK —';scoreBadge.textContent='SCORE —';scoreBadge.classList.remove('best');
     $('vbInfo').textContent='No combination selected';
-    $('printHead').textContent='IMPCC (H-8) · Intermediate, 1st Shift — Weekly Timetable · no combination selected';
+    $('printHead').textContent='IMPCC (H-8/4) · Intermediate, 1st Shift — Weekly Timetable · no combination selected';
   }
   btnGenerate.disabled=state.running;
   if(state.running){
@@ -1025,7 +1025,7 @@ function openSpotlight(name){
   const hasDual=entries.some(e=>e.dual);
   const list=sortedList(),rank=rankOf(c,list);
   let body='';
-  body+='<div class="sp-print-head">IMPCC (H-8) · Intermediate, 1st Shift — Personal weekly timetable · '+name+' · '+entries.length+' periods/week · Combination #'+rank+' of '+state.combos.length+' · shuffle score '+c.score+' · exported '+new Date().toLocaleDateString('en-GB')+'</div>';
+  body+='<div class="sp-print-head">IMPCC (H-8/4) · Intermediate, 1st Shift — Personal weekly timetable · '+name+' · '+entries.length+' periods/week · Combination #'+rank+' of '+state.combos.length+' · shuffle score '+c.score+' · exported '+new Date().toLocaleDateString('en-GB')+'</div>';
   body+='<div class="sp-stats">'+
     '<div class="stat"><b>'+entries.length+'</b><span>periods / wk</span></div>'+
     '<div class="stat"><b>'+secs.size+'</b><span>sections</span></div>'+

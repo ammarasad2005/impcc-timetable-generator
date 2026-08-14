@@ -1,6 +1,6 @@
 # IMPCC — Inter (1st Shift) Weekly Timetable Generator
 
-Automated timetable generator for **Islamabad Model Postgraduate College of Commerce (H-8)**
+Automated timetable generator for **Islamabad Model Postgraduate College of Commerce (H-8/4)**
 — Intermediate level (ICS + I.Com), 1st shift.
 
 11 sections · 5 days (Mon–Fri) · 5 periods/day (40 min) · break after 3rd period · 25 periods/section/week.
