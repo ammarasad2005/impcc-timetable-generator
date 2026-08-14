@@ -2852,5 +2852,9 @@ function renderAuth(){
 rep("/* ---------- boot: restore saved results (no auto-generation) ---------- */",
     HEADER_MODULE + "/* ---------- boot: restore saved results (no auto-generation) ---------- */")
 
+# ---- 38) keep the masthead (and its dropdowns) above the sticky console ----
+rep(".mast{max-width:1280px;margin:0 auto;padding:26px 24px 18px;display:flex;gap:20px;align-items:center;flex-wrap:wrap;animation:drop .6s ease both}",
+    ".mast{position:relative;z-index:70;max-width:1280px;margin:0 auto;padding:26px 24px 18px;display:flex;gap:20px;align-items:center;flex-wrap:wrap;animation:drop .6s ease both}")
+
 io.open(DST, "w", encoding="utf-8").write(src)
 print("OK → wrote", DST, "(", len(src), "bytes )")
