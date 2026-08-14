@@ -2873,37 +2873,35 @@ rep("</style>", r'''.mast .logo{width:88px;height:88px;object-fit:contain;flex:0
   .wrap{padding:14px 12px 44px}
   footer{padding:0 14px 30px;font-size:10px}
 
-  /* masthead: distinct full-bleed branded header bar */
-  .mast{max-width:none;margin:0;padding:14px 14px 12px;gap:10px;background:linear-gradient(180deg,var(--console) 0%,#0d1a13 100%);border-bottom:3px solid var(--amber);box-shadow:0 4px 16px rgba(10,20,14,.22)}
-  .mast .logo{width:44px;height:44px;filter:drop-shadow(0 3px 8px rgba(0,0,0,.35))}
-  .mast-txt{flex:1 1 auto;min-width:0}
-  .overline{font-size:7.5px;letter-spacing:.16em;color:#9db5a8}
-  .mast h1{font-size:clamp(18px,6.4vw,26px);line-height:1.08;margin:1px 0 3px;color:#f2f7f3}
-  .mast h1 em{color:var(--amber)}
-  .sub{font-size:11px;color:#b9c9bf}
+  /* masthead: original light background; compact; avatar pinned to the logo line */
+  .mast{padding:12px 12px 10px;gap:10px;align-items:center}
+  .mast .logo{width:44px;height:44px;flex:0 0 auto}
+  .mast-txt{flex:1 1 0%;min-width:0}
+  .mast-auth{margin-left:auto;flex:0 0 auto;align-self:center}
+  .overline{font-size:8px;letter-spacing:.14em}
+  .mast h1{font-size:clamp(18px,6.2vw,26px);line-height:1.08;margin:1px 0 3px}
+  .sub{font-size:11px}
   .mast-search{flex:1 1 100%;order:10;min-width:0;margin-top:6px}
-  .mast-search input{font-size:13px;padding:10px 15px;border:1px solid rgba(255,255,255,.25);background:#fff;color:var(--ink)}
-  .mast-search input:focus{border-color:var(--amber);box-shadow:0 0 0 3px rgba(232,164,31,.25)}
-  .avatar{border-color:rgba(255,255,255,.6)}
+  .mast-search input{font-size:13px;padding:10px 15px}
   .fac-drop{max-height:290px}
   .fac-item{padding:10px 12px}
 
-  /* console: compact + NOT sticky (scrolls away with the page) */
+  /* console: compressed to roughly half height, compact controls */
   .console{position:static;top:auto}
   .prog{display:none}
-  .con-in{padding:10px 12px 8px;gap:7px}
-  .con-in .btn{padding:9px 10px;font-size:11.5px;flex:1 1 auto;justify-content:center}
-  .con-in .btn .g{font-size:11px}
-  .con-sel{flex:1 1 100%;min-width:0;gap:7px}
-  .con-sel label{font-size:9px}
-  select#comboSel{font-size:12px;padding:10px;max-width:none}
-  .nav-arrows .btn{padding:10px 14px;flex:0 0 auto}
-  .badges{flex:1 1 100%;margin-left:0;gap:8px}
-  .badge{flex:1;text-align:center;font-size:11px;padding:7px 8px}
-  .con-row2{padding:6px 12px 8px;font-size:10px;gap:4px 12px}
-  .con-row2 .tick{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  #cpsatStatus{flex:1 1 100%;margin-left:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  #publishedAge{margin-left:0;font-size:10px}
+  .con-in{padding:7px 10px 6px;gap:6px}
+  .con-in .btn{padding:6px 9px;font-size:10.5px;flex:1 1 auto;justify-content:center;gap:5px;border-radius:7px}
+  .con-in .btn .g{font-size:10px}
+  .con-sel{flex:1 1 auto;min-width:0;gap:6px}
+  .con-sel label{display:none}
+  select#comboSel{font-size:11px;padding:7px 8px;max-width:none}
+  .nav-arrows .btn{padding:6px 9px;flex:0 0 auto}
+  .badges{margin-left:auto;gap:6px;flex:0 0 auto}
+  .badge{font-size:10px;padding:6px 8px;flex:0 0 auto}
+  .con-row2{padding:5px 10px 6px;font-size:9.5px;gap:6px 10px;flex-wrap:nowrap}
+  .con-row2 .tick{flex:1 1 auto;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #cpsatStatus{flex:0 0 auto;max-width:46%;margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #publishedAge{display:none}
 
   /* scorecard: very minimalist — one compact row */
   .scorecard{display:flex;flex-direction:row;align-items:center;gap:14px;padding:12px 14px;margin-bottom:12px;border-left-width:5px;border-radius:11px}
