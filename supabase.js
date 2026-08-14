@@ -115,15 +115,15 @@
     // writable only by signed-in users (RLS). Generated timetable combos are NOT stored.
     async loadPublished() {
       await this.ensureSession();
-      const rows = await this._req("/rest/v1/published?id=eq.1&select=allocation,constraints,faculty,updated_at", {
+      const rows = await this._req("/rest/v1/published?id=eq.1&select=allocation,constraints,faculty,tweaks,updated_at", {
         method: "GET", headers: this._headers()
       });
       return (Array.isArray(rows) && rows.length) ? rows[0] : null;
     },
 
-    async savePublished(allocation, constraints, faculty) {
+    async savePublished(allocation, constraints, faculty, tweaks) {
       await this.ensureSession();
-      const body = { id: 1, allocation: allocation || {}, constraints: constraints || {}, faculty: faculty || [], updated_at: new Date().toISOString() };
+      const body = { id: 1, allocation: allocation || {}, constraints: constraints || {}, faculty: faculty || [], tweaks: tweaks || [], updated_at: new Date().toISOString() };
       return this._req("/rest/v1/published?on_conflict=id", {
         method: "POST",
         headers: Object.assign({}, this._headers(), { "Prefer": "resolution=merge-duplicates,return=representation" }),

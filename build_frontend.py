@@ -1839,5 +1839,307 @@ rep("async function loadSavedCombo(id){", """async function unpushCurrent(){
 async function loadSavedCombo(id){""")
 
 
+TWEAK_MODULE = r'''/* ---------- tweaks (temporary/permanent adjustments) + manual cell edits ---------- */
+const TWEAK_KEY='impcc-tweaks-v1';
+function loadTweaks(){
+  try{const raw=localStorage.getItem(TWEAK_KEY);if(raw){state.tweaks=JSON.parse(raw);return true;}}catch(e){}
+  state.tweaks=[];return false;
+}
+function saveTweaksLocal(){
+  try{localStorage.setItem(TWEAK_KEY,JSON.stringify(state.tweaks||[]));}catch(e){}
+  pushToCloud();
+}
+function activeTweaks(){
+  const tstr=new Date().toISOString().slice(0,10);
+  return (state.tweaks||[]).filter(function(t){
+    if(t.kind==='permanent')return true;
+    if(t.recurring)return true;
+    const w=t.window||{};
+    if(w.type==='dates'){
+      if(w.from&&tstr<w.from)return false;
+      if(w.to&&tstr>w.to)return false;
+    }
+    return true;
+  });
+}
+function tweakActiveDays(t){
+  const all=['MON','TUE','WED','THU','FRI'];
+  const e=t.effect||{};
+  if(t.recurring&&e.days&&e.days.length)return e.days;
+  const w=t.window||{};
+  if(w.type==='dates'){
+    const today=new Date();today.setHours(0,0,0,0);
+    const from=w.from?new Date(w.from+'T00:00:00'):today;
+    const to=w.to?new Date(w.to+'T23:59:59'):from;
+    const out=[];
+    for(let i=0;i<8;i++){const d=new Date(from);d.setDate(from.getDate()+i);if(d>to)break;const dow=d.getDay();if(dow>=1&&dow<=5)out.push(all[dow-1]);}
+    return out.length?out:all;
+  }
+  if(w.days&&w.days.length)return w.days;
+  if(e.days&&e.days.length)return e.days;
+  return all;
+}
+function tweaksToRulesDelta(){
+  const delta={};
+  const slots=['P1','P2','P3','P4','P5'];
+  for(const t of activeTweaks()){
+    const e=t.effect||{};if(!e.type)continue;
+    const days=tweakActiveDays(t);
+    if(!days.length)continue;
+    const sl=(e.slots&&e.slots.length)?e.slots:slots;
+    const push=function(name){delta[name]=delta[name]||[];delta[name].push({days:days,slots:sl});};
+    if(e.type==='suspend_teacher'||e.type==='suspend_teacher_slots'){if(e.teacher)push(e.teacher);}
+    else if(e.type==='block_section_slots'){
+      const a=getWorkingAllocation()[e.section];
+      if(a&&a.subjects)a.subjects.forEach(function(x){if(x.teacher)push(x.teacher);});
+    }
+  }
+  return delta;
+}
+function effectiveConstraints(){
+  const R=IMPCC_SOLVER.resolveConstraints(state.constraints);
+  const delta=tweaksToRulesDelta();
+  const out={};
+  for(const code in R){out[code]={name:R[code].name,rules:JSON.parse(JSON.stringify(R[code].rules))};}
+  for(const name in delta){
+    const code=IMPCC_SOLVER.NAME_TO_CODE[name]||name;
+    const entry=out[code]||{name:name,rules:{}};
+    entry.rules.forbidden_slots_on_days=(entry.rules.forbidden_slots_on_days||[]).concat(delta[name]);
+    out[code]=entry;
+  }
+  return out;
+}
+function describeTweak(t){
+  const e=t.effect||{};
+  let eff='';
+  if(e.type==='suspend_teacher')eff='Unavailable: '+esc(e.teacher||'?');
+  else if(e.type==='suspend_teacher_slots')eff='Unavailable: '+esc(e.teacher||'?')+(e.slots?' ('+e.slots.join(', ')+')':'');
+  else if(e.type==='block_section_slots')eff='Blocked: '+esc(e.section||'?')+(e.slots?' ('+e.slots.join(', ')+')':'');
+  else eff=esc(e.type||'?');
+  if(e.days&&e.days.length)eff+=' on '+e.days.join(', ');
+  return eff;
+}
+function tweakBadge(t){
+  if(t.kind==='permanent')return '<span class="stag edited">permanent</span>';
+  if(t.recurring)return '<span class="stag edited">recurring</span>';
+  const w=t.window||{};
+  if(w.type==='dates'&&w.to)return '<span class="stag edited">until '+esc(w.to)+'</span>';
+  return '<span class="stag edited">temporary</span>';
+}
+function tweakStatus(t){
+  const tstr=new Date().toISOString().slice(0,10);
+  const w=t.window||{};
+  if(t.kind==='permanent'||t.recurring)return 'active';
+  if(w.type==='dates'){
+    if(w.to&&tstr>w.to)return 'expired';
+    if(w.from&&tstr<w.from)return 'upcoming';
+  }
+  return 'active';
+}
+function renderTweaks(){
+  const signedIn=SB&&SB.loggedIn;
+  let h='<div class="cons-note"><b>Timetable tweaks.</b> Handle leave, lab closures and one-off changes. '+(signedIn?'Describe a situation in plain language, or add it manually. <b>Permanent</b> changes apply forever; <b>temporary</b> ones revert automatically after their window; <b>recurring</b> ones apply every week.':'<b style="color:var(--amber-deep)">🔒 Sign in to add or remove tweaks.</b>')+'</div>';
+  if(signedIn){
+    h+='<div class="tweak-add">'+
+      '<textarea class="cons-nl" id="tweakNl" placeholder="e.g. Prof. Naeem is on leave tomorrow"></textarea>'+
+      '<button class="mini-export" id="tweakTranslate">✦ Translate</button>'+
+    '</div>';
+    h+='<div class="tweak-add">'+
+      '<select id="tweakType"><option value="suspend_teacher">Teacher away</option><option value="suspend_teacher_slots">Teacher away (some periods)</option><option value="block_section_slots">Section blocked</option></select>'+
+      '<select id="tweakTarget"></select>'+
+      '<span class="ed-chip-wrap" id="tweakDays"></span>'+
+      '<span class="ed-chip-wrap" id="tweakSlots"></span>'+
+      '<select id="tweakWindow"><option value="permanent">Permanent</option><option value="dates">Temporary (date range)</option><option value="recurring">Recurring weekly</option></select>'+
+      '<span id="tweakDateRange" style="display:none"><input type="date" id="tweakFrom"><input type="date" id="tweakTo"></span>'+
+      '<button class="mini-export" id="tweakAdd">＋ Add</button>'+
+    '</div>';
+    h+='<div class="cons-status" id="tweakStatus"></div>';
+  }
+  const list=(state.tweaks||[]).slice().sort(function(a,b){return (a.created_at||'')>(b.created_at||'')?-1:1;});
+  h+='<div class="cons-grid">';
+  list.forEach(function(t,i){
+    const st=tweakStatus(t);
+    h+='<article class="cons-card'+(st!=='active'?' edited':'')+'"><header><h4>'+describeTweak(t)+'</h4>'+tweakBadge(t)+'</header>'+
+      '<div class="tweak-nl">'+esc(t.natural||'')+'</div>'+
+      '<div class="cons-btns"><span class="tweak-stag '+st+'">'+st+'</span>'+
+      (signedIn?'<button class="card-csv" data-tweak-del="'+i+'" title="Remove this tweak">✕</button>':'')+
+      '</div></article>';
+  });
+  if(!list.length)h+='<div class="cons-rule none">No tweaks yet.</div>';
+  h+='</div>';
+  mainEl.innerHTML=h;
+  if(!signedIn)return;
+  const targetSel=document.getElementById('tweakTarget');
+  const typeSel=document.getElementById('tweakType');
+  function repopulateTargets(){
+    targetSel.innerHTML='';
+    if(typeSel.value==='block_section_slots'){
+      SECTIONS.forEach(function(sec){const o=document.createElement('option');o.value=sec.id;o.textContent=sec.label;targetSel.appendChild(o);});
+    }else{
+      facultyNames().forEach(function(n){const o=document.createElement('option');o.value=n;o.textContent=n;targetSel.appendChild(o);});
+    }
+  }
+  repopulateTargets();
+  typeSel.addEventListener('change',repopulateTargets);
+  const daysWrap=document.getElementById('tweakDays');
+  DAYS.forEach(function(d){daysWrap.innerHTML+='<span class="ed-chip ed-chip-day" data-v="'+d+'">'+d+'</span>';});
+  const slotsWrap=document.getElementById('tweakSlots');
+  SLOTS.forEach(function(p){slotsWrap.innerHTML+='<span class="ed-chip ed-chip-slot" data-v="'+p+'">'+p+'</span>';});
+  document.getElementById('tweakWindow').addEventListener('change',function(e){document.getElementById('tweakDateRange').style.display=e.target.value==='dates'?'':'none';});
+  document.getElementById('tweakAdd').addEventListener('click',function(){
+    const type=typeSel.value,target=targetSel.value;
+    const days=Array.from(daysWrap.querySelectorAll('.ed-chip-day.on')).map(function(x){return x.dataset.v;});
+    const slots=Array.from(slotsWrap.querySelectorAll('.ed-chip-slot.on')).map(function(x){return x.dataset.v;});
+    const win=document.getElementById('tweakWindow').value;
+    if(!target){setTicker('Choose a teacher or section','err');return;}
+    const effect={type:type};
+    if(type==='block_section_slots')effect.section=target;else effect.teacher=target;
+    if(slots.length)effect.slots=slots;
+    if(days.length)effect.days=days;
+    const tweak={kind:win==='permanent'?'permanent':'temporary',recurring:win==='recurring',effect:effect,natural:'',notes:'manual',created_at:new Date().toISOString()};
+    if(win==='dates'){
+      const f=document.getElementById('tweakFrom').value,to=document.getElementById('tweakTo').value;
+      if(!f||!to){setTicker('Pick a start and end date','err');return;}
+      tweak.window={type:'dates',from:f,to:to};
+    }
+    state.tweaks.push(tweak);saveTweaksLocal();renderTweaks();
+    setTicker('Tweak added — will affect the next generation','ok');
+  });
+  document.getElementById('tweakTranslate').addEventListener('click',function(){translateTweakOne();});
+  document.querySelectorAll('[data-tweak-del]').forEach(function(el){el.addEventListener('click',function(){state.tweaks.splice(+el.dataset.tweakDel,1);saveTweaksLocal();renderTweaks();setTicker('Tweak removed','ok');});});
+}
+let pendingTweak=null;
+function translateTweakOne(){
+  const ta=document.getElementById('tweakNl');
+  const st=document.getElementById('tweakStatus');
+  const text=ta?ta.value.trim():'';
+  if(!text){if(st)st.textContent='Type a plain-language tweak first.';return;}
+  if(!SB||!SB.loggedIn){if(st)st.textContent='Sign in required to use AI translation.';return;}
+  if(st)st.textContent='Translating…';
+  const base=(typeof window.IMPCC_API_URL==='string')?window.IMPCC_API_URL:'';
+  fetch(base+'/translate-tweak',{
+    method:'POST',
+    headers:{'Content-Type':'application/json','Authorization':'Bearer '+(SB.session&&SB.session.access_token?SB.session.access_token:'')},
+    body:JSON.stringify({text:text})
+  })
+  .then(function(r){if(!r.ok)throw new Error(r.status===401?'Sign in required':'HTTP '+r.status);return r.json();})
+  .then(function(d){
+    if(d.error){if(st)st.textContent='⚠ '+d.error;return;}
+    pendingTweak=d;
+    if(st)st.textContent='✓ '+describeTweak(d)+' · '+(d.kind==='permanent'?'permanent':(d.recurring?'recurring':'until '+(d.window&&d.window.to?d.window.to:'?')))+' — click ＋ Add to confirm';
+  })
+  .catch(function(err){if(st)st.textContent='⚠ Translation failed: '+err.message;});
+}
+/* manual cell editing + re-optimization */
+function cellIsEdited(sec,d,s){
+  return (state.edits||[]).some(function(e){return e.sec===sec&&e.d===d&&e.s===s;});
+}
+function toggleEditMode(){
+  state.editMode=!state.editMode;
+  renderChrome();renderMain();
+  setTicker(state.editMode?'Edit mode — click any cell to adjust it':'Edit mode off','ok');
+}
+function openCellEditor(ds){
+  state.editCell={sec:ds.sec,d:+ds.d,s:+ds.s,subj:ds.subj,teacher:ds.teacher};
+  const sec=SECTIONS.find(function(x){return x.id===ds.sec;});
+  const a=getWorkingAllocation()[ds.sec];
+  let opts='';
+  if(a&&a.subjects)a.subjects.forEach(function(x){opts+='<option>'+esc(x.subject+' — '+x.teacher)+'</option>';});
+  const el=document.getElementById('cellEditor');
+  el.innerHTML='<h3>'+esc(ds.sec)+' · '+DAYS[+ds.d]+' '+SLOTS[+ds.s]+'</h3>'+
+    '<div class="ce-cur">Current: <b>'+esc(ds.subj)+'</b> — '+esc(ds.teacher)+'</div>'+
+    '<select id="ceSelect">'+opts+'</select>'+
+    '<div class="cons-btns"><button class="mini-export" id="ceSet">Set (force)</button><button class="mini-export" id="ceRemove">Remove (forbid)</button><button class="mini-export" id="ceClose">Close</button></div>';
+  el.style.display='block';
+  document.getElementById('ceSet').addEventListener('click',function(){applyCellEdit('force');});
+  document.getElementById('ceRemove').addEventListener('click',function(){applyCellEdit('forbid');});
+  document.getElementById('ceClose').addEventListener('click',closeCellEditor);
+}
+function closeCellEditor(){document.getElementById('cellEditor').style.display='none';}
+function applyCellEdit(mode){
+  const c=state.editCell;if(!c)return;
+  if(mode==='force'){
+    const sel=document.getElementById('ceSelect').value.split(' — ');
+    if(sel.length<2)return;
+    state.edits=(state.edits||[]).filter(function(e){return !(e.sec===c.sec&&e.d===c.d&&e.s===c.s);});
+    state.edits.push({sec:c.sec,d:c.d,s:c.s,mode:'force',subject:sel[0],teacher:sel.slice(1).join(' — ')});
+  }else{
+    state.edits=(state.edits||[]).filter(function(e){return !(e.sec===c.sec&&e.d===c.d&&e.s===c.s);});
+    state.edits.push({sec:c.sec,d:c.d,s:c.s,mode:'forbid',subject:c.subj,teacher:c.teacher});
+  }
+  closeCellEditor();renderMain();renderChrome();
+  setTicker((state.edits.length)+' edit'+(state.edits.length===1?'':'s')+' pending — press Re-optimize','ok');
+}
+function clearEdits(){state.edits=[];renderMain();renderChrome();setTicker('Edits cleared','ok');}
+function reoptimizeWithEdits(){
+  if(!(state.edits&&state.edits.length)){setTicker('No edits to apply','err');return;}
+  const locks=state.edits.slice();
+  state.running=true;state.stopRequested=false;
+  progFill.style.width='100%';
+  setTicker('Re-optimizing around '+locks.length+' edit'+(locks.length===1?'':'s')+'…','run',true);
+  renderChrome();
+  const t0=Date.now();
+  const res=IMPCC_SOLVER.generate({maxCount:0,timeMs:24000,seed:(Math.random()*2147483647)|0,constraints:effectiveConstraints(),sections:currentAllocation(),locks:locks});
+  state.running=false;state.stopRequested=false;progFill.style.width='0%';
+  if(res.solutions&&res.solutions.length){
+    state.combos=res.solutions.map(function(sol){return makeCombo(sol,'browser');});
+    state.seen=new Set();
+    const list=sortedList();state.selected=list[0].id;
+    state.edits=[];state.editMode=false;
+    persist();renderAll();
+    setTicker('Re-optimized — '+res.solutions.length+' valid combinations honouring your edits · best score '+res.solutions[0].score,'ok');
+  }else{
+    setTicker('Could not find a valid arrangement keeping all edits — try removing some','err');
+  }
+}
+
+'''
+
+# ---- 30) tweaks (temporary/permanent) + manual cell edits + re-optimize ----
+# (a) state fields
+rep("const state={combos:[],selected:null,view:'sections',sectionFilter:'all',running:false,runTimer:null,runTarget:0,cpsatBusy:false,cpsatDone:false,cpsatMerged:0,spot:null,seen:new Set()};",
+    "const state={combos:[],selected:null,view:'sections',sectionFilter:'all',running:false,runTimer:null,runTarget:0,cpsatBusy:false,cpsatDone:false,cpsatMerged:0,spot:null,seen:new Set(),tweaks:[],editMode:false,edits:[],editCell:null};")
+# (b) CSS
+rep("</style>", ".edited-cell{outline:2px solid var(--amber);outline-offset:-2px;position:relative}\\n.edited-cell::after{content:'✎';position:absolute;top:2px;right:4px;font-size:9px;color:var(--amber-deep)}\\n.cell-editor{display:none;position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:300;background:var(--surface);border:1px solid var(--line2);border-radius:12px;box-shadow:0 16px 48px rgba(14,59,41,.35);padding:14px 16px;width:min(420px,94vw)}\\n.cell-editor h3{margin:0 0 6px;font-family:var(--disp);font-weight:900;font-size:15px;color:var(--green-deep)}\\n.ce-cur{font-size:12px;color:var(--ink2);margin-bottom:8px}\\n.cell-editor select{width:100%;margin-bottom:10px;padding:8px;border:1px solid var(--line2);border-radius:8px;font-size:13px;background:#fff;color:var(--ink)}\\n.tweak-add{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}\\n.tweak-add select,.tweak-add input[type=date]{padding:7px 9px;border:1px solid var(--line2);border-radius:8px;background:#fff;font-size:12.5px;color:var(--ink)}\\n.tweak-nl{font-size:12px;color:var(--ink2);font-style:italic}\\n.tweak-stag{font-family:var(--mono);font-size:10px;padding:2px 8px;border-radius:99px;border:1px solid var(--line2)}\\n.tweak-stag.active{background:var(--green-tint);color:var(--green-deep);border-color:var(--green)}\\n.tweak-stag.expired{background:var(--surface2);color:var(--ink2)}\\n.tweak-stag.upcoming{background:var(--amber-tint);color:var(--amber-deep);border-color:var(--amber)}\\n.ed-chip-wrap{display:inline-flex;gap:4px;flex-wrap:wrap}\\n</style>")
+# (c) Tweaks tab
+rep('<button id="viewSaved">💾 Saved</button>',
+    '<button id="viewSaved">💾 Saved</button>\n      <button id="viewTweaks">🛠 Tweaks</button>')
+rep("$('viewSaved').addEventListener('click',()=>setView('saved'));",
+    "$('viewSaved').addEventListener('click',()=>setView('saved'));\n$('viewTweaks').addEventListener('click',()=>setView('tweaks'));")
+rep("  $('viewSaved').classList.toggle('on',v==='saved');",
+    "  $('viewSaved').classList.toggle('on',v==='saved');\n  $('viewTweaks').classList.toggle('on',v==='tweaks');")
+rep("  if(state.view==='saved'){renderSaved();return;}",
+    "  if(state.view==='saved'){renderSaved();return;}\n  if(state.view==='tweaks'){renderTweaks();return;}")
+# (d) boot: load tweaks
+rep("loadFaculty();", "loadFaculty();\nloadTweaks();")
+# (e) generation uses effective constraints (tweaks included)
+rep("const res=IMPCC_SOLVER.generate({maxCount:0,timeMs:320,seed:(Math.random()*2147483647)|0,constraints:currentConstraints(),sections:currentAllocation()});",
+    "const res=IMPCC_SOLVER.generate({maxCount:0,timeMs:320,seed:(Math.random()*2147483647)|0,constraints:effectiveConstraints(),sections:currentAllocation()});")
+rep("body:JSON.stringify({time_limit:120,n_seeds:1,max_solutions:0,constraints:currentConstraints(),sections:currentAllocation()})",
+    "body:JSON.stringify({time_limit:120,n_seeds:1,max_solutions:0,constraints:effectiveConstraints(),sections:currentAllocation()})")
+# (f) cell markup: data attrs + edited highlight
+rep("'<div class=\"tg-cell'+(cell.dual?' dual':'')+'\" data-teacher=\"'+esc(cell.teacher)+'\" title=\"'+esc(cell.subj)+' — '+esc(cell.teacher)+' · click to open the teacher\\u2019s personal courses\">'+",
+    "'<div class=\"tg-cell'+(cell.dual?' dual':'')+(cellIsEdited(sec.id,d,s)?' edited-cell':'')+'\" data-sec=\"'+sec.id+'\" data-d=\"'+d+'\" data-s=\"'+s+'\" data-teacher=\"'+esc(cell.teacher)+'\" data-subj=\"'+esc(cell.subj)+'\" title=\"'+esc(cell.subj)+' — '+esc(cell.teacher)+' · click to open the teacher\\u2019s personal courses\">'+")
+# (g) click handler: edit mode intercept
+rep("  const card=e.target.closest('.t-card');\n  if(card){openSpotlight(card.dataset.name);return;}",
+    "  if(state.editMode){const ec=e.target.closest('.tg-cell');if(ec){openCellEditor(ec.dataset);return;}}\n  const card=e.target.closest('.t-card');\n  if(card){openSpotlight(card.dataset.name);return;}")
+# (h) edit controls in the viewbar + cell editor overlay
+rep('<span class="vb-info" id="vbInfo"></span>',
+    '<span class="vb-info" id="vbInfo"></span>\n    <span class="vb-edit" id="editControls" style="display:none"><button class="mini-export" id="btnEditMode">✎ Edit</button><button class="mini-export" id="btnReopt">Re-optimize</button><button class="mini-export" id="btnClearEdits">Clear</button><span class="vb-info" id="editCount"></span></span>')
+rep('<div class="drawer-backdrop" id="spotBackdrop"></div>',
+    '<div id="cellEditor" class="cell-editor"></div>\n<div class="drawer-backdrop" id="spotBackdrop"></div>')
+# (i) setView toggles editControls (sections only)
+rep("  $('secFilterWrap').classList.toggle('hidden',v!=='sections');",
+    "  $('secFilterWrap').classList.toggle('hidden',v!=='sections');\n  $('editControls').style.display=(v==='sections')?'':'none';")
+# (j) renderChrome: edit buttons state
+rep("    btnCpsat.disabled=!_signedIn;btnCpsat.title=",
+    "    $('editCount').textContent=(state.edits&&state.edits.length)?('· '+state.edits.length+' edit'+(state.edits.length===1?'':'s')):'';\n    $('btnReopt').disabled=!(state.edits&&state.edits.length);\n    $('btnClearEdits').disabled=!(state.edits&&state.edits.length);\n    $('btnEditMode').textContent=state.editMode?'✎ Editing…':'✎ Edit';\n    btnCpsat.disabled=!_signedIn;btnCpsat.title=")
+# (k) listeners
+rep("btnUnpush.addEventListener('click',unpushCurrent);",
+    "btnUnpush.addEventListener('click',unpushCurrent);\n$('btnEditMode').addEventListener('click',toggleEditMode);\n$('btnReopt').addEventListener('click',reoptimizeWithEdits);\n$('btnClearEdits').addEventListener('click',clearEdits);")
+# (l) module injection
+rep("/* ---------- boot: restore saved results (no auto-generation) ---------- */",
+    TWEAK_MODULE + "/* ---------- boot: restore saved results (no auto-generation) ---------- */")
+
 io.open(DST, "w", encoding="utf-8").write(src)
 print("OK → wrote", DST, "(", len(src), "bytes )")

@@ -196,3 +196,130 @@ def translate_constraints(text, teacher=None):
         "errors": errs,
         "warnings": warns,
     }
+
+
+TWEAK_SYSTEM_PROMPT = """You translate a college timetable adjustment (a "tweak") from plain language into strict JSON.
+
+CONTEXT: Mon-Fri teaching, 5 periods a day (P1..P5). Tweaks are either temporary (a window) or permanent.
+
+OUTPUT — return ONLY a JSON object, no markdown fences:
+{
+  "kind": "temporary" | "permanent",
+  "window": { "type": "dates", "from": "YYYY-MM-DD", "to": "YYYY-MM-DD" },   // temporary only
+  "recurring": false,                                   // true if it repeats EVERY week
+  "effect": {
+    "type": "suspend_teacher" | "suspend_teacher_slots" | "block_section_slots",
+    "teacher": "Prof. …",        // for suspend_teacher / suspend_teacher_slots
+    "section": "ICS-I-A",        // for block_section_slots (use section keys like I.COM-I-A, ICS-II-B)
+    "slots": ["P1","P2"],        // optional; defaults to all P1-P5
+    "days": ["MON","TUE"]        // optional; defaults to all Mon-Fri
+  },
+  "natural": "<verbatim statement>",
+  "notes": "<one short interpretation note>",
+  "confidence": 0.0,
+  "unmapped": []
+}
+
+MAPPING RULES
+- "X is on leave / absent / won't come / not available today" → kind temporary, effect.suspend_teacher, teacher=X, window today→today.
+- "…tomorrow" → today+1 → today+1. "…this week" → this Monday → this Friday. "…on Thursday" → days:["THU"].
+- "…only the first two periods on Friday" → suspend_teacher_slots, days:["FRI"], slots:["P1","P2"].
+- "…every Wednesday P4" → recurring:true, suspend_teacher_slots, days:["WED"], slots:["P4"].
+- "X has left / resigned / retired" → kind permanent, suspend_teacher.
+- "lab / exam / no classes for section S" → block_section_slots with the section key.
+- Resolve relative dates using the CURRENT DATE given below. Dates must be YYYY-MM-DD.
+- If the statement isn't a schedule tweak, return empty effect and put it in unmapped.
+
+CURRENT DATE: {today}
+
+EXAMPLES
+Input: "Prof. Naeem is on leave tomorrow"
+Output: {"kind":"temporary","window":{"type":"dates","from":"{tomorrow}","to":"{tomorrow}"},"recurring":false,"effect":{"type":"suspend_teacher","teacher":"Prof. Muhammad Naeem"},"natural":"Prof. Naeem is on leave tomorrow","notes":"One-day absence.","confidence":0.95,"unmapped":[]}
+
+Input: "Computer lab is closed this week"
+Output: {"kind":"temporary","window":{"type":"dates","from":"{monday}","to":"{friday}"},"recurring":false,"effect":{"type":"block_section_slots","slots":["P1","P2","P3","P4","P5"]},"natural":"Computer lab is closed this week","notes":"Treated as blocking lab-based sections for the week (refine the section in review).","confidence":0.7,"unmapped":["exact sections using the lab"]}
+"""
+
+
+def translate_tweak(text):
+    """Natural-language tweak -> structured tweak JSON via the LLM."""
+    import datetime
+    api_key = os.environ.get("LLM_API_KEY")
+    if not api_key:
+        return {"error": "LLM not configured — set LLM_API_KEY on the backend"}
+
+    base_url = os.environ.get("LLM_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
+    model = os.environ.get("LLM_MODEL", "google/gemma-4-26b-a4b-it:free")
+
+    today = datetime.date.today()
+    def iso(d): return d.isoformat()
+    tomorrow = today + datetime.timedelta(days=1)
+    monday = today - datetime.timedelta(days=today.weekday())
+    friday = monday + datetime.timedelta(days=4)
+
+    prompt = TWEAK_SYSTEM_PROMPT.replace("{today}", iso(today)).replace("{tomorrow}", iso(tomorrow)) \
+        .replace("{monday}", iso(monday)).replace("{friday}", iso(friday))
+
+    messages = [
+        {"role": "system", "content": prompt},
+        {"role": "user", "content": text.strip()},
+    ]
+    payload = json.dumps({"model": model, "messages": messages, "temperature": 0}).encode()
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + api_key,
+        "HTTP-Referer": os.environ.get("LLM_HTTP_REFERER", "https://impcc-timetable-generator.vercel.app"),
+        "X-Title": os.environ.get("LLM_X_TITLE", "IMPCC Timetable Generator"),
+    }
+    req = urlreq.Request(f"{base_url}/chat/completions", data=payload, headers=headers)
+    try:
+        with urlreq.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read().decode())
+    except HTTPError as e:
+        return {"error": f"LLM HTTP {e.code}: {e.read().decode()[:300]}"}
+    except URLError as e:
+        return {"error": f"LLM unreachable: {e.reason}"}
+
+    try:
+        content = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError):
+        return {"error": "LLM returned an unexpected shape"}
+
+    content = re.sub(r"^```(json)?\s*|\s*```$", "", content.strip(), flags=re.MULTILINE).strip()
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        return {"error": "LLM did not return valid JSON", "raw": content}
+
+    if not isinstance(parsed, dict):
+        return {"error": "LLM output was not an object", "raw": content}
+
+    effect = parsed.get("effect") or {}
+    eff_type = effect.get("type")
+    if eff_type not in ("suspend_teacher", "suspend_teacher_slots", "block_section_slots"):
+        eff_type = None
+    def cln(x, pool): return [v for v in (x or []) if v in pool]
+    slots = cln(effect.get("slots"), SLOTS)
+    days = cln(effect.get("days"), DAYS)
+
+    window = parsed.get("window") or {}
+    kind = parsed.get("kind")
+    if kind not in ("temporary", "permanent"):
+        kind = "temporary"
+
+    return {
+        "kind": kind,
+        "window": window if kind == "temporary" else None,
+        "recurring": bool(parsed.get("recurring")),
+        "effect": {
+            "type": eff_type,
+            "teacher": effect.get("teacher") or None,
+            "section": effect.get("section") or None,
+            "slots": slots or None,
+            "days": days or None,
+        },
+        "natural": parsed.get("natural") or text.strip(),
+        "notes": parsed.get("notes") or "",
+        "confidence": float(parsed.get("confidence") or 0),
+        "unmapped": parsed.get("unmapped") or [],
+    }

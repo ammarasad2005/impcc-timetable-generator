@@ -241,3 +241,21 @@ since the PNGs are already compressed) — validated against Python's `zipfile`.
 > **Unpush:** the admin can remove the published timetable — an **🕳 Unpush** button appears
 > (signed-in only, when something is pushed) and deletes the public row, so visitors no
 > longer see it. RLS lets only authenticated users delete; anonymous deletes match zero rows.
+
+---
+
+## Tweaks: temporary/permanent schedule adjustments + manual cell edits
+
+- **🛠 Tweaks page** — express adjustments in plain language (✦ Translate, LLM → tweak
+  schema) or add them manually. **Permanent** (teacher left), **temporary** (leave for a
+  date range), or **recurring** (weekly slot). Expired temporary tweaks stop applying
+  automatically. See `tweaks_schema.md`.
+- **Deterministic layer** — an active tweak becomes `forbidden_slots_on_days` constraints
+  (suspend a teacher / some of their periods / a whole section) and the solver
+  re-organizes the best valid timetable around them.
+- **✎ Edit mode** — click any cell in the Sections view to **force** (set a subject+teacher)
+  or **forbid** (remove a lecture) it; **Re-optimize** re-runs the solver honouring every
+  edit and returns the best valid combinations (sections stay full — a removed lecture is
+  redistributed, not left empty).
+- Tweaks sync to Supabase (`published.tweaks`) so they affect every visitor; manual edits
+  are session-local.

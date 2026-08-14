@@ -758,6 +758,27 @@
     return grids;
   }
 
+  // ---- locks: force/forbid specific (subject,teacher) at a cell ----
+  function locksOk(grids, locks) {
+    if (!locks || !locks.length) return true;
+    for (const L of locks) {
+      const uid = grids[L.sec][L.d][L.s];
+      if (L.mode === "force") {
+        if (uid === null) return false;
+        const u = UNITS[uid];
+        if (u.subject !== L.subject) return false;
+        const tn = TEACHER_FULL[u.teacher] || u.teacher;
+        if (tn !== L.teacher) return false;
+      } else { // forbid
+        if (uid === null) continue;
+        const u = UNITS[uid];
+        const tn = TEACHER_FULL[u.teacher] || u.teacher;
+        if (u.subject === L.subject && tn === L.teacher) return false;
+      }
+    }
+    return true;
+  }
+
   // ------------------------------------------------------------ validate
   function validate(grids, R) {
     if (!R) R = resolveConstraints();
@@ -959,6 +980,7 @@
       if (grids === null) continue;
       const issues = validate(grids, R);
       if (issues.length) continue;
+      if (opts && opts.locks && opts.locks.length && !locksOk(grids, opts.locks)) continue;
       valids++;
       const key = canonical(grids);
       if (!seen[key]) {
@@ -979,6 +1001,6 @@
     DAYS, SLOTS, SECTIONS, TEACHER_FULL, RULES, UNITS,
     SLOT_OF, DAY_OF, DEFAULT_CONSTRAINTS, NAME_TO_CODE, resolveConstraints,
     DEFAULT_SECTIONS, normalizeSections, buildUnits,
-    generate, validate, score, canonical, toTimetable
+    generate, validate, score, canonical, toTimetable, locksOk
   };
 });

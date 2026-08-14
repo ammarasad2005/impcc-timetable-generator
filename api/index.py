@@ -152,6 +152,18 @@ def translate(req: TranslateRequest, user: dict = Depends(require_user)):
     return result
 
 
+class TweakTranslateRequest(BaseModel):
+    text: str = Field(..., description="the plain-language tweak statement")
+
+
+@app.post("/translate-tweak")
+def translate_tweak(req: TweakTranslateRequest, user: dict = Depends(require_user)):
+    """Translate a plain-language tweak (leave, lab closed, …) into the tweak schema."""
+    if not (req.text or "").strip():
+        return {"error": "text is required"}
+    return llm_translate.translate_tweak(req.text.strip())
+
+
 @app.post("/generate")
 def generate(req: GenerateRequest, user: dict = Depends(require_user)):
     t0 = time.time()
