@@ -29,13 +29,14 @@
 
     async _req(path, opts) {
       const res = await fetch(URL + path, opts);
+      const text = await res.text();
       if (!res.ok) {
         let msg = "HTTP " + res.status;
-        try { const j = await res.json(); msg = j.message || j.msg || msg; } catch (e) {}
+        if (text) { try { const j = JSON.parse(text); msg = j.message || j.msg || msg; } catch (e) {} }
         throw new Error(msg);
       }
-      if (res.status === 204) return null;
-      return res.json();
+      if (!text) return null;                       // 201/204 with empty body
+      try { return JSON.parse(text); } catch (e) { return text; }
     },
 
     async signup(email, password) {
