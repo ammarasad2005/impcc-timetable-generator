@@ -3043,12 +3043,13 @@ rep("</style>", r'''.dev-credit{display:flex;flex-wrap:wrap;gap:6px 18px;align-i
 .dev-credit .heart{color:var(--red);display:inline-block;margin:0 2px;animation:heartbeat 1.3s ease infinite}
 @keyframes heartbeat{0%,100%{transform:scale(1)}50%{transform:scale(1.28)}}
 .dev-credit b{color:var(--green-deep);font-weight:700}
-.dev-links{display:inline-flex;gap:14px}
-.dev-links a{color:var(--green);text-decoration:none;font-weight:600;letter-spacing:.02em;transition:color .15s ease}
-.dev-links a:hover{color:var(--amber-deep);text-decoration:underline}
+.dev-links{display:inline-flex;gap:8px;align-items:center}
+.dev-icon{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:50%;color:var(--green);background:var(--green-tint);border:1px solid var(--line2);transition:all .18s ease}
+.dev-icon:hover{color:#fff;background:var(--green-deep);border-color:var(--green-deep);transform:translateY(-2px);box-shadow:0 5px 12px rgba(14,59,41,.28)}
+.dev-icon svg{display:block}
 @media(max-width:760px){
-  .dev-credit{flex-direction:column;gap:4px}
-  .dev-links{gap:16px}
+  .dev-credit{flex-direction:column;gap:6px}
+  .dev-links{gap:12px}
 }
 </style>''')
 
