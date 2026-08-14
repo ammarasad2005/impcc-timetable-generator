@@ -218,6 +218,7 @@ function startRun(kind){
     clearStorage();
     state.combos=[];state.selected=null;comboSeq=0;state.cpsatDone=false;state.cpsatMerged=0;
     state.seen=new Set();
+    state.source=null;state.lastLocks=null;
     closeSpotlight();
     state.sectionFilter='all';secFilterEl.value='all';
     setCpsatStatus('CP-SAT: idle — press “Compute optimal” to call the backend','');
@@ -1642,7 +1643,7 @@ rep("  $('btnComboCsv').disabled=!list.length;",
 rep("$('btnComboCsv').addEventListener('click',exportComboCSV);",
     "$('btnComboCsv').addEventListener('click',exportComboCSV);\n$('btnAllImages').addEventListener('click',exportAllImages);\n$('btnFacultyImages').addEventListener('click',exportAllFacultyImages);")
 
-SAVED_MODULE = '''/* ---------- saved & pushed timetables (admin-only persistence) ---------- */
+SAVED_MODULE = '''/* ---------- saved & pushed timetables + versioning ---------- */
 function cellsToRaw(tt){
   const out={};
   for(const k in tt){out[k]=tt[k].map(function(row){return row.map(function(c){return [c.subj,c.teacher];});});}
@@ -1672,9 +1673,56 @@ async function loadPushedTimetable(){
     persist();renderAll();
   }catch(e){setTicker('Could not load the published timetable: '+e.message,'err');}
 }
+
+/* ---------- versioning helpers ---------- */
+function currentActionsSnapshot(){
+  const eng=engagementPlan();
+  return {
+    tweaks:(state.tweaks||[]).map(function(t){return {kind:t.kind,recurring:t.recurring,window:t.window||null,effect:t.effect||null,natural:t.natural||''};}),
+    edits:(state.lastLocks||state.edits||[]).slice(),
+    engagement:eng?{covered:eng.covered,total:eng.total}:null
+  };
+}
+function actionsSummary(a){
+  const out=[];
+  const t=(a&&Array.isArray(a.tweaks))?a.tweaks.length:0;
+  const e=(a&&Array.isArray(a.edits))?a.edits.length:0;
+  const g=(a&&a.engagement&&a.engagement.total)?(a.engagement.covered+'/'+a.engagement.total+' engaged'):null;
+  if(t)out.push('🛠 '+t+' tweak'+(t===1?'':'s'));
+  if(e)out.push('✎ '+e+' edit'+(e===1?'':'s'));
+  if(g)out.push('👥 '+g);
+  return out.length?out.join(' · '):'—';
+}
+function savedNameOf(id){
+  ensureSavedList();
+  const r=(state.savedList||[]).find(function(x){return x.id===id;});
+  return r?r.name:null;
+}
+function rootOf(id){
+  ensureSavedList();
+  const byId={};
+  (state.savedList||[]).forEach(function(x){byId[x.id]=x;});
+  let cur=byId[id];let guard=0;
+  while(cur&&cur.parent_id&&byId[cur.parent_id]&&guard++<50){cur=byId[cur.parent_id];}
+  return cur||byId[id]||null;
+}
+async function recordHistory(action,detail){
+  if(!SB||!SB.loggedIn)return;
+  if(!state.history)state.history=[];
+  state.history.unshift({action:action,detail:detail,created_at:new Date().toISOString()});
+  try{await SB.recordHistory({action:action,detail:detail});}catch(e){}
+}
+async function loadHistory(){
+  if(!state.history)state.history=[];
+  if(!SB||!SB.loggedIn){state.history=[];return;}
+  try{state.history=await SB.listHistory();}catch(e){state.history=[];}
+}
+
+/* ---------- save: original, or version of a loaded source ---------- */
 async function saveCurrent(){
   if(!SB||!SB.loggedIn){setTicker('Sign in to save timetables','err');return;}
   const c=getSel();if(!c)return;
+  if(state.source&&state.source.id){openVersionModal();return;}
   const rank=rankOf(c,sortedList());
   const def='Combination #'+rank+' (score '+c.score+')';
   let name;
@@ -1682,17 +1730,57 @@ async function saveCurrent(){
   if(name===null)return;
   setTicker('Saving…','run',true);
   try{
-    await SB.saveTimetable({name:name||def,score:c.score,timetable:cellsToRaw(c.tt)});
+    await SB.saveTimetable({name:name||def,score:c.score,timetable:cellsToRaw(c.tt),kind:'original',actions:currentActionsSnapshot()});
+    await recordHistory('create_original',{name:name||def,score:c.score});
     await loadSavedList();
-    setTicker('Saved "'+(name||def)+'" to your account','ok');
+    setTicker('Saved "'+(name||def)+'" as an original','ok');
   }catch(e){setTicker('Save failed: '+e.message,'err');}
 }
+function openVersionModal(){
+  const src=state.source;
+  const c=getSel();if(!src||!c)return;
+  const root=rootOf(src.id);
+  const fromEl=document.getElementById('versionFrom');
+  if(fromEl)fromEl.innerHTML='Deriving from <b>'+esc(src.name||'saved')+'</b>'+(root&&root.id!==src.id?' (chain root: '+esc(root.name||'saved')+')':'')+'<br><span class="saved-meta">'+esc(actionsSummary(currentActionsSnapshot()))+'</span>';
+  const nm=document.getElementById('versionName');
+  if(nm)nm.value='Version of '+src.name;
+  const msg=document.getElementById('versionMsg');
+  if(msg)msg.textContent='';
+  document.getElementById('versionModal').style.display='flex';
+}
+async function doSaveVersion(mode){
+  const c=getSel();const src=state.source;
+  if(!c||!src){document.getElementById('versionModal').style.display='none';return;}
+  const nm=document.getElementById('versionName');
+  const name=(nm&&nm.value.trim())?nm.value.trim():('Version of '+src.name);
+  setTicker('Saving…','run',true);
+  try{
+    if(mode==='keep'){
+      await SB.saveTimetable({name:name,score:c.score,timetable:cellsToRaw(c.tt),kind:'version',parent_id:src.id,actions:currentActionsSnapshot()});
+      await recordHistory('create_version',{name:name,from:src.name,score:c.score});
+    }else{
+      const root=rootOf(src.id);
+      await SB.saveTimetable({name:name,score:c.score,timetable:cellsToRaw(c.tt),kind:'original',parent_id:root?root.id:null,actions:currentActionsSnapshot()});
+      if(root)await SB.archiveTimetable(root.id);
+      await recordHistory('replace_original',{name:name,replaced:root?root.name:src.name,score:c.score});
+    }
+    document.getElementById('versionModal').style.display='none';
+    state.source=null;
+    await loadSavedList();
+    setTicker(mode==='keep'?'Saved as a version — original kept':'Saved — it replaced the original (old one archived)','ok');
+  }catch(e){
+    document.getElementById('versionMsg').textContent='Error: '+e.message;
+    setTicker('Save failed: '+e.message,'err');
+  }
+}
+
 async function pushCurrent(){
   if(!SB||!SB.loggedIn){setTicker('Sign in to push a timetable','err');return;}
   const c=getSel();if(!c)return;
   setTicker('Publishing timetable…','run',true);
   try{
     await SB.pushTimetable({score:c.score,timetable:cellsToRaw(c.tt)});
+    await recordHistory('push',{name:'current combination',score:c.score});
     state.combos.forEach(function(x){x.via=(x.id===c.id)?'pushed':(x.via==='pushed'?'browser':x.via);});
     renderChrome();renderScorecard();
     setTicker('Pushed — everyone can now view this timetable without signing in','ok');
@@ -1711,9 +1799,10 @@ async function loadSavedCombo(id){
       state.seen.add(key);
     }
     state.selected=combo.id;
+    state.source={id:row.id,name:row.name||'saved',kind:row.kind||'original'};
     setView('sections');
     persist();renderAll();
-    setTicker('Loaded "'+(row.name||'saved')+'"','ok');
+    setTicker('Loaded "'+(row.name||'saved')+'" — tweak it, then press 💾 Save to keep a version or replace','ok');
   }catch(e){setTicker('Load failed: '+e.message,'err');}
 }
 async function pushSavedCombo(id){
@@ -1723,6 +1812,7 @@ async function pushSavedCombo(id){
     if(!row){setTicker('Saved timetable not found','err');return;}
     setTicker('Publishing…','run',true);
     await SB.pushTimetable({score:row.score,timetable:row.timetable});
+    await recordHistory('push',{name:row.name||'saved',score:row.score});
     await loadPushedTimetable();
     setTicker('Pushed "'+(row.name||'saved')+'" — visible to everyone now','ok');
   }catch(e){setTicker('Push failed: '+e.message,'err');}
@@ -1730,34 +1820,87 @@ async function pushSavedCombo(id){
 async function deleteSavedCombo(id){
   if(!SB||!SB.loggedIn)return;
   try{
+    ensureSavedList();
+    const it=(state.savedList||[]).find(function(x){return x.id===id;});
     await SB.deleteSaved(id);
+    await recordHistory('delete_timetable',{name:it?it.name:'',kind:it?(it.kind||'original'):''});
+    if(state.source&&state.source.id===id)state.source=null;
     await loadSavedList();
     renderMain();
-    setTicker('Deleted saved timetable','ok');
+    setTicker('Deleted '+(it&&it.kind==='version'?'version':'timetable')+' (the action stays in History)','ok');
   }catch(e){setTicker('Delete failed: '+e.message,'err');}
 }
 function renderSaved(){
   const signedIn=SB&&SB.loggedIn;
-  let h='<div class="cons-note"><b>Saved timetables.</b> '+(signedIn?'Your saved combinations live in your account and appear here on any device you sign in on. <b>Load</b> brings one back, <b>Push</b> publishes it for everyone, <b>Delete</b> removes it.':'<b style="color:var(--amber-deep)">🔒 Sign in to view your saved timetables.</b>')+'</div>';
+  let h='<div class="cons-note"><b>Saved timetables.</b> '+(signedIn?'<b>Originals</b> are saved straight from the main page. <b>Load</b> one, tweak it and re-optimise, then press 💾 Save to <b>keep it as a version</b> or <b>replace the original</b> (the old original is then archived). <b>Push</b> publishes any original or version; <b>Delete</b> wipes a version while its action stays in 🕘 History.':'<b style="color:var(--amber-deep)">🔒 Sign in to view your saved timetables.</b>')+'</div>';
   if(!signedIn){mainEl.innerHTML=h;return;}
   ensureSavedList();
   if(!state.savedList.length){h+='<div class="empty"><div class="eic">💾</div><h3>Nothing saved yet</h3><p>Select a combination and press “Save” in the toolbar.</p></div>';mainEl.innerHTML=h;return;}
-  h+='<div class="cons-grid">';
-  state.savedList.forEach(function(it){
+  const byId={};
+  state.savedList.forEach(function(x){byId[x.id]=x;});
+  const active=state.savedList.filter(function(x){return !x.archived;}).sort(function(a,b){
+    return (a.kind==='version'?1:0)-(b.kind==='version'?1:0)||new Date(a.created_at)-new Date(b.created_at);
+  });
+  const archived=state.savedList.filter(function(x){return x.archived;});
+  function card(it){
     const when=new Date(it.created_at).toLocaleString('en-GB');
-    h+='<article class="cons-card"><header><h4>'+esc(it.name||'Untitled')+'</h4><span class="stag">score '+it.score+'</span></header>'+
-      '<div class="saved-meta">Saved '+esc(when)+'</div>'+
+    const parent=it.parent_id?(byId[it.parent_id]?byId[it.parent_id].name:'(deleted)'):null;
+    const kindBadge=it.archived?'<span class="stag edited">📦 archived</span>':(it.kind==='version'?'<span class="stag edited">🧬 version</span>':'<span class="stag">🗂 original</span>');
+    let meta='Saved '+esc(when);
+    if(it.kind==='version'&&parent)meta+=' · from '+esc(parent);
+    if(it.actions)meta+=' · '+esc(actionsSummary(it.actions));
+    return '<article class="cons-card'+(it.archived?' edited':'')+'"><header><h4>'+esc(it.name||'Untitled')+'</h4>'+kindBadge+'<span class="stag">score '+it.score+'</span></header>'+
+      '<div class="saved-meta">'+meta+'</div>'+
       '<div class="cons-btns">'+
         '<button class="mini-export" data-saved-load="'+it.id+'">Load</button>'+
         '<button class="mini-export" data-saved-push="'+it.id+'">Push</button>'+
         '<button class="card-csv" data-saved-del="'+it.id+'" title="Delete this saved timetable">✕</button>'+
       '</div></article>';
-  });
+  }
+  h+='<div class="cons-grid">';
+  active.forEach(function(it){h+=card(it);});
   h+='</div>';
+  if(archived.length){
+    h+='<div class="sp-block-title" style="margin:18px 0 8px">📦 Archived originals (replaced)</div><div class="cons-grid">';
+    archived.forEach(function(it){h+=card(it);});
+    h+='</div>';
+  }
   mainEl.innerHTML=h;
   document.querySelectorAll('[data-saved-load]').forEach(function(el){el.addEventListener('click',function(){loadSavedCombo(el.dataset.savedLoad);});});
   document.querySelectorAll('[data-saved-push]').forEach(function(el){el.addEventListener('click',function(){pushSavedCombo(el.dataset.savedPush);});});
   document.querySelectorAll('[data-saved-del]').forEach(function(el){el.addEventListener('click',function(){deleteSavedCombo(el.dataset.savedDel);});});
+}
+function historyLabel(a){
+  if(a==='create_original')return '🗂 Saved original';
+  if(a==='create_version')return '🧬 Created version';
+  if(a==='replace_original')return '♻️ Replaced original';
+  if(a==='delete_timetable')return '✕ Deleted';
+  if(a==='push')return '📣 Pushed';
+  if(a==='unpush')return '🕳 Unpushed';
+  return a;
+}
+function renderHistory(){
+  const signedIn=SB&&SB.loggedIn;
+  let h='<div class="cons-note"><b>History.</b> A record of every action on your timetables — it stays even after a version is deleted. '+(signedIn?'':'<b style="color:var(--amber-deep)">🔒 Sign in to view your history.</b>')+'</div>';
+  if(!signedIn){mainEl.innerHTML=h;return;}
+  if(!state.history)state.history=[];
+  if(!state.history.length){h+='<div class="empty"><div class="eic">🕘</div><h3>No history yet</h3><p>Actions on your saved timetables will appear here.</p></div>';mainEl.innerHTML=h;return;}
+  h+='<div class="cons-grid">';
+  state.history.forEach(function(it){
+    const when=new Date(it.created_at).toLocaleString('en-GB');
+    const d=it.detail||{};
+    let line='';
+    if(it.action==='create_version')line='created version <b>'+esc(d.name||'?')+'</b> from <b>'+esc(d.from||'?')+'</b>';
+    else if(it.action==='replace_original')line='replaced <b>'+esc(d.replaced||'?')+'</b> with <b>'+esc(d.name||'?')+'</b> (old one archived)';
+    else if(it.action==='create_original')line='saved original <b>'+esc(d.name||'?')+'</b>';
+    else if(it.action==='delete_timetable')line='deleted <b>'+esc(d.name||'?')+'</b> ('+esc(d.kind||'timetable')+')';
+    else if(it.action==='push')line='pushed <b>'+esc(d.name||'timetable')+'</b> for everyone';
+    else if(it.action==='unpush')line='removed the published timetable';
+    else line=esc(it.action);
+    h+='<article class="cons-card"><header><h4>'+historyLabel(it.action)+'</h4></header><div class="saved-meta">'+line+'</div><div class="saved-meta">'+esc(when)+'</div></article>';
+  });
+  h+='</div>';
+  mainEl.innerHTML=h;
 }
 
 '''
@@ -1829,6 +1972,7 @@ rep("async function loadSavedCombo(id){", """async function unpushCurrent(){
   setTicker('Removing published timetable…','run',true);
   try{
     await SB.unpushTimetable();
+    await recordHistory('unpush',{});
     state.combos=state.combos.filter(function(c){return c.via!=='pushed';});
     const list=sortedList();
     state.selected=list.length?list[0].id:null;
@@ -1889,10 +2033,6 @@ function tweaksToRulesDelta(){
     const sl=(e.slots&&e.slots.length)?e.slots:slots;
     const push=function(name){delta[name]=delta[name]||[];delta[name].push({days:days,slots:sl});};
     if(e.type==='suspend_teacher'||e.type==='suspend_teacher_slots'){if(e.teacher)push(e.teacher);}
-    else if(e.type==='block_section_slots'){
-      const a=getWorkingAllocation()[e.section];
-      if(a&&a.subjects)a.subjects.forEach(function(x){if(x.teacher)push(x.teacher);});
-    }
   }
   return delta;
 }
@@ -1914,7 +2054,6 @@ function describeTweak(t){
   let eff='';
   if(e.type==='suspend_teacher')eff='Unavailable: '+esc(e.teacher||'?');
   else if(e.type==='suspend_teacher_slots')eff='Unavailable: '+esc(e.teacher||'?')+(e.slots?' ('+e.slots.join(', ')+')':'');
-  else if(e.type==='block_section_slots')eff='Blocked: '+esc(e.section||'?')+(e.slots?' ('+e.slots.join(', ')+')':'');
   else eff=esc(e.type||'?');
   if(e.days&&e.days.length)eff+=' on '+e.days.join(', ');
   return eff;
@@ -1938,14 +2077,14 @@ function tweakStatus(t){
 }
 function renderTweaks(){
   const signedIn=SB&&SB.loggedIn;
-  let h='<div class="cons-note"><b>Timetable tweaks.</b> Handle leave, lab closures and one-off changes. '+(signedIn?'Describe a situation in plain language, or add it manually. <b>Permanent</b> changes apply forever; <b>temporary</b> ones revert automatically after their window; <b>recurring</b> ones apply every week.':'<b style="color:var(--amber-deep)">🔒 Sign in to add or remove tweaks.</b>')+'</div>';
+  let h='<div class="cons-note"><b>Timetable tweaks.</b> Handle teacher unavailability and one-off changes. '+(signedIn?'Describe a situation in plain language, or add it manually. <b>Permanent</b> changes apply forever; <b>temporary</b> ones revert automatically after their window; <b>recurring</b> ones apply every week.':'<b style="color:var(--amber-deep)">🔒 Sign in to add or remove tweaks.</b>')+'</div>';
   if(signedIn){
     h+='<div class="tweak-add">'+
       '<textarea class="cons-nl" id="tweakNl" placeholder="e.g. Prof. Naeem is on leave tomorrow"></textarea>'+
       '<button class="mini-export" id="tweakTranslate">✦ Translate</button>'+
     '</div>';
     h+='<div class="tweak-add">'+
-      '<select id="tweakType"><option value="suspend_teacher">Teacher away</option><option value="suspend_teacher_slots">Teacher away (some periods)</option><option value="block_section_slots">Section blocked</option></select>'+
+      '<select id="tweakType"><option value="suspend_teacher">Teacher away</option><option value="suspend_teacher_slots">Teacher away (some periods)</option></select>'+
       '<select id="tweakTarget"></select>'+
       '<span class="ed-chip-wrap" id="tweakDays"></span>'+
       '<span class="ed-chip-wrap" id="tweakSlots"></span>'+
@@ -1973,11 +2112,7 @@ function renderTweaks(){
   const typeSel=document.getElementById('tweakType');
   function repopulateTargets(){
     targetSel.innerHTML='';
-    if(typeSel.value==='block_section_slots'){
-      SECTIONS.forEach(function(sec){const o=document.createElement('option');o.value=sec.id;o.textContent=sec.label;targetSel.appendChild(o);});
-    }else{
-      facultyNames().forEach(function(n){const o=document.createElement('option');o.value=n;o.textContent=n;targetSel.appendChild(o);});
-    }
+    facultyNames().forEach(function(n){const o=document.createElement('option');o.value=n;o.textContent=n;targetSel.appendChild(o);});
   }
   repopulateTargets();
   typeSel.addEventListener('change',repopulateTargets);
@@ -1991,9 +2126,9 @@ function renderTweaks(){
     const days=Array.from(daysWrap.querySelectorAll('.ed-chip-day.on')).map(function(x){return x.dataset.v;});
     const slots=Array.from(slotsWrap.querySelectorAll('.ed-chip-slot.on')).map(function(x){return x.dataset.v;});
     const win=document.getElementById('tweakWindow').value;
-    if(!target){setTicker('Choose a teacher or section','err');return;}
+    if(!target){setTicker('Choose a teacher','err');return;}
     const effect={type:type};
-    if(type==='block_section_slots')effect.section=target;else effect.teacher=target;
+    effect.teacher=target;
     if(slots.length)effect.slots=slots;
     if(days.length)effect.days=days;
     const tweak={kind:win==='permanent'?'permanent':'temporary',recurring:win==='recurring',effect:effect,natural:'',notes:'manual',created_at:new Date().toISOString()};
@@ -2074,6 +2209,7 @@ function clearEdits(){state.edits=[];renderMain();renderChrome();setTicker('Edit
 function reoptimizeWithEdits(){
   if(!(state.edits&&state.edits.length)){setTicker('No edits to apply','err');return;}
   const locks=state.edits.slice();
+  state.lastLocks=locks.slice();
   state.running=true;state.stopRequested=false;
   progFill.style.width='100%';
   setTicker('Re-optimizing around '+locks.length+' edit'+(locks.length===1?'':'s')+'…','run',true);
@@ -2098,7 +2234,7 @@ function reoptimizeWithEdits(){
 # ---- 30) tweaks (temporary/permanent) + manual cell edits + re-optimize ----
 # (a) state fields
 rep("const state={combos:[],selected:null,view:'sections',sectionFilter:'all',running:false,runTimer:null,runTarget:0,cpsatBusy:false,cpsatDone:false,cpsatMerged:0,spot:null,seen:new Set()};",
-    "const state={combos:[],selected:null,view:'sections',sectionFilter:'all',running:false,runTimer:null,runTarget:0,cpsatBusy:false,cpsatDone:false,cpsatMerged:0,spot:null,seen:new Set(),tweaks:[],editMode:false,edits:[],editCell:null};")
+    "const state={combos:[],selected:null,view:'sections',sectionFilter:'all',running:false,runTimer:null,runTarget:0,cpsatBusy:false,cpsatDone:false,cpsatMerged:0,spot:null,seen:new Set(),tweaks:[],editMode:false,edits:[],editCell:null,source:null,lastLocks:null,history:[]};")
 # (b) CSS
 rep("</style>", ".edited-cell{outline:2px solid var(--amber);outline-offset:-2px;position:relative}\\n.edited-cell::after{content:'✎';position:absolute;top:2px;right:4px;font-size:9px;color:var(--amber-deep)}\\n.cell-editor{display:none;position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:300;background:var(--surface);border:1px solid var(--line2);border-radius:12px;box-shadow:0 16px 48px rgba(14,59,41,.35);padding:14px 16px;width:min(420px,94vw)}\\n.cell-editor h3{margin:0 0 6px;font-family:var(--disp);font-weight:900;font-size:15px;color:var(--green-deep)}\\n.ce-cur{font-size:12px;color:var(--ink2);margin-bottom:8px}\\n.cell-editor select{width:100%;margin-bottom:10px;padding:8px;border:1px solid var(--line2);border-radius:8px;font-size:13px;background:#fff;color:var(--ink)}\\n.tweak-add{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}\\n.tweak-add select,.tweak-add input[type=date]{padding:7px 9px;border:1px solid var(--line2);border-radius:8px;background:#fff;font-size:12.5px;color:var(--ink)}\\n.tweak-nl{font-size:12px;color:var(--ink2);font-style:italic}\\n.tweak-stag{font-family:var(--mono);font-size:10px;padding:2px 8px;border-radius:99px;border:1px solid var(--line2)}\\n.tweak-stag.active{background:var(--green-tint);color:var(--green-deep);border-color:var(--green)}\\n.tweak-stag.expired{background:var(--surface2);color:var(--ink2)}\\n.tweak-stag.upcoming{background:var(--amber-tint);color:var(--amber-deep);border-color:var(--amber)}\\n.ed-chip-wrap{display:inline-flex;gap:4px;flex-wrap:wrap}\\n</style>")
 # (c) Tweaks tab
@@ -2325,6 +2461,33 @@ rep("</style>", r'''.eng-actions{display:flex;gap:8px;justify-content:flex-end;m
 .eng-stmt.noc{border-color:var(--amber);background:var(--amber-tint)}
 @media print{#printArea .eng-stmt{break-inside:avoid;border-color:#cfd6c8;font-size:12px}#printArea .eng-print{margin-top:10px}}
 </style>''')
+
+# ---- 34) versioning UI: version modal + history tab --------------------------
+rep('<div class="auth-modal" id="authModal">',
+    '<div class="auth-modal" id="versionModal">\n  <div class="auth-box">\n    <h3>Save as version</h3>\n    <p id="versionFrom" style="font-size:12px;color:var(--ink2);margin:0 0 10px">Deriving from …</p>\n    <input id="versionName" type="text" placeholder="Name this version">\n    <div class="auth-row">\n      <button class="btn primary" id="versionKeep">🔀 Keep as version</button>\n      <button class="btn" id="versionReplace">♻️ Replace original</button>\n      <button class="btn" id="versionClose">Cancel</button>\n    </div>\n    <div class="cons-status" id="versionMsg"></div>\n  </div>\n</div>\n<div class="auth-modal" id="authModal">')
+
+# History tab after Saved
+rep('<button id="viewSaved">💾 Saved</button>',
+    '<button id="viewSaved">💾 Saved</button>\n      <button id="viewHistory">🕘 History</button>')
+rep("$('viewSaved').addEventListener('click',()=>setView('saved'));",
+    "$('viewSaved').addEventListener('click',()=>setView('saved'));\n$('viewHistory').addEventListener('click',()=>setView('history'));")
+rep("  $('viewSaved').classList.toggle('on',v==='saved');",
+    "  $('viewSaved').classList.toggle('on',v==='saved');\n  $('viewHistory').classList.toggle('on',v==='history');")
+rep("  if(state.view==='saved'){renderSaved();return;}",
+    "  if(state.view==='saved'){renderSaved();return;}\n  if(state.view==='history'){renderHistory();return;}")
+
+# version modal listeners
+rep("$('viewEngagement').addEventListener('click',()=>setView('engagement'));",
+    "$('viewEngagement').addEventListener('click',()=>setView('engagement'));\n$('versionKeep').addEventListener('click',()=>doSaveVersion('keep'));\n$('versionReplace').addEventListener('click',()=>doSaveVersion('replace'));\n$('versionClose').addEventListener('click',()=>{document.getElementById('versionModal').style.display='none';});")
+
+# boot: also load history
+rep("loadPushedTimetable().then(()=>{renderMain();renderChrome();});\nloadSavedList();",
+    "loadPushedTimetable().then(()=>{renderMain();renderChrome();});\nloadSavedList();\nloadHistory();")
+# login: refresh history; logout: clear history + source
+rep("    await syncFromCloud();await loadSavedList();",
+    "    await syncFromCloud();await loadSavedList();await loadHistory();")
+rep("state.savedList=[];renderAuth();renderChrome();",
+    "state.savedList=[];state.history=[];state.source=null;renderAuth();renderChrome();")
 
 io.open(DST, "w", encoding="utf-8").write(src)
 print("OK → wrote", DST, "(", len(src), "bytes )")

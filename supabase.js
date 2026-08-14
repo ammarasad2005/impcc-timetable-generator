@@ -136,7 +136,7 @@
       await this.ensureSession();
       const uid = this.user && this.user.id;
       if (!uid) return [];
-      const rows = await this._req("/rest/v1/saved_timetables?user_id=eq." + uid + "&select=id,name,score,created_at&order=created_at.desc", {
+      const rows = await this._req("/rest/v1/saved_timetables?user_id=eq." + uid + "&select=id,name,score,created_at,kind,parent_id,actions,archived&order=created_at.asc", {
         method: "GET", headers: this._headers()
       });
       return Array.isArray(rows) ? rows : [];
@@ -152,7 +152,16 @@
       await this.ensureSession();
       const uid = this.user && this.user.id;
       if (!uid) throw new Error("not signed in");
-      const body = { user_id: uid, name: payload.name || "", score: payload.score, timetable: payload.timetable };
+      const body = {
+        user_id: uid,
+        name: payload.name || "",
+        score: payload.score,
+        timetable: payload.timetable,
+        kind: payload.kind || "original",
+        parent_id: payload.parent_id || null,
+        actions: payload.actions || null,
+        archived: !!payload.archived
+      };
       return this._req("/rest/v1/saved_timetables", {
         method: "POST", headers: this._headers(), body: JSON.stringify(body)
       });
@@ -160,6 +169,40 @@
     async deleteSaved(id) {
       await this.ensureSession();
       return this._req("/rest/v1/saved_timetables?id=eq." + id, { method: "DELETE", headers: this._headers() });
+    },
+    async archiveTimetable(id) {
+      await this.ensureSession();
+      return this._req("/rest/v1/saved_timetables?id=eq." + id, {
+        method: "PATCH",
+        headers: this._headers(),
+        body: JSON.stringify({ archived: true })
+      });
+    },
+
+    // ---- action history (append-only audit trail; survives version deletion) ----
+    async recordHistory(entry) {
+      await this.ensureSession();
+      const uid = this.user && this.user.id;
+      if (!uid) return null;
+      const body = {
+        user_id: uid,
+        action: entry.action || "event",
+        timetable_id: entry.timetable_id || null,
+        parent_id: entry.parent_id || null,
+        detail: entry.detail || null
+      };
+      return this._req("/rest/v1/timetable_history", {
+        method: "POST", headers: this._headers(), body: JSON.stringify(body)
+      });
+    },
+    async listHistory() {
+      await this.ensureSession();
+      const uid = this.user && this.user.id;
+      if (!uid) return [];
+      const rows = await this._req("/rest/v1/timetable_history?user_id=eq." + uid + "&select=*&order=created_at.desc", {
+        method: "GET", headers: this._headers()
+      });
+      return Array.isArray(rows) ? rows : [];
     },
 
     // ---- pushed timetable (one, public read) ----

@@ -83,6 +83,7 @@ python3 make_report.py        # builds compliance_report.md
 | `test_engagement.js` | Node tests for the engagement (substitute) engine — 37 assertions. |
 | `test_engagement_fuzz.js` | Engagement edge cases + randomized property/fuzz sweep. |
 | `engagement_schema.md` | Spec for the substitute ("engage the slot") engine. |
+| `versioning_schema.md` | Spec for originals → versions → history (versioning). |
 
 ---
 
@@ -244,6 +245,23 @@ since the PNGs are already compressed) — validated against Python's `zipfile`.
 > **Unpush:** the admin can remove the published timetable — an **🕳 Unpush** button appears
 > (signed-in only, when something is pushed) and deletes the public row, so visitors no
 > longer see it. RLS lets only authenticated users delete; anonymous deletes match zero rows.
+
+## Versioning (originals → versions → history)
+
+- **Originals** are saved straight from the main page's combinations (💾 Save). **Load**
+  one, tweak it (constraints, tweaks, cell edits, engagement) and re-optimise, then press
+  💾 Save again — a dialog lets you **🔀 keep it as a version** (the original stays) or
+  **♻️ replace the original** (the old original is **archived**).
+- **Versions can be chained** — a version is derived from an original or from another
+  version (`parent_id`), and every version **remembers the edits/tweaks/engagement that
+  produced it** (stored as `actions` and summarised on its card). Originals, versions and
+  archived originals are all **pushable**.
+- **Deleting a version wipes it** from the list — but the **action stays in 🕘 History**
+  (an append-only `timetable_history` audit trail: saved original, created version,
+  replaced original, deleted, pushed, unpushed). Deleting a version never erases the
+  history of actions.
+- Backing schema: `saved_timetables` gained `kind`, `parent_id`, `actions`, `archived`;
+  new `timetable_history` table (owner RLS, append-only from the client).
 
 ---
 

@@ -11,10 +11,6 @@ can (a) apply it while it's relevant, (b) revert automatically when it expires, 
 - "Prof. Naeem is on leave today / tomorrow / this week / Mon–Tue."
 - "Prof. Basit can't make it for the first two periods on Friday."
 
-**Temporary — a place / event:**
-- "Computer lab unavailable this week." → block the lab subjects.
-- "Exam on Wednesday." → block a whole section's day.
-
 **Temporary — recurring (every week):**
 - "Prof. Y has a meeting every Wednesday P4." → weekly slot block.
 
@@ -31,9 +27,8 @@ can (a) apply it while it's relevant, (b) revert automatically when it expires, 
   "window": { "type": "dates", "from": "2026-08-14", "to": "2026-08-16" },   // temporary only
   "recurring": false,                                   // true = every week
   "effect": {
-    "type": "suspend_teacher" | "suspend_teacher_slots" | "block_section_slots",
+    "type": "suspend_teacher" | "suspend_teacher_slots",
     "teacher": "Prof. Muhammad Naeem",
-    "section": "ICS-I-A",
     "slots": ["P1", "P2"],
     "days": ["MON", "TUE"]
   },
@@ -45,8 +40,10 @@ can (a) apply it while it's relevant, (b) revert automatically when it expires, 
 
 - `suspend_teacher` — the teacher teaches nothing on the window days.
 - `suspend_teacher_slots` — the teacher is unavailable only in `slots` on `days`.
-- `block_section_slots` — a whole section is free/blocked in `slots` on `days`
-  (mapped to every teacher of that section).
+
+(`block_section_slots` — "Section blocked" — was removed: it conflated "the class is
+off / at an exam / on a trip" with "only the room is unavailable", and it over-blocked
+teachers in their *other* sections too. Use teacher unavailability + engagement instead.)
 
 ## 3. The deterministic layer
 
@@ -56,7 +53,6 @@ An active tweak becomes a **constraint** at generation time:
 |---|---|
 | suspend_teacher (day D) | that teacher → `forbidden_slots_on_days: [{days:[D], slots:[P1..P5]}]` |
 | suspend_teacher_slots (D, S) | that teacher → `forbidden_slots_on_days: [{days:[D], slots:S}]` |
-| block_section_slots (sec, D, S) | every teacher of that section → `forbidden_slots_on_days: [{days:[D], slots:S}]` |
 
 The solver then **re-organizes the remaining timetable to the best valid combination**
 while honouring those rules — e.g. a teacher absent on Monday simply has their subject's
