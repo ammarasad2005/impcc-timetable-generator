@@ -1,301 +1,180 @@
-# IMPCC — Inter (1st Shift) Weekly Timetable Generator
+<div align="center">
 
-Automated timetable generator for **Islamabad Model Postgraduate College of Commerce (H-8/4)**
-— Intermediate level (ICS + I.Com), 1st shift.
+<img src="impcc-logo.png" alt="IMPCC" width="120" />
 
-11 sections · 5 days (Mon–Fri) · 5 periods/day (40 min) · break after 3rd period · 25 periods/section/week.
+# IMPCC · Weekly Timetable Generator
 
----
+**Islamabad Model Postgraduate College of Commerce (H-8/4)** — Intermediate · 1st Shift · ICS &amp; I.Com
 
-## The score — what it means
+A production timetable generator that turns the college's faculty constraints and course allocation into **clash-free weekly schedules** — solved live in the browser and proven-optimal by a CP-SAT backend.
 
-Every generated combination **satisfies all hard rules** (faculty constraints, no subject twice in a
-day, no teacher double-booked, the Accounting-vs-Economics non-overriding rule, the parallel
-Economics/Statistics block, …). The **score only ranks the soft "avoid shuffling" preference**:
+<br/>
 
-```
-score = Σ over subjects  (number of distinct period-slots used − 1) × weekly weight
-weight:  5 periods/week → 100,000
-         4 periods/week →  10,000
-         3 periods/week →     100
-         2 periods/week →      10
-```
+[![Live](https://img.shields.io/badge/live-impcc--timetable--generator.vercel.app-1c6b48?style=flat-square&logo=vercel&logoColor=white)](https://impcc-timetable-generator.vercel.app)
+[![Solver](https://img.shields.io/badge/solver-CP--SAT%20%2B%20in--browser-e8a41f?style=flat-square)](README.md)
+[![Sections](https://img.shields.io/badge/sections-11%20·%20ICS%20%26%20I.Com-0e3b29?style=flat-square)](README.md)
+[![Stack](https://img.shields.io/badge/stack-FastAPI%20·%20OR--Tools%20·%20Supabase-3a55b0?style=flat-square)](README.md)
 
-- **Lower is better.** A subject that stays in one period-slot all week contributes 0; a 3/wk subject
-  split across two slots contributes +100; a 2/wk subject split as 1+1 contributes +10.
-- 5/wk and 4/wk subjects are never shuffled (they would cost 100,000 / 10,000 — always avoided).
-- The proven minimum is **560** (= four 3-credit subjects split + sixteen 2-credit subjects split).
-  The minimum is non-zero because a section's 25 periods can't always tile into 5 slots of exactly
-  5 days without splitting a small subject (e.g. I.Com-I's 5,4,4,3,3,2,2,2 needs at least one split).
-- The in-browser solver typically lands at **570–580**; the offline CP-SAT pipeline proves **560**.
+</div>
 
 ---
 
-## Quick start
+> **A one-page timetable for the whole college.** Every section gets a full 25-period week (Mon–Fri · P1–P5, with a break between P3 and P4), every teacher is in exactly one room at a time, every faculty member's personal constraints are honoured — and the result can be saved, versioned, pushed to every device, printed, or exported as images.
 
-### 1. The website (no installation, runs entirely in the browser)
-Open **`index.html`** in any modern browser (or deploy the repo to Vercel). It generates
-combinations **live** using a JavaScript port of the solver (`solver.js`) — **no pre-computed data**.
+<br/>
 
-- **Generate / Generate more / Stop** — fresh run, append more (nothing is ever dropped), or stop early.
-- **Compute optimal (CP-SAT)** — calls `POST /generate` (same-origin on Vercel, or set
-  `window.IMPCC_API_URL`) to merge proven-optimal (score 560) solutions from the CP-SAT backend.
-- **Combination** dropdown + ◀ ▶ — every solution is listed with rank, score, and a plain-language
-  standing ("tied for best", "near-optimal — 10 points above the best", …); the scorecard shows the
-  percentile, score-distribution histogram, and the shuffle breakdown.
-- **Sections / Faculty** toggle — per-section grids, or every faculty member's weekly schedule;
-  click any teacher card or class cell to open their **personal courses** drawer.
-- **Print / PDF** and **CSV export** — for the full combination or a single faculty member.
-- Section **preview filter** (all / I.Com / ICS / a single section) and teacher cross-highlighting.
+## 📸 The app in context
 
-> **Live solver vs offline pipeline.** The browser runs a hand-written two-stage backtracking
-> solver (slot packing + day colouring) — a faithful JS port of the same constraint model. It is
-> **not** OR-Tools CP-SAT (that C++ library cannot run in a browser); CP-SAT remains the offline
-> reference in `cp_solver.py` and is what proves the optimal score of **560**.
+<table>
+  <tr>
+    <td width="50%"><img src="assets/shot-desktop-sections.png" alt="IMPCC — desktop sections view" width="100%"/></td>
+    <td width="50%"><img src="assets/shot-mobile-top.png" alt="IMPCC — mobile" width="100%"/></td>
+  </tr>
+  <tr>
+    <td align="center"><sub><b>Desktop</b> — header, controls, scorecard and the I.Com/ICS sections grids</sub></td>
+    <td align="center"><sub><b>Mobile</b> — compact header, faculty search, controls and scorecard</sub></td>
+  </tr>
+</table>
 
-### 2. Offline pipeline (Python, proven optimum)
-Optional — the offline CP-SAT tooling still exists if you ever need the proven-optimal set
-outside the browser. It **generates** its outputs on demand (nothing precomputed is committed):
+<table>
+  <tr>
+    <td width="50%"><img src="assets/shot-sections-grid.png" alt="Weekly grid with live timetables" width="100%"/></td>
+    <td width="50%"><img src="assets/shot-spotlight.png" alt="Faculty spotlight drawer" width="100%"/></td>
+  </tr>
+  <tr>
+    <td align="center"><sub><b>Sections</b> — the 5×5 weekly grid, colour-coded by stream</sub></td>
+    <td align="center"><sub><b>Faculty spotlight</b> — a teacher's personal weekly timetable</sub></td>
+  </tr>
+</table>
+
+<details>
+<summary><b>More screenshots — Faculty · Constraints · Allocation · Mobile</b></summary>
+<br/>
+<table>
+  <tr>
+    <td width="50%"><img src="assets/shot-faculty.png" alt="Faculty directory view" width="100%"/></td>
+    <td width="50%"><img src="assets/shot-constraints.png" alt="Constraints view" width="100%"/></td>
+  </tr>
+  <tr>
+    <td align="center"><sub><b>Faculty</b> — every teacher's load and schedule at a glance</sub></td>
+    <td align="center"><sub><b>Constraints</b> — faculty rules as data, editable per member</sub></td>
+  </tr>
+</table>
+<table>
+  <tr>
+    <td width="50%"><img src="assets/shot-allocation.png" alt="Allocation view" width="100%"/></td>
+    <td width="50%"><img src="assets/shot-mobile-sections.png" alt="Mobile sections" width="100%"/></td>
+  </tr>
+  <tr>
+    <td align="center"><sub><b>Allocation</b> — subjects, teachers and periods per section</sub></td>
+    <td align="center"><sub><b>Mobile sections</b> — the same grids, touch-optimised</sub></td>
+  </tr>
+</table>
+<div align="center">
+  <img src="assets/shot-mobile-faculty.png" alt="Mobile faculty view" width="50%"/>
+  <br/><sub><b>Mobile faculty</b> — one-column cards on a phone</sub>
+</div>
+</details>
+
+---
+
+## ✨ What it does
+
+| | |
+|---|---|
+| ▶ **Generate** | A randomized backtracking solver builds valid weeks live in the browser — nothing is precomputed. |
+| ✦ **Compute optimal (CP-SAT)** | A proven-optimal backend (OR-Tools CP-SAT on Vercel) finds the mathematically best schedules — score **560** — and merges them into the pool. |
+| 🔢 **Combination pool** | Every distinct valid timetable is kept, ranked by shuffle score, and switchable with ‹ ›. Nothing is ever silently dropped. |
+| 🧭 **Nine views** | Sections · Faculty · Constraints · Allocation · Directory · Saved · History · Tweaks · Engagement. |
+| 📣 **Publish** | Push **one** timetable so every visitor sees it without signing in; unpush removes it again. |
+
+## 🎯 The score
+
+Lower is better — it measures **how much a subject shuffles between period slots across the week**.
+
+| Subject load | Penalty per extra slot |
+|---|---|
+| 5 / week | 100,000 (always avoided) |
+| 4 / week | 10,000 |
+| 3 / week | 100 |
+| 2 / week | 10 |
+
+The **proven optimum is 560**; the in-browser solver typically lands at 570–580, and the CP-SAT backend proves 560.
+
+## 🛠 Adjusting the timetable
+
+- **Tweaks** — teacher unavailability, permanent / temporary (date window) / recurring. Expired temporary tweaks revert automatically.
+- **✎ Edit mode** — click any cell to *force* a subject+teacher or *remove* a lecture, then **Re-optimize** keeps every edit while rebuilding the week.
+- **⇄ Swaps** — drag cells into **perfect circles** (a→b→c→a). Live disruption count (vacancies, conflicts, double-bookings) with a **targeted optimization** that closes incomplete chains using the fewest extra cells.
+- **👥 Engagement** — when a teacher is away, a deterministic substitute engine finds an *engaging professor* for each affected period — one who has **no class of his own** there and **satisfies his own constraints** — output as a printable **statements stack**, never merged into the regular grids.
+
+## 💾 Save · Version · Push
+
+- **Originals** are saved from the main page. **Load** one, tweak it, and save it as a **version** (chainable) or **replace the original** (old one archived).
+- Versions remember the **edits/tweaks/engagement/swaps** that produced them.
+- Deleting a version wipes it, but the **🕘 History** of actions remains — with a clear-history control that removes the log (never the timetables).
+- **🗑 Clear results** empties the generated pool on any device; saved & pushed timetables stay.
+
+## 🔐 Auth & sync (Supabase)
+
+- Sign in (top-right avatar) to unlock CP-SAT, AI translation, saving, pushing and tweak management.
+- Allocation, constraints, faculty directory and tweaks sync in a **published** record readable by everyone — signed-in edits propagate system-wide.
+- Generated pools stay **local** (localStorage); only *saved* timetables live in Supabase.
+
+## 🔍 Faculty search
+
+Type a name in the header and see each teacher's **live location** (which class they're in *right now*, or *Free*), followed by their **upcoming fixtures** — computed from the selected timetable and the current time.
+
+## 📦 Exports
+
+| Export | Format |
+|---|---|
+| Section | landscape **PNG** |
+| Teacher (personal) | **PNG** |
+| Stream / whole platform / all faculty | **ZIP** of PNGs |
+| Combination / section / stream / teacher | **CSV** |
+| Current view | **Print → PDF** |
+
+Exports carry **only college identity** — no scores, ranks, solver or site/developer info.
+
+## 🚀 Deploy & backend
+
+- **Frontend + API on Vercel** — `api/index.py` (FastAPI) serves the site at `/` and `POST /generate`, `GET /health`, `GET /docs`; `vercel.json` bundles the solver modules (`includeFiles`) with a 300 s budget.
+- **In-browser solver** — `solver.js` is a faithful JS port of the same model; the site works fully offline-in-browser even without the backend.
+
+## 📁 Repository
+
+| Path | Purpose |
+|---|---|
+| `index.html` | The functional website (built) |
+| `build_frontend.py` | Build script — the single source of truth (`python3 build_frontend.py`) |
+| `timetable-generator-UI-prototype.html` | The original client-supplied design prototype |
+| `solver.js` / `solver.py` | JS + Python constraint models |
+| `cp_solver.py` | CP-SAT model (OR-Tools) + `generate_ranked()` API entry point |
+| `api/index.py` · `auth_check.py` · `llm_translate.py` | FastAPI backend, auth gate, AI translation |
+| `supabase.js` | Dependency-free Supabase client (GoTrue + PostgREST) |
+| `constraints_schema.md` · `tweaks_schema.md` · `engagement_schema.md` · `versioning_schema.md` · `swap_schema.md` | Feature specs |
+| `gen_all.py` · `export_xlsx.py` · `metrics.py` · `make_report.py` | Offline pipeline (batch solve → XLSX → report) |
+| `assets/` | README screenshots |
+
+## 🧪 Development
 
 ```bash
+# Rebuild the frontend after editing build_frontend.py
+python3 build_frontend.py
+
+# Offline CP-SAT (proven optimum)
 pip install -r requirements.txt
-python3 gen_all.py            # runs CP-SAT over many seeds → solutions.json
-python3 export_xlsx.py        # builds timetables.xlsx (one sheet per combination)
-python3 make_report.py        # builds compliance_report.md
+python3 gen_all.py
+
+# Deploy to Vercel (FastAPI framework preset)
+vercel deploy --prod
 ```
 
 ---
 
-## Files
+<div align="center">
 
-| File | Purpose |
-|---|---|
-| `index.html` | **The functional website** — the client's UI design, wired to the real in-browser solver (`solver.js`) + the CP-SAT backend (`POST /generate`, same-origin on Vercel). |
-| `solver.js` | JavaScript port of the constraint model — runs live in the browser. |
-| `timetable-generator-UI-prototype.html` | The original UI prototype (mock-data demo) the client supplied — the design source. |
-| `build_frontend.py` | Re-applies the functional wiring to the prototype (`python3 build_frontend.py [prototype.html]`). |
-| `solver.py` | Python data model + (early) constructive solver. |
-| `cp_solver.py` | **CP-SAT model** (OR-Tools) — the offline reference solver + `generate_ranked()` API entry point. |
-| `gen_all.py` | Offline CP-SAT runner → regenerates `solutions.json` on demand. |
-| `export_xlsx.py` | Offline: builds `timetables.xlsx` in the college's template layout. |
-| `metrics.py`, `make_report.py` | Offline: shuffle metrics + `compliance_report.md`. |
-| `engagement_schema.md` | Spec for the substitute ("engage the slot") engine. |
-| `versioning_schema.md` | Spec for originals → versions → history (versioning). |
-| `swap_schema.md` | Spec for the interactive multi-cell swap engine. |
+<sub>Built with ❤️ by **Ammar Asad** · [GitHub](https://github.com/ammarasad2005/impcc-timetable-generator) · [LinkedIn](https://www.linkedin.com/in/muhammad-ammar-asad)</sub>
 
----
-
-## Constraints honoured (confirmed with the client)
-
-**From the course allocation sheet:** `-` = subject not offered in that section · Visiting-1/2/3 kept
-as labels · ICS-I Section C included · "Economics/Statistics" (ICS-II-B) = either/or option block taught
-in parallel rooms (both teachers engaged simultaneously).
-
-**Faculty rules:**
-Prof. Muhammad Naeem — Monday P1 & P2 free ·
-Prof. Syed Assad Abbas — ICS fills P1 & P2 every day, Business Math in P3, no I.Com on Friday ·
-Prof. Babar Jahangir — ICS fills P1 & P2 ·
-Prof. Ishfaq Ahmed — P1 ≥ 4 days, never P5 ·
-Prof. Dr. Yasir Kareem — only P1, P2, P4 ·
-Prof. Abdul Basit — P1 ≥ 4 days, never P5, no fully-off day ·
-Prof. Amir Rasheed & Prof. Husnul Amin — never P1, never P5 ·
-Prof. Millat Khan — never P1 ·
-Prof. Naeem Asghar — never P1, never P2 ·
-Prof. Tanveer Ahmed — Thursday & Friday only, P1–P3.
-
-**General instructions:** start 08:30 · 5 × 40-min periods · break 25 min after 3rd period · no subject
-twice in a day · high-credit subjects anchored to one slot · Accounting vs Economics non-overriding in I.Com-I.
-
----
-
-## Optional: run real CP-SAT behind the site (provably optimal)
-
-The website also ships an optional **"Compute optimal (CP-SAT)"** button. Point it at the
-FastAPI backend and it fetches the proven-optimal set (score 560) and merges it into the
-ranked chooser (union — nothing is dropped).
-
-**Hosting — Vercel (same platform as the frontend):** deploy with the Vercel CLI
-(`vercel deploy --prod`); `api/index.py` + `vercel.json` bundle the CP-SAT solver as a
-Python serverless function (1 vCPU / 2 GB / 300 s on Hobby). Note: Hobby is non-commercial.
-
-The frontend defaults to **same-origin** `/generate` (works when the site and the `api/`
-functions are deployed together on Vercel). To point at a separately-hosted backend, set
-`window.IMPCC_API_URL` before the page scripts run (e.g. in the HTML head).
-
----
-
-## Requirements
-
-- **Website:** any modern browser (no dependencies).
-- **Python pipeline:** Python 3.10+, `ortools>=9.10`, `openpyxl>=3.1` (see `requirements.txt`).
-
----
-
-## Faculty constraints as data + LLM translation
-
-Faculty preferences are **not hard-coded** — they are data (see `constraints_schema.md` for the
-full "system language"). A dedicated **⚙ Constraints** page lets you:
-
-- view every faculty member's current rules (the college defaults ship in `default_constraints.json`),
-- type a member's plain-language note and press **✦ Translate with AI** — the backend sends it to an
-  OpenAI-compatible LLM and returns structured rules (with confidence + notes), which you review and **Apply**,
-- download / upload `constraints.json`, or reset to defaults.
-
-Edited constraints **immediately** affect the in-browser solver *and* the CP-SAT backend
-(`POST /generate` accepts a `constraints` payload). To enable translation, set these on the backend
-(Vercel → Settings → Environment Variables):
-
-| Variable | Example |
-|---|---|
-| `LLM_API_KEY` | `sk-...` (OpenAI/Groq/OpenRouter key) |
-| `LLM_BASE_URL` *(optional)* | `https://api.openai.com/v1` |
-| `LLM_MODEL` *(optional)* | `gpt-4o-mini` |
-
-The key stays **server-side** — the browser only calls `POST /translate`.
-
----
-
-## Supabase: auth + cloud-synced allocation & constraints
-
-A new **🗂 Allocation** page lets management edit the course allocation (teacher + weekly
-periods per subject, 25 periods/section required). Allocation **and** constraints are
-stored in **Supabase** per signed-in account, so changing devices keeps everything in sync.
-
-- **Project:** `https://xdckubhqhglmorwmxtfs.supabase.co` (region ap-south-1) — table
-  `public.workspace(user_id PK→auth.users, allocation jsonb, constraints jsonb, updated_at)`
-  with RLS policies so each account only sees its own row.
-- **Sign in / Create account** (top-right) uses Supabase Auth (email/password, auto-confirm on).
-- When signed in: **Save** (allocation) and every constraint **Apply** upsert to Supabase;
-  signing in on any device pulls the shared allocation + constraints back down.
-- When signed out: everything still works, saved to localStorage only.
-- Both solvers accept the live data: the in-browser generator and the CP-SAT backend
-  (`POST /generate` with `sections` + `constraints` payloads).
-- `supabase.js` is a dependency-free Supabase client (GoTrue + PostgREST via fetch) — the
-  anon key is embedded (public by design; RLS protects data). The service-role key and the
-  dashboard PAT are **not** committed.
-
-> **Access model:** public signup is **disabled** — only authorized accounts can reach the
-> Supabase-synced data. The admin account is created server-side (currently
-> `admin@impcc.com`); additional accounts are added by an admin in Supabase → Authentication.
-
-> **Resource protection:** the expensive backend features require sign-in. `POST /generate`
-> (CP-SAT) and `POST /translate` (LLM) reject requests without a valid Supabase session
-> (server-side `auth_check.py`); the in-browser JS generator stays free. The UI disables the
-> CP-SAT button and blocks Translate until signed in.
-
----
-
-## Faculty directory
-
-A new **📇 Directory** page makes the faculty roster itself editable data (add, rename,
-mark "left", re-activate, remove; each member is Permanent or Visiting). The **Allocation**
-teacher pickers and the **Constraints** page both read from this directory, so they stay
-consistent as faculty come and go. The roster syncs to Supabase (per signed-in account,
-stored in `workspace.faculty`) and falls back to localStorage. Teachers who aren't in the
-built-in list still render correctly everywhere — the solver treats their name as the
-identity, and every timetable/faculty view falls back to the raw name.
-
-> **Shared (published) data:** allocation, constraints and the faculty directory are a
-> **global** state — the signed-in admin's saves are written to a public-read `published`
-> table, and **every visitor (signed in or not) loads them on page load**. Generated
-> timetable combinations are deliberately **not** shared (they stay per-device). Writes
-> remain admin-only via RLS (`anon` can SELECT only).
-
-> **Constraint edits:** constraints are now fully **add / edit / remove** — each rule on
-> the Constraints page has ✎ and ✕ controls plus an "＋ Add rule" picker. The override
-> model uses an `edits` map where `null` deletes a rule (even a default), so faculty
-> preferences can be changed or dropped, not just added. Applying an LLM translation now
-> **merges** into the edits instead of replacing the whole set (fixes a case where
-> translating one rule silently dropped the others).
-
----
-
-## Image (PNG → ZIP) exports
-
-Beyond the per-section / per-teacher PNG buttons:
-
-- **Department:** each stream header (I.Com / ICS) has a **ZIP** button — downloads all that
-  department's section images, each named `IMPCC_<section>.png`.
-- **Whole platform:** the **⇩ All sections (ZIP)** button downloads one zip containing two
-  department folders (`I-Com/…`, `ICS/…`), each holding that department's section images.
-- **All faculty:** the **⇩ Faculty images (ZIP)** button downloads a zip of every faculty
-  member's personal schedule image (`IMPCC_personal-timetable_<name>.png`).
-
-The ZIP is built in-browser with a dependency-free store-method writer (no compression needed
-since the PNGs are already compressed) — validated against Python's `zipfile`.
-
----
-
-## Save & Push timetables (admin-only)
-
-- **💾 Save** (admin, signed-in only): stores the selected combination in the admin's
-  account (`saved_timetables`, RLS owner-only). As many as you like; they follow you on
-  every device you sign in on. Manage them under the **💾 Saved** tab — Load (bring back
-  into the pool), Push, Delete.
-- **📣 Push** (admin, signed-in only): publishes ONE combination to a public singleton
-  (`pushed_timetable`, RLS public-read / auth-write). It is immediately **viewable on any
-  device without signing in** (auto-loaded and selected on page load, marked 📣). Pushing
-  another replaces the previous one.
-- Saved/pushed combinations are full timetables (score + grids); generated pools stay
-  per-device as before.
-
-> **Unpush:** the admin can remove the published timetable — an **🕳 Unpush** button appears
-> (signed-in only, when something is pushed) and deletes the public row, so visitors no
-> longer see it. RLS lets only authenticated users delete; anonymous deletes match zero rows.
-
-## Versioning (originals → versions → history)
-
-- **Originals** are saved straight from the main page's combinations (💾 Save). **Load**
-  one, tweak it (constraints, tweaks, cell edits, engagement) and re-optimise, then press
-  💾 Save again — a dialog lets you **🔀 keep it as a version** (the original stays) or
-  **♻️ replace the original** (the old original is **archived**).
-- **Versions can be chained** — a version is derived from an original or from another
-  version (`parent_id`), and every version **remembers the edits/tweaks/engagement that
-  produced it** (stored as `actions` and summarised on its card). Originals, versions and
-  archived originals are all **pushable**.
-- **Deleting a version wipes it** from the list — but the **action stays in 🕘 History**
-  (an append-only `timetable_history` audit trail: saved original, created version,
-  replaced original, deleted, pushed, unpushed). Deleting a version never erases the
-  history of actions.
-- Backing schema: `saved_timetables` gained `kind`, `parent_id`, `actions`, `archived`;
-  new `timetable_history` table (owner RLS, append-only from the client).
-
-## Interactive swapping (multi-cell, perfect circles)
-
-- **⇄ Swap** (Sections view) toggles swap mode. **Drag** a cell onto another (or **tap**
-  two cells) to record a move: "cell X → cell Y" moves X's **teacher** to Y's cell.
-- Moves form **chains and circles**; a **perfect circle** = **0 disruptions** (open chains
-  = vacant + double-teacher cells; a teacher landing where they already teach = a
-  double-booking). The HUD shows `⇄ N moves · disruptions M` live, and the grid preview
-  never changes — only badges/rings animate.
-- **Apply swap**: net 0 → applied directly (new combination, original kept, score
-  unchanged). net ≠ 0 → a dialog shows *"Net disruptions: N — needs re-optimizing"* and a
-  **targeted optimization** closes the chains with the fewest extra cells. Multiple
-  circles supported; the shared parallel block is excluded. See `swap_schema.md`.
-
----
-
-## Tweaks: temporary/permanent schedule adjustments + manual cell edits
-
-- **🛠 Tweaks page** — express adjustments in plain language (✦ Translate, LLM → tweak
-  schema) or add them manually. **Permanent** (teacher left), **temporary** (leave for a
-  date range), or **recurring** (weekly slot). Expired temporary tweaks stop applying
-  automatically. See `tweaks_schema.md`.
-- **Deterministic layer** — an active tweak becomes `forbidden_slots_on_days` constraints
-  (suspend a teacher / some of their periods / a whole section) and the solver
-  re-organizes the best valid timetable around them.
-- **✎ Edit mode** — click any cell in the Sections view to **force** (set a subject+teacher)
-  or **forbid** (remove a lecture) it; **Re-optimize** re-runs the solver honouring every
-  edit and returns the best valid combinations (sections stay full — a removed lecture is
-  redistributed, not left empty).
-- **👥 Engagement** — when a slot holder is unavailable (a `Teacher away` tweak for a whole
-  day or a few periods), the Engagement tab finds an **engaging professor** for each
-  affected period of the selected combination. A cover must have **no class of his own**
-  in that slot, must **satisfy his own constraints**, coverage is **maximised** (exact
-  matching per day×period) and the load is spread across the faculty. The output is a
-  separate **statements stack** (“Prof X will engage the class of Prof Y in I.Com-II-A
-  for P3 in the MON slot”, key terms bold/italic) — printable/PDF or CSV — while every
-  faculty member's personal timetable keeps showing only their **regular schedule**.
-  See `engagement_schema.md`.
-- Tweaks sync to Supabase (`published.tweaks`) so they affect every visitor; manual edits
-  are session-local.
+</div>
