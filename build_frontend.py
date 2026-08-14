@@ -63,8 +63,7 @@ rep('<button class="btn amber" id="btnCpsat" title="Simulated call to the CP-SAT
     '<button class="btn amber" id="btnCpsat" title="Call the CP-SAT backend (POST /generate) for proven-optimal results">')
 rep('CP-SAT: idle — press “Compute optimal” to simulate the solver call',
     'CP-SAT: idle — press “Compute optimal” to call the backend')
-rep('<b>IMPCC Timetable Generator — demo prototype.</b> All timetables, scores, ranks and solver output on this page are simulated mock data.<br>',
-    '<b>IMPCC Timetable Generator.</b> Timetables are generated live by a real constraint solver (in-browser or the CP-SAT backend) and saved in your browser until you clear or regenerate them.<br>')
+# (footer is now the developer credit section, defined directly in the prototype)
 
 # ---- 2) load the real solver before the inline script -------------------
 rep("\n<script>\n'use strict';",
@@ -3036,6 +3035,20 @@ rep("</style>", r'''.mast .logo{width:88px;height:88px;object-fit:contain;flex:0
   .tt{min-width:395px}
   .tg-cell b{font-size:10px}
   .seg button{font-size:10px;gap:2px;padding:10px 3px}
+}
+</style>''')
+
+# ---- 40) developer credit footer (bottom of page) ---------------------------
+rep("</style>", r'''.dev-credit{display:flex;flex-wrap:wrap;gap:6px 18px;align-items:center;justify-content:center;text-align:center}
+.dev-credit .heart{color:var(--red);display:inline-block;margin:0 2px;animation:heartbeat 1.3s ease infinite}
+@keyframes heartbeat{0%,100%{transform:scale(1)}50%{transform:scale(1.28)}}
+.dev-credit b{color:var(--green-deep);font-weight:700}
+.dev-links{display:inline-flex;gap:14px}
+.dev-links a{color:var(--green);text-decoration:none;font-weight:600;letter-spacing:.02em;transition:color .15s ease}
+.dev-links a:hover{color:var(--amber-deep);text-decoration:underline}
+@media(max-width:760px){
+  .dev-credit{flex-direction:column;gap:4px}
+  .dev-links{gap:16px}
 }
 </style>''')
 
