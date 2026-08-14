@@ -79,9 +79,6 @@ python3 make_report.py        # builds compliance_report.md
 | `gen_all.py` | Offline CP-SAT runner → regenerates `solutions.json` on demand. |
 | `export_xlsx.py` | Offline: builds `timetables.xlsx` in the college's template layout. |
 | `metrics.py`, `make_report.py` | Offline: shuffle metrics + `compliance_report.md`. |
-| `test_solver.js` | Node test harness for `solver.js`. |
-| `test_engagement.js` | Node tests for the engagement (substitute) engine — 37 assertions. |
-| `test_engagement_fuzz.js` | Engagement edge cases + randomized property/fuzz sweep. |
 | `engagement_schema.md` | Spec for the substitute ("engage the slot") engine. |
 | `versioning_schema.md` | Spec for originals → versions → history (versioning). |
 | `swap_schema.md` | Spec for the interactive multi-cell swap engine. |
@@ -117,9 +114,9 @@ The website also ships an optional **"Compute optimal (CP-SAT)"** button. Point 
 FastAPI backend and it fetches the proven-optimal set (score 560) and merges it into the
 ranked chooser (union — nothing is dropped).
 
-**Hosting — Vercel (same platform as the frontend):** see `VERCEL_GUIDE.md`.
-`api/index.py` + `vercel.json` deploy the CP-SAT solver as a Python serverless function
-(1 vCPU / 2 GB / 300 s on Hobby). Note: Hobby is non-commercial.
+**Hosting — Vercel (same platform as the frontend):** deploy with the Vercel CLI
+(`vercel deploy --prod`); `api/index.py` + `vercel.json` bundle the CP-SAT solver as a
+Python serverless function (1 vCPU / 2 GB / 300 s on Hobby). Note: Hobby is non-commercial.
 
 The frontend defaults to **same-origin** `/generate` (works when the site and the `api/`
 functions are deployed together on Vercel). To point at a separately-hosted backend, set
@@ -131,7 +128,6 @@ functions are deployed together on Vercel). To point at a separately-hosted back
 
 - **Website:** any modern browser (no dependencies).
 - **Python pipeline:** Python 3.10+, `ortools>=9.10`, `openpyxl>=3.1` (see `requirements.txt`).
-- **JS test harness:** Node.js 18+ (`node test_solver.js`).
 
 ---
 
