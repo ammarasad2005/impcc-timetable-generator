@@ -2881,6 +2881,7 @@ rep("</style>", r'''.mast .logo{width:88px;height:88px;object-fit:contain;flex:0
   .overline{font-size:8px;letter-spacing:.14em}
   .mast h1{font-size:clamp(18px,6.2vw,26px);line-height:1.08;margin:1px 0 3px}
   .sub{font-size:11px}
+
   .mast-search{flex:1 1 100%;order:10;min-width:0;margin-top:6px}
   .mast-search input{font-size:13px;padding:10px 15px}
   .fac-drop{max-height:290px}
