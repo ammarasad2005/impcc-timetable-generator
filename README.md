@@ -54,11 +54,14 @@ combinations **live** using a JavaScript port of the solver (`solver.js`) — **
 > reference in `cp_solver.py` and is what proves the optimal score of **560**.
 
 ### 2. Offline pipeline (Python, proven optimum)
+Optional — the offline CP-SAT tooling still exists if you ever need the proven-optimal set
+outside the browser. It **generates** its outputs on demand (nothing precomputed is committed):
+
 ```bash
 pip install -r requirements.txt
-python3 gen_all.py            # regenerate solutions.json (CP-SAT, provably optimal)
-python3 export_xlsx.py        # timetables.xlsx (one sheet per combination)
-python3 make_report.py        # compliance_report.md
+python3 gen_all.py            # runs CP-SAT over many seeds → solutions.json
+python3 export_xlsx.py        # builds timetables.xlsx (one sheet per combination)
+python3 make_report.py        # builds compliance_report.md
 ```
 
 ---
@@ -73,16 +76,9 @@ python3 make_report.py        # compliance_report.md
 | `build_frontend.py` | Re-applies the functional wiring to the prototype (`python3 build_frontend.py [prototype.html]`). |
 | `solver.py` | Python data model + (early) constructive solver. |
 | `cp_solver.py` | **CP-SAT model** (OR-Tools) — the offline reference solver + `generate_ranked()` API entry point. |
-| `backend/` | **FastAPI service** wrapping `cp_solver.py` for Cloud Run (see `backend/README.md`). |
-| `Dockerfile`, `.dockerignore`, `.gcloudignore`, `deploy.sh` | Container + one-command Cloud Run deployment. |
-| `gen_all.py` | Runs CP-SAT over many seeds → `solutions.json`. |
-| `export_xlsx.py` | Builds `timetables.xlsx` in the college's template layout. |
-| `metrics.py`, `make_report.py` | Shuffle metrics + `compliance_report.md`. |
-| `solutions.json` | 88 pre-computed combinations (best = 560, proven optimal). |
-| `timetables.xlsx` | Excel: all 88 combos + Summary + Teacher Schedule. |
-| `compliance_report.md` | Constraint checklist + ranking report. |
-| `analysis_notes.md` | Working notes from the requirement-analysis phase. |
-| `source_allocation.xlsx` | The original college input file (course allocations, instructions, faculty constraints, template). |
+| `gen_all.py` | Offline CP-SAT runner → regenerates `solutions.json` on demand. |
+| `export_xlsx.py` | Offline: builds `timetables.xlsx` in the college's template layout. |
+| `metrics.py`, `make_report.py` | Offline: shuffle metrics + `compliance_report.md`. |
 | `test_solver.js` | Node test harness for `solver.js`. |
 
 ---
@@ -116,19 +112,13 @@ The website also ships an optional **"Compute optimal (CP-SAT)"** button. Point 
 FastAPI backend and it fetches the proven-optimal set (score 560) and merges it into the
 ranked chooser (union — nothing is dropped).
 
-**Three ways to host the backend:**
+**Hosting — Vercel (same platform as the frontend):** see `VERCEL_GUIDE.md`.
+`api/index.py` + `vercel.json` deploy the CP-SAT solver as a Python serverless function
+(1 vCPU / 2 GB / 300 s on Hobby). Note: Hobby is non-commercial.
 
-- **Vercel (same platform as your frontend — recommended for this project)** — see
-  `VERCEL_GUIDE.md`. `api/index.py` + `vercel.json` deploy the CP-SAT solver as a Python
-  serverless function (1 vCPU / 2 GB / 300 s on Hobby). Note: Hobby is non-commercial.
-- **Render (free, no credit card)** — see `RENDER_GUIDE.md`. Free tier is 512 MB / 0.1 vCPU
-  and sleeps after 15 min idle (cold start ~30–60 s), tuned via `CP_SAT_WORKERS=4`.
-- **Google Cloud Run (free tier, fastest)** — see `backend/README.md` + `deploy.sh`.
-  Needs a physical bank card (Google rejects virtual/prepaid cards).
-
-Either way, the frontend defaults to **same-origin** `/generate` (works when the site and the
-`api/` functions are deployed together on Vercel). To point at a separately-hosted backend,
-set `window.IMPCC_API_URL` before the page scripts run (e.g. in the HTML head).
+The frontend defaults to **same-origin** `/generate` (works when the site and the `api/`
+functions are deployed together on Vercel). To point at a separately-hosted backend, set
+`window.IMPCC_API_URL` before the page scripts run (e.g. in the HTML head).
 
 ---
 
@@ -232,3 +222,18 @@ Beyond the per-section / per-teacher PNG buttons:
 
 The ZIP is built in-browser with a dependency-free store-method writer (no compression needed
 since the PNGs are already compressed) — validated against Python's `zipfile`.
+
+---
+
+## Save & Push timetables (admin-only)
+
+- **💾 Save** (admin, signed-in only): stores the selected combination in the admin's
+  account (`saved_timetables`, RLS owner-only). As many as you like; they follow you on
+  every device you sign in on. Manage them under the **💾 Saved** tab — Load (bring back
+  into the pool), Push, Delete.
+- **📣 Push** (admin, signed-in only): publishes ONE combination to a public singleton
+  (`pushed_timetable`, RLS public-read / auth-write). It is immediately **viewable on any
+  device without signing in** (auto-loaded and selected on page load, marked 📣). Pushing
+  another replaces the previous one.
+- Saved/pushed combinations are full timetables (score + grids); generated pools stay
+  per-device as before.

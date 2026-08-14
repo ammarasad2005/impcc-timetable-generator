@@ -418,6 +418,7 @@ footer b{color:var(--green)}
   #printArea .sp-course{border:1px solid #cfd6c8;break-inside:avoid}
 }
 
+.saved-meta{font-family:var(--mono);font-size:10.5px;color:var(--ink2)}
 </style>
 </head>
 <body>
@@ -452,6 +453,8 @@ footer b{color:var(--green)}
     <button class="btn primary" id="btnGenerate" title="Start a fresh generation run (clears the pool)"><span class="g">▶</span> Generate</button>
     <button class="btn" id="btnMore" title="Append more combinations to the pool"><span class="g">＋</span> Generate more</button>
     <button class="btn amber" id="btnCpsat" title="Call the CP-SAT backend (POST /generate) for proven-optimal results"><span class="g">✦</span> Compute optimal (CP-SAT)</button>
+    <button class="btn" id="btnSave" title="Save the selected combination to your account"><span class="g">🔒</span> Save</button>
+    <button class="btn" id="btnPush" title="Publish the selected combination so everyone can view it"><span class="g">🔒</span> Push</button>
     <div class="con-sel">
       <label for="comboSel">Combination</label>
       <select id="comboSel" aria-label="Select combination"></select>
@@ -490,6 +493,7 @@ footer b{color:var(--green)}
       <button id="viewConstraints">⚙ Constraints</button>
       <button id="viewAllocation">🗂 Allocation</button>
       <button id="viewDirectory">📇 Directory</button>
+      <button id="viewSaved">💾 Saved</button>
     </div>
 
     <span class="vb-filter" id="secFilterWrap" title="Choose which section(s) to preview">
@@ -667,7 +671,7 @@ function getSel(){return state.combos.find(c=>c.id===state.selected)||null;}
 /* ---------- DOM refs ---------- */
 const $=id=>document.getElementById(id);
 const mainEl=$('main'),scorecardEl=$('scorecard'),selEl=$('comboSel'),secFilterEl=$('secFilter');
-const btnGenerate=$('btnGenerate'),btnMore=$('btnMore'),btnCpsat=$('btnCpsat'),btnPrint=$('btnPrint');
+const btnGenerate=$('btnGenerate'),btnMore=$('btnMore'),btnCpsat=$('btnCpsat'),btnPrint=$('btnPrint'),btnSave=$('btnSave'),btnPush=$('btnPush');
 const btnPrev=$('btnPrev'),btnNext=$('btnNext');
 const rankBadge=$('rankBadge'),scoreBadge=$('scoreBadge');
 const led=$('led'),tickText=$('tickText'),cpsatStatusEl=$('cpsatStatus'),progFill=$('progFill');
@@ -1115,7 +1119,7 @@ function renderScorecard(){
     '<div>'+
       '<span class="rankchip">#'+rank+' of '+total+'</span>'+
       '<div class="stand-text">'+st.phrase+'</div>'+
-      '<div class="pct">'+pctLine+(c.via==='cpsat'?' · merged from CP-SAT ✦':'')+'</div>'+
+      '<div class="pct">'+pctLine+(c.via==='cpsat'?' · merged from CP-SAT ✦':(c.via==='pushed'?' · 📣 published to everyone':(c.via==='saved'?' · 💾 from your saved list':'')))+'</div>'+
       '<div class="meter"><i style="width:'+Math.max(4,st.pct)+'%"></i></div>'+
       '<div class="bd"><b>'+c.a3+' × 3/wk split</b> · <b>'+c.a2+' × 2/wk split</b>'+(c.a4?(' · <b>'+c.a4+' × 4/wk split</b>'):'')+' &nbsp;· score '+c.score+'</div>'+
     '</div>'+
@@ -1191,6 +1195,7 @@ function renderMain(){
   if(state.view==='constraints'){renderConstraints();return;}
   if(state.view==='allocation'){renderAllocation();return;}
   if(state.view==='directory'){renderDirectory();return;}
+  if(state.view==='saved'){renderSaved();return;}
   const c=getSel();
   if(!state.combos.length){
     renderEmpty('No combinations yet',state.running
@@ -1206,7 +1211,7 @@ function renderChrome(){
   let opts='';
   list.forEach(o=>{
     const r=rankOf(o,list);
-    opts+='<option value="'+o.id+'">#'+r+' · score '+o.score+' · '+shortStanding(o,list)+(o.via==='cpsat'?' ✦CP-SAT':'')+'</option>';
+    opts+='<option value="'+o.id+'">#'+r+' · score '+o.score+' · '+shortStanding(o,list)+(o.via==='cpsat'?' ✦CP-SAT':(o.via==='pushed'?' 📣':(o.via==='saved'?' 💾':'')))+'</option>';
   });
   selEl.innerHTML=opts||'<option>— no combinations yet —</option>';
   selEl.disabled=!list.length;
@@ -1217,7 +1222,7 @@ function renderChrome(){
     scoreBadge.textContent='SCORE '+c.score;
     scoreBadge.classList.toggle('best',c.score===list[0].score);
     const shown=sectionsMatching(state.sectionFilter).length;
-    $('vbInfo').textContent='Combination #'+rank+' of '+list.length+' · via '+(c.via==='cpsat'?'CP-SAT solver':'in-browser generation')+' · showing '+shown+'/11 sections · '+facultyCount()+' faculty · click any card or class cell for personal courses';
+    $('vbInfo').textContent='Combination #'+rank+' of '+list.length+' · via '+(c.via==='cpsat'?'CP-SAT solver':(c.via==='pushed'?'published':(c.via==='saved'?'saved':'in-browser generation')))+' · showing '+shown+'/11 sections · '+facultyCount()+' faculty · click any card or class cell for personal courses';
     $('printHead').textContent='IMPCC (H-8) · Intermediate, 1st Shift — Weekly Timetable · Combination #'+rank+' of '+list.length+' · shuffle score '+c.score+(c.via==='cpsat'?' · CP-SAT proven-optimal pool':'')+' · view: '+(state.view==='sections'?'Sections ('+(filterLabel(state.sectionFilter)||'all sections')+')':'Faculty overview')+' · printed '+new Date().toLocaleDateString('en-GB');
   }else{
     rankBadge.textContent='RANK —';scoreBadge.textContent='SCORE —';scoreBadge.classList.remove('best');
@@ -1240,6 +1245,8 @@ function renderChrome(){
   if(!state.cpsatBusy){
     const _signedIn=SB&&SB.loggedIn;btnCpsat.innerHTML='<span class="g">'+(_signedIn?'✦':'🔒')+'</span> Compute optimal (CP-SAT)'+(state.cpsatDone?' ✓':'');
     btnCpsat.disabled=!_signedIn;btnCpsat.title=_signedIn?'Call the CP-SAT backend for proven-optimal results':'Sign in to unlock CP-SAT & AI translation';if(!_signedIn&&!state.cpsatDone){setCpsatStatus('CP-SAT: 🔒 sign in to unlock CP-SAT & AI translation','warn');}
+    btnSave.disabled=!_signedIn||!list.length;btnSave.title=_signedIn?'Save the selected combination to your account':'Sign in to save timetables';btnSave.innerHTML='<span class="g">'+(_signedIn?'💾':'🔒')+'</span> Save';
+    btnPush.disabled=!_signedIn||!list.length;btnPush.title=_signedIn?'Publish the selected combination so everyone can view it':'Sign in to push a timetable';btnPush.innerHTML='<span class="g">'+(_signedIn?'📣':'🔒')+'</span> Push';
   }
 }
 function popBadge(el){el.classList.remove('pop');void el.offsetWidth;el.classList.add('pop');}
@@ -1477,6 +1484,8 @@ function runCpsat(){
 btnGenerate.addEventListener('click',()=>startRun('fresh'));
 btnMore.addEventListener('click',()=>{state.running?stopRun():startRun('more');});
 btnCpsat.addEventListener('click',runCpsat);
+btnSave.addEventListener('click',saveCurrent);
+btnPush.addEventListener('click',pushCurrent);
 btnPrint.addEventListener('click',printCurrent);
 btnPrev.addEventListener('click',()=>stepSel(-1));
 btnNext.addEventListener('click',()=>stepSel(1));
@@ -1507,6 +1516,7 @@ $('viewTeachers').addEventListener('click',()=>setView('teachers'));
 $('viewConstraints').addEventListener('click',()=>setView('constraints'));
 $('viewAllocation').addEventListener('click',()=>setView('allocation'));
 $('viewDirectory').addEventListener('click',()=>setView('directory'));
+$('viewSaved').addEventListener('click',()=>setView('saved'));
 function setView(v){
   state.view=v;
   $('viewSections').classList.toggle('on',v==='sections');
@@ -1515,6 +1525,7 @@ function setView(v){
   $('viewConstraints').classList.toggle('on',v==='constraints');
   $('viewAllocation').classList.toggle('on',v==='allocation');
   $('viewDirectory').classList.toggle('on',v==='directory');
+  $('viewSaved').classList.toggle('on',v==='saved');
   renderChrome();persist();
   mainEl.classList.add('swap');
   setTimeout(()=>{renderMain();mainEl.classList.remove('swap');},150);
@@ -1656,7 +1667,7 @@ function renderAuth(){
   if(SB&&SB.loggedIn){
     el.innerHTML='<span class="auth-name">'+esc(SB.user.email)+'</span><button class="mini-export" id="authSignOut">Sign out</button>';
     document.getElementById('authSignOut').addEventListener('click',()=>{
-      SB.logout().then(()=>{renderAuth();renderChrome();setTicker('Signed out — local data only','ok');});
+      SB.logout().then(()=>{state.savedList=[];renderAuth();renderChrome();setTicker('Signed out — local data only','ok');});
     });
   }else{
     el.innerHTML='<button class="mini-export" id="authSignIn">Sign in</button>';
@@ -1673,7 +1684,7 @@ function authSubmit(mode){
   const p=SB.login(email,pass);
   p.then(async()=>{
     setAuthMsg('Signed in — loading your workspace…');
-    await syncFromCloud();
+    await syncFromCloud();await loadSavedList();
     document.getElementById('authModal').style.display='none';
     renderAuth();renderMain();renderChrome();
     setTicker('Signed in as '+SB.user.email+' — workspace synced','ok');
@@ -2189,6 +2200,124 @@ async function exportAllFacultyImages(){
   setTicker('Exported '+files.length+' faculty images (ZIP)','ok');
 }
 
+/* ---------- saved & pushed timetables (admin-only persistence) ---------- */
+function cellsToRaw(tt){
+  const out={};
+  for(const k in tt){out[k]=tt[k].map(function(row){return row.map(function(c){return [c.subj,c.teacher];});});}
+  return out;
+}
+function rawKey(tt){return JSON.stringify(tt);}
+function pushedCombo(){return state.combos.find(function(c){return c.via==='pushed';});}
+function ensureSavedList(){if(!state.savedList)state.savedList=[];}
+async function loadSavedList(){
+  ensureSavedList();
+  if(!SB||!SB.loggedIn){state.savedList=[];return;}
+  try{state.savedList=await SB.listSaved();}catch(e){state.savedList=[];}
+}
+async function loadPushedTimetable(){
+  if(!SB)return;
+  try{
+    const p=await SB.loadPushed();
+    state.combos=state.combos.filter(function(c){return c.via!=='pushed';});
+    if(p&&p.timetable){
+      const combo=makeCombo({score:p.score,timetable:p.timetable},'pushed');
+      state.combos.push(combo);
+      state.selected=combo.id;
+    }else{
+      const list=sortedList();
+      if(state.selected===null||!state.combos.some(function(c){return c.id===state.selected;}))state.selected=list.length?list[0].id:null;
+    }
+    persist();renderAll();
+  }catch(e){setTicker('Could not load the published timetable: '+e.message,'err');}
+}
+async function saveCurrent(){
+  if(!SB||!SB.loggedIn){setTicker('Sign in to save timetables','err');return;}
+  const c=getSel();if(!c)return;
+  const rank=rankOf(c,sortedList());
+  const def='Combination #'+rank+' (score '+c.score+')';
+  let name;
+  try{name=window.prompt('Name this saved timetable:',def);}catch(e){name=def;}
+  if(name===null)return;
+  setTicker('Saving…','run',true);
+  try{
+    await SB.saveTimetable({name:name||def,score:c.score,timetable:cellsToRaw(c.tt)});
+    await loadSavedList();
+    setTicker('Saved "'+(name||def)+'" to your account','ok');
+  }catch(e){setTicker('Save failed: '+e.message,'err');}
+}
+async function pushCurrent(){
+  if(!SB||!SB.loggedIn){setTicker('Sign in to push a timetable','err');return;}
+  const c=getSel();if(!c)return;
+  setTicker('Publishing timetable…','run',true);
+  try{
+    await SB.pushTimetable({score:c.score,timetable:cellsToRaw(c.tt)});
+    state.combos.forEach(function(x){x.via=(x.id===c.id)?'pushed':(x.via==='pushed'?'browser':x.via);});
+    renderChrome();renderScorecard();
+    setTicker('Pushed — everyone can now view this timetable without signing in','ok');
+  }catch(e){setTicker('Push failed: '+e.message,'err');}
+}
+async function loadSavedCombo(id){
+  if(!SB||!SB.loggedIn)return;
+  try{
+    const row=await SB.getSaved(id);
+    if(!row){setTicker('Saved timetable not found','err');return;}
+    const key=rawKey(row.timetable);
+    let combo=state.combos.find(function(c){return rawKey(cellsToRaw(c.tt))===key;});
+    if(!combo){
+      combo=makeCombo({score:row.score,timetable:row.timetable},'saved');
+      state.combos.push(combo);
+      state.seen.add(key);
+    }
+    state.selected=combo.id;
+    setView('sections');
+    persist();renderAll();
+    setTicker('Loaded "'+(row.name||'saved')+'"','ok');
+  }catch(e){setTicker('Load failed: '+e.message,'err');}
+}
+async function pushSavedCombo(id){
+  if(!SB||!SB.loggedIn)return;
+  try{
+    const row=await SB.getSaved(id);
+    if(!row){setTicker('Saved timetable not found','err');return;}
+    setTicker('Publishing…','run',true);
+    await SB.pushTimetable({score:row.score,timetable:row.timetable});
+    await loadPushedTimetable();
+    setTicker('Pushed "'+(row.name||'saved')+'" — visible to everyone now','ok');
+  }catch(e){setTicker('Push failed: '+e.message,'err');}
+}
+async function deleteSavedCombo(id){
+  if(!SB||!SB.loggedIn)return;
+  try{
+    await SB.deleteSaved(id);
+    await loadSavedList();
+    renderMain();
+    setTicker('Deleted saved timetable','ok');
+  }catch(e){setTicker('Delete failed: '+e.message,'err');}
+}
+function renderSaved(){
+  const signedIn=SB&&SB.loggedIn;
+  let h='<div class="cons-note"><b>Saved timetables.</b> '+(signedIn?'Your saved combinations live in your account and appear here on any device you sign in on. <b>Load</b> brings one back, <b>Push</b> publishes it for everyone, <b>Delete</b> removes it.':'<b style="color:var(--amber-deep)">🔒 Sign in to view your saved timetables.</b>')+'</div>';
+  if(!signedIn){mainEl.innerHTML=h;return;}
+  ensureSavedList();
+  if(!state.savedList.length){h+='<div class="empty"><div class="eic">💾</div><h3>Nothing saved yet</h3><p>Select a combination and press “Save” in the toolbar.</p></div>';mainEl.innerHTML=h;return;}
+  h+='<div class="cons-grid">';
+  state.savedList.forEach(function(it){
+    const when=new Date(it.created_at).toLocaleString('en-GB');
+    h+='<article class="cons-card"><header><h4>'+esc(it.name||'Untitled')+'</h4><span class="stag">score '+it.score+'</span></header>'+
+      '<div class="saved-meta">Saved '+esc(when)+'</div>'+
+      '<div class="cons-btns">'+
+        '<button class="mini-export" data-saved-load="'+it.id+'">Load</button>'+
+        '<button class="mini-export" data-saved-push="'+it.id+'">Push</button>'+
+        '<button class="card-csv" data-saved-del="'+it.id+'" title="Delete this saved timetable">✕</button>'+
+      '</div></article>';
+  });
+  h+='</div>';
+  mainEl.innerHTML=h;
+  document.querySelectorAll('[data-saved-load]').forEach(function(el){el.addEventListener('click',function(){loadSavedCombo(el.dataset.savedLoad);});});
+  document.querySelectorAll('[data-saved-push]').forEach(function(el){el.addEventListener('click',function(){pushSavedCombo(el.dataset.savedPush);});});
+  document.querySelectorAll('[data-saved-del]').forEach(function(el){el.addEventListener('click',function(){deleteSavedCombo(el.dataset.savedDel);});});
+}
+
 /* ---------- boot: restore saved results (no auto-generation) ---------- */
 loadConstraints();
 loadAllocation();
@@ -2196,6 +2325,8 @@ loadFaculty();
 renderAuth();
 const restored=restore();
 syncFromCloud().then(()=>{renderMain();renderChrome();});
+loadPushedTimetable().then(()=>{renderMain();renderChrome();});
+loadSavedList();
 if(restored){
   const list=sortedList();
   if(state.selected===null)state.selected=list[0].id;

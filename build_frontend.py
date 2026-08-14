@@ -1642,5 +1642,174 @@ rep("  $('btnComboCsv').disabled=!list.length;",
 rep("$('btnComboCsv').addEventListener('click',exportComboCSV);",
     "$('btnComboCsv').addEventListener('click',exportComboCSV);\n$('btnAllImages').addEventListener('click',exportAllImages);\n$('btnFacultyImages').addEventListener('click',exportAllFacultyImages);")
 
+SAVED_MODULE = '''/* ---------- saved & pushed timetables (admin-only persistence) ---------- */
+function cellsToRaw(tt){
+  const out={};
+  for(const k in tt){out[k]=tt[k].map(function(row){return row.map(function(c){return [c.subj,c.teacher];});});}
+  return out;
+}
+function rawKey(tt){return JSON.stringify(tt);}
+function pushedCombo(){return state.combos.find(function(c){return c.via==='pushed';});}
+function ensureSavedList(){if(!state.savedList)state.savedList=[];}
+async function loadSavedList(){
+  ensureSavedList();
+  if(!SB||!SB.loggedIn){state.savedList=[];return;}
+  try{state.savedList=await SB.listSaved();}catch(e){state.savedList=[];}
+}
+async function loadPushedTimetable(){
+  if(!SB)return;
+  try{
+    const p=await SB.loadPushed();
+    state.combos=state.combos.filter(function(c){return c.via!=='pushed';});
+    if(p&&p.timetable){
+      const combo=makeCombo({score:p.score,timetable:p.timetable},'pushed');
+      state.combos.push(combo);
+      state.selected=combo.id;
+    }else{
+      const list=sortedList();
+      if(state.selected===null||!state.combos.some(function(c){return c.id===state.selected;}))state.selected=list.length?list[0].id:null;
+    }
+    persist();renderAll();
+  }catch(e){setTicker('Could not load the published timetable: '+e.message,'err');}
+}
+async function saveCurrent(){
+  if(!SB||!SB.loggedIn){setTicker('Sign in to save timetables','err');return;}
+  const c=getSel();if(!c)return;
+  const rank=rankOf(c,sortedList());
+  const def='Combination #'+rank+' (score '+c.score+')';
+  let name;
+  try{name=window.prompt('Name this saved timetable:',def);}catch(e){name=def;}
+  if(name===null)return;
+  setTicker('Saving…','run',true);
+  try{
+    await SB.saveTimetable({name:name||def,score:c.score,timetable:cellsToRaw(c.tt)});
+    await loadSavedList();
+    setTicker('Saved "'+(name||def)+'" to your account','ok');
+  }catch(e){setTicker('Save failed: '+e.message,'err');}
+}
+async function pushCurrent(){
+  if(!SB||!SB.loggedIn){setTicker('Sign in to push a timetable','err');return;}
+  const c=getSel();if(!c)return;
+  setTicker('Publishing timetable…','run',true);
+  try{
+    await SB.pushTimetable({score:c.score,timetable:cellsToRaw(c.tt)});
+    state.combos.forEach(function(x){x.via=(x.id===c.id)?'pushed':(x.via==='pushed'?'browser':x.via);});
+    renderChrome();renderScorecard();
+    setTicker('Pushed — everyone can now view this timetable without signing in','ok');
+  }catch(e){setTicker('Push failed: '+e.message,'err');}
+}
+async function loadSavedCombo(id){
+  if(!SB||!SB.loggedIn)return;
+  try{
+    const row=await SB.getSaved(id);
+    if(!row){setTicker('Saved timetable not found','err');return;}
+    const key=rawKey(row.timetable);
+    let combo=state.combos.find(function(c){return rawKey(cellsToRaw(c.tt))===key;});
+    if(!combo){
+      combo=makeCombo({score:row.score,timetable:row.timetable},'saved');
+      state.combos.push(combo);
+      state.seen.add(key);
+    }
+    state.selected=combo.id;
+    setView('sections');
+    persist();renderAll();
+    setTicker('Loaded "'+(row.name||'saved')+'"','ok');
+  }catch(e){setTicker('Load failed: '+e.message,'err');}
+}
+async function pushSavedCombo(id){
+  if(!SB||!SB.loggedIn)return;
+  try{
+    const row=await SB.getSaved(id);
+    if(!row){setTicker('Saved timetable not found','err');return;}
+    setTicker('Publishing…','run',true);
+    await SB.pushTimetable({score:row.score,timetable:row.timetable});
+    await loadPushedTimetable();
+    setTicker('Pushed "'+(row.name||'saved')+'" — visible to everyone now','ok');
+  }catch(e){setTicker('Push failed: '+e.message,'err');}
+}
+async function deleteSavedCombo(id){
+  if(!SB||!SB.loggedIn)return;
+  try{
+    await SB.deleteSaved(id);
+    await loadSavedList();
+    renderMain();
+    setTicker('Deleted saved timetable','ok');
+  }catch(e){setTicker('Delete failed: '+e.message,'err');}
+}
+function renderSaved(){
+  const signedIn=SB&&SB.loggedIn;
+  let h='<div class="cons-note"><b>Saved timetables.</b> '+(signedIn?'Your saved combinations live in your account and appear here on any device you sign in on. <b>Load</b> brings one back, <b>Push</b> publishes it for everyone, <b>Delete</b> removes it.':'<b style="color:var(--amber-deep)">🔒 Sign in to view your saved timetables.</b>')+'</div>';
+  if(!signedIn){mainEl.innerHTML=h;return;}
+  ensureSavedList();
+  if(!state.savedList.length){h+='<div class="empty"><div class="eic">💾</div><h3>Nothing saved yet</h3><p>Select a combination and press “Save” in the toolbar.</p></div>';mainEl.innerHTML=h;return;}
+  h+='<div class="cons-grid">';
+  state.savedList.forEach(function(it){
+    const when=new Date(it.created_at).toLocaleString('en-GB');
+    h+='<article class="cons-card"><header><h4>'+esc(it.name||'Untitled')+'</h4><span class="stag">score '+it.score+'</span></header>'+
+      '<div class="saved-meta">Saved '+esc(when)+'</div>'+
+      '<div class="cons-btns">'+
+        '<button class="mini-export" data-saved-load="'+it.id+'">Load</button>'+
+        '<button class="mini-export" data-saved-push="'+it.id+'">Push</button>'+
+        '<button class="card-csv" data-saved-del="'+it.id+'" title="Delete this saved timetable">✕</button>'+
+      '</div></article>';
+  });
+  h+='</div>';
+  mainEl.innerHTML=h;
+  document.querySelectorAll('[data-saved-load]').forEach(function(el){el.addEventListener('click',function(){loadSavedCombo(el.dataset.savedLoad);});});
+  document.querySelectorAll('[data-saved-push]').forEach(function(el){el.addEventListener('click',function(){pushSavedCombo(el.dataset.savedPush);});});
+  document.querySelectorAll('[data-saved-del]').forEach(function(el){el.addEventListener('click',function(){deleteSavedCombo(el.dataset.savedDel);});});
+}
+
+'''
+
+# ---- 28) saved (admin-only) + pushed (public) timetables --------------------
+# (a) CSS
+rep("</style>", ".saved-meta{font-family:var(--mono);font-size:10.5px;color:var(--ink2)}\n</style>")
+# (b) DOM refs
+rep("const btnGenerate=$('btnGenerate'),btnMore=$('btnMore'),btnCpsat=$('btnCpsat'),btnPrint=$('btnPrint');",
+    "const btnGenerate=$('btnGenerate'),btnMore=$('btnMore'),btnCpsat=$('btnCpsat'),btnPrint=$('btnPrint'),btnSave=$('btnSave'),btnPush=$('btnPush');")
+# (c) console buttons (Save + Push) before the combination selector
+rep('<div class="con-sel">',
+    '<button class="btn" id="btnSave" title="Save the selected combination to your account"><span class="g">🔒</span> Save</button>\n    <button class="btn" id="btnPush" title="Publish the selected combination so everyone can view it"><span class="g">🔒</span> Push</button>\n    <div class="con-sel">')
+# (d) Saved tab after Directory
+rep('<button id="viewDirectory">📇 Directory</button>',
+    '<button id="viewDirectory">📇 Directory</button>\n      <button id="viewSaved">💾 Saved</button>')
+# (e) setView toggle
+rep("  $('viewDirectory').classList.toggle('on',v==='directory');",
+    "  $('viewDirectory').classList.toggle('on',v==='directory');\n  $('viewSaved').classList.toggle('on',v==='saved');")
+# (f) renderMain
+rep("  if(state.view==='directory'){renderDirectory();return;}",
+    "  if(state.view==='directory'){renderDirectory();return;}\n  if(state.view==='saved'){renderSaved();return;}")
+# (g) listener
+rep("$('viewDirectory').addEventListener('click',()=>setView('directory'));",
+    "$('viewDirectory').addEventListener('click',()=>setView('directory'));\n$('viewSaved').addEventListener('click',()=>setView('saved'));")
+# (h) renderChrome: enable/disable Save & Push (lock when signed out)
+rep("    btnCpsat.disabled=!_signedIn;btnCpsat.title=_signedIn?'Call the CP-SAT backend for proven-optimal results':'Sign in to unlock CP-SAT & AI translation';if(!_signedIn&&!state.cpsatDone){setCpsatStatus('CP-SAT: 🔒 sign in to unlock CP-SAT & AI translation','warn');}",
+    "    btnCpsat.disabled=!_signedIn;btnCpsat.title=_signedIn?'Call the CP-SAT backend for proven-optimal results':'Sign in to unlock CP-SAT & AI translation';if(!_signedIn&&!state.cpsatDone){setCpsatStatus('CP-SAT: 🔒 sign in to unlock CP-SAT & AI translation','warn');}\n    btnSave.disabled=!_signedIn||!list.length;btnSave.title=_signedIn?'Save the selected combination to your account':'Sign in to save timetables';btnSave.innerHTML='<span class=\"g\">'+(_signedIn?'💾':'🔒')+'</span> Save';\n    btnPush.disabled=!_signedIn||!list.length;btnPush.title=_signedIn?'Publish the selected combination so everyone can view it':'Sign in to push a timetable';btnPush.innerHTML='<span class=\"g\">'+(_signedIn?'📣':'🔒')+'</span> Push';")
+# (i) selector option marker
+rep("(o.via==='cpsat'?' ✦CP-SAT':'')+'</option>';",
+    "(o.via==='cpsat'?' ✦CP-SAT':(o.via==='pushed'?' 📣':(o.via==='saved'?' 💾':'')))+'</option>';")
+# (j) scorecard marker
+rep("(c.via==='cpsat'?' · merged from CP-SAT ✦':'')+'</div>'+",
+    "(c.via==='cpsat'?' · merged from CP-SAT ✦':(c.via==='pushed'?' · 📣 published to everyone':(c.via==='saved'?' · 💾 from your saved list':'')))+'</div>'+")
+# (k) vbInfo via label
+rep("(c.via==='cpsat'?'CP-SAT solver':'in-browser generation')+' · showing '+shown",
+    "(c.via==='cpsat'?'CP-SAT solver':(c.via==='pushed'?'published':(c.via==='saved'?'saved':'in-browser generation')))+' · showing '+shown")
+# (l) boot: also load the pushed timetable + saved list
+rep("syncFromCloud().then(()=>{renderMain();renderChrome();});",
+    "syncFromCloud().then(()=>{renderMain();renderChrome();});\nloadPushedTimetable().then(()=>{renderMain();renderChrome();});\nloadSavedList();")
+# (m) login: refresh saved list; logout: clear it
+rep("    await syncFromCloud();\n    document.getElementById('authModal').style.display='none';",
+    "    await syncFromCloud();await loadSavedList();\n    document.getElementById('authModal').style.display='none';")
+rep("SB.logout().then(()=>{renderAuth();renderChrome();setTicker('Signed out — local data only','ok');});",
+    "SB.logout().then(()=>{state.savedList=[];renderAuth();renderChrome();setTicker('Signed out — local data only','ok');});")
+# (n) listeners for the Save / Push buttons
+rep("btnCpsat.addEventListener('click',runCpsat);",
+    "btnCpsat.addEventListener('click',runCpsat);\nbtnSave.addEventListener('click',saveCurrent);\nbtnPush.addEventListener('click',pushCurrent);")
+# (o) inject the saved/pushed module before the boot marker
+rep("/* ---------- boot: restore saved results (no auto-generation) ---------- */",
+    SAVED_MODULE + "/* ---------- boot: restore saved results (no auto-generation) ---------- */")
+
+
 io.open(DST, "w", encoding="utf-8").write(src)
 print("OK → wrote", DST, "(", len(src), "bytes )")

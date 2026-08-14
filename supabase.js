@@ -99,6 +99,50 @@
         headers: Object.assign({}, this._headers(), { "Prefer": "resolution=merge-duplicates,return=representation" }),
         body: JSON.stringify(body)
       });
+    },
+
+    // ---- saved timetables (admin's private, cross-device) ----
+    async listSaved() {
+      const uid = this.user && this.user.id;
+      if (!uid) return [];
+      const rows = await this._req("/rest/v1/saved_timetables?user_id=eq." + uid + "&select=id,name,score,created_at&order=created_at.desc", {
+        method: "GET", headers: this._headers()
+      });
+      return Array.isArray(rows) ? rows : [];
+    },
+    async getSaved(id) {
+      const rows = await this._req("/rest/v1/saved_timetables?id=eq." + id + "&select=*", {
+        method: "GET", headers: this._headers()
+      });
+      return (Array.isArray(rows) && rows.length) ? rows[0] : null;
+    },
+    async saveTimetable(payload) {
+      const uid = this.user && this.user.id;
+      if (!uid) throw new Error("not signed in");
+      const body = { user_id: uid, name: payload.name || "", score: payload.score, timetable: payload.timetable };
+      return this._req("/rest/v1/saved_timetables", {
+        method: "POST", headers: this._headers(), body: JSON.stringify(body)
+      });
+    },
+    async deleteSaved(id) {
+      return this._req("/rest/v1/saved_timetables?id=eq." + id, { method: "DELETE", headers: this._headers() });
+    },
+
+    // ---- pushed timetable (one, public read) ----
+    async loadPushed() {
+      const rows = await this._req("/rest/v1/pushed_timetable?id=eq.1&select=score,timetable,pushed_at", {
+        method: "GET", headers: this._headers()
+      });
+      return (Array.isArray(rows) && rows.length) ? rows[0] : null;
+    },
+    async pushTimetable(payload) {
+      const uid = this.user && this.user.id;
+      const body = { id: 1, score: payload.score, timetable: payload.timetable, pushed_at: new Date().toISOString(), pushed_by: uid || null };
+      return this._req("/rest/v1/pushed_timetable?on_conflict=id", {
+        method: "POST",
+        headers: Object.assign({}, this._headers(), { "Prefer": "resolution=merge-duplicates,return=representation" }),
+        body: JSON.stringify(body)
+      });
     }
   };
 
