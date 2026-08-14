@@ -1797,7 +1797,7 @@ rep("(c.via==='cpsat'?'CP-SAT solver':'in-browser generation')+' · showing '+sh
     "(c.via==='cpsat'?'CP-SAT solver':(c.via==='pushed'?'published':(c.via==='saved'?'saved':'in-browser generation')))+' · showing '+shown")
 # (l) boot: also load the pushed timetable + saved list
 rep("syncFromCloud().then(()=>{renderMain();renderChrome();});",
-    "syncFromCloud().then(()=>{renderMain();renderChrome();});\nloadPushedTimetable().then(()=>{renderMain();renderChrome();});\nloadSavedList();")
+    "syncFromCloud().then(()=>{renderMain();renderChrome();});\nif(SB&&SB.loggedIn){SB.ensureSession().then(()=>renderAuth());}\nloadPushedTimetable().then(()=>{renderMain();renderChrome();});\nloadSavedList();")
 # (m) login: refresh saved list; logout: clear it
 rep("    await syncFromCloud();\n    document.getElementById('authModal').style.display='none';",
     "    await syncFromCloud();await loadSavedList();\n    document.getElementById('authModal').style.display='none';")

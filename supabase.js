@@ -27,6 +27,31 @@
       return h;
     },
 
+    // Refresh an expired access token using the refresh token (GoTrue refresh grant).
+    async refresh() {
+      if (!this.session || !this.session.refresh_token) return false;
+      try {
+        const j = await this._req("/auth/v1/token?grant_type=refresh_token", {
+          method: "POST",
+          headers: { "apikey": ANON, "Content-Type": "application/json" },
+          body: JSON.stringify({ refresh_token: this.session.refresh_token })
+        });
+        if (j && j.access_token) { this.session = j; this._save(); return true; }
+      } catch (e) {}
+      return false;
+    },
+
+    // Make sure the session token is still valid before an authenticated call;
+    // refresh it if it's about to expire, or drop it (fall back to anon) on failure.
+    async ensureSession() {
+      if (!this.session) return false;
+      const exp = this.session.expires_at || (this.session.expires_in ? Math.floor(Date.now()/1000) + this.session.expires_in : 0);
+      if (exp && Math.floor(Date.now()/1000) < exp - 30) return true;
+      const ok = await this.refresh();
+      if (!ok) { this.session = null; this._save(); }
+      return ok;
+    },
+
     async _req(path, opts) {
       const res = await fetch(URL + path, opts);
       const text = await res.text();
@@ -65,6 +90,7 @@
     },
 
     async loadWorkspace() {
+      await this.ensureSession();
       const uid = this.user && this.user.id;
       if (!uid) return null;
       const rows = await this._req("/rest/v1/workspace?user_id=eq." + uid + "&select=*", {
@@ -74,6 +100,7 @@
     },
 
     async saveWorkspace(allocation, constraints, faculty) {
+      await this.ensureSession();
       const uid = this.user && this.user.id;
       if (!uid) throw new Error("not signed in");
       const body = { user_id: uid, allocation: allocation || {}, constraints: constraints || {}, faculty: faculty || [], updated_at: new Date().toISOString() };
@@ -87,6 +114,7 @@
     // Global published state (allocation/constraints/faculty) — readable by EVERYONE,
     // writable only by signed-in users (RLS). Generated timetable combos are NOT stored.
     async loadPublished() {
+      await this.ensureSession();
       const rows = await this._req("/rest/v1/published?id=eq.1&select=allocation,constraints,faculty,updated_at", {
         method: "GET", headers: this._headers()
       });
@@ -94,6 +122,7 @@
     },
 
     async savePublished(allocation, constraints, faculty) {
+      await this.ensureSession();
       const body = { id: 1, allocation: allocation || {}, constraints: constraints || {}, faculty: faculty || [], updated_at: new Date().toISOString() };
       return this._req("/rest/v1/published?on_conflict=id", {
         method: "POST",
@@ -104,6 +133,7 @@
 
     // ---- saved timetables (admin's private, cross-device) ----
     async listSaved() {
+      await this.ensureSession();
       const uid = this.user && this.user.id;
       if (!uid) return [];
       const rows = await this._req("/rest/v1/saved_timetables?user_id=eq." + uid + "&select=id,name,score,created_at&order=created_at.desc", {
@@ -112,12 +142,14 @@
       return Array.isArray(rows) ? rows : [];
     },
     async getSaved(id) {
+      await this.ensureSession();
       const rows = await this._req("/rest/v1/saved_timetables?id=eq." + id + "&select=*", {
         method: "GET", headers: this._headers()
       });
       return (Array.isArray(rows) && rows.length) ? rows[0] : null;
     },
     async saveTimetable(payload) {
+      await this.ensureSession();
       const uid = this.user && this.user.id;
       if (!uid) throw new Error("not signed in");
       const body = { user_id: uid, name: payload.name || "", score: payload.score, timetable: payload.timetable };
@@ -126,17 +158,20 @@
       });
     },
     async deleteSaved(id) {
+      await this.ensureSession();
       return this._req("/rest/v1/saved_timetables?id=eq." + id, { method: "DELETE", headers: this._headers() });
     },
 
     // ---- pushed timetable (one, public read) ----
     async loadPushed() {
+      await this.ensureSession();
       const rows = await this._req("/rest/v1/pushed_timetable?id=eq.1&select=score,timetable,pushed_at", {
         method: "GET", headers: this._headers()
       });
       return (Array.isArray(rows) && rows.length) ? rows[0] : null;
     },
     async pushTimetable(payload) {
+      await this.ensureSession();
       const uid = this.user && this.user.id;
       const body = { id: 1, score: payload.score, timetable: payload.timetable, pushed_at: new Date().toISOString(), pushed_by: uid || null };
       return this._req("/rest/v1/pushed_timetable?on_conflict=id", {

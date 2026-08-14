@@ -2325,6 +2325,7 @@ loadFaculty();
 renderAuth();
 const restored=restore();
 syncFromCloud().then(()=>{renderMain();renderChrome();});
+if(SB&&SB.loggedIn){SB.ensureSession().then(()=>renderAuth());}
 loadPushedTimetable().then(()=>{renderMain();renderChrome();});
 loadSavedList();
 if(restored){
