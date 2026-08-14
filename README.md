@@ -264,8 +264,10 @@ since the PNGs are already compressed) — validated against Python's `zipfile`.
   day or a few periods), the Engagement tab finds an **engaging professor** for each
   affected period of the selected combination. A cover must have **no class of his own**
   in that slot, must **satisfy his own constraints**, coverage is **maximised** (exact
-  matching per day×period) and the load is spread across the faculty. Affected cells are
-  ringed and badged in the Sections grid; the plan exports as `IMPCC_engagement-plan.csv`.
+  matching per day×period) and the load is spread across the faculty. The output is a
+  separate **statements stack** (“Prof X will engage the class of Prof Y in I.Com-II-A
+  for P3 in the MON slot”, key terms bold/italic) — printable/PDF or CSV — while every
+  faculty member's personal timetable keeps showing only their **regular schedule**.
   See `engagement_schema.md`.
 - Tweaks sync to Supabase (`published.tweaks`) so they affect every visitor; manual edits
   are session-local.

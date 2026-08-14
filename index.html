@@ -443,6 +443,14 @@ footer b{color:var(--green)}
 .eng-row .eng-cover{color:var(--green-deep);font-weight:600}
 .eng-row .eng-cover.none{color:var(--amber-deep)}
 .eng-row.uncovered{border-color:var(--amber);background:var(--amber-tint)}
+.eng-actions{display:flex;gap:8px;justify-content:flex-end;margin-bottom:10px}
+.eng-stack{display:flex;flex-direction:column;gap:8px}
+.eng-stmt{padding:10px 14px;border:1px solid var(--line2);border-radius:10px;background:#fff;margin:0;font-size:13px;line-height:1.55;color:var(--ink)}
+.eng-stmt strong{color:var(--green-deep);font-weight:700}
+.eng-stmt strong.noc{color:var(--amber-deep)}
+.eng-stmt em{color:var(--ink2);font-style:italic}
+.eng-stmt.noc{border-color:var(--amber);background:var(--amber-tint)}
+@media print{#printArea .eng-stmt{break-inside:avoid;border-color:#cfd6c8;font-size:12px}#printArea .eng-print{margin-top:10px}}
 </style>
 </head>
 <body>
@@ -2685,13 +2693,31 @@ function decorateEngagement(){
     }
   }
 }
+function engSecLabel(id){const s=SECTIONS.find(function(x){return x.id===id;});return s?s.label:id;}
+function engagementStatements(plan){
+  const dayOrder=['MON','TUE','WED','THU','FRI'];
+  const slotOrder=['P1','P2','P3','P4','P5'];
+  const stmts=[];
+  for(const a of plan.assignments){stmts.push({d:a.d,s:a.s,sec:a.sec,subj:a.subj,out:a.teacher,cover:a.cover});}
+  for(const u of plan.uncovered){stmts.push({d:u.d,s:u.s,sec:u.sec,subj:u.subj,out:u.teacher,cover:null});}
+  stmts.sort(function(a,b){return dayOrder.indexOf(DAYS[a.d])-dayOrder.indexOf(DAYS[b.d])||slotOrder.indexOf(SLOTS[a.s])-slotOrder.indexOf(SLOTS[b.s])||(a.sec<b.sec?-1:a.sec>b.sec?1:0);});
+  let out='';
+  for(const t of stmts){
+    if(t.cover){
+      out+='<p class="eng-stmt"><strong>'+esc(t.cover)+'</strong> will engage the class of <strong>'+esc(t.out)+'</strong> in <strong>'+esc(engSecLabel(t.sec))+'</strong> for <strong>'+esc(SLOTS[t.s])+'</strong> in the <strong>'+esc(DAYS[t.d])+'</strong> slot<em> — '+esc(t.subj)+'</em>.</p>';
+    }else{
+      out+='<p class="eng-stmt noc">The class of <strong>'+esc(t.out)+'</strong> in <strong>'+esc(engSecLabel(t.sec))+'</strong> for <strong>'+esc(SLOTS[t.s])+'</strong> in the <strong>'+esc(DAYS[t.d])+'</strong> slot<em> — '+esc(t.subj)+'</em> has <strong class="noc">no engaging professor</strong>.</p>';
+    }
+  }
+  return out;
+}
 function renderEngagement(){
   const signedIn=SB&&SB.loggedIn;
   const una=engagementUnavailable();
-  let h='<div class="cons-note"><b>Engagement.</b> When a slot holder is unavailable (an active <b>Teacher away</b> tweak — whole day or a few periods), this finds an <b>engaging professor</b> for each affected period of the selected combination. A cover must have <b>no class of his own</b> in that period and must <b>satisfy his own constraints</b>; coverage is maximised and the load is spread across the faculty. '+(signedIn?'Manage unavailability in the <b>🛠 Tweaks</b> tab.':'<b style="color:var(--amber-deep)">🔒 Sign in to manage tweaks.</b>')+'</div>';
+  let h='<div class="cons-note"><b>Engagement.</b> When a slot holder is unavailable (an active <b>Teacher away</b> tweak — whole day or a few periods), this lists the <b>engaging professor</b> for each affected period of the selected combination. A cover must have <b>no class of his own</b> in that period and must <b>satisfy his own constraints</b>; coverage is maximised and the load is spread across the faculty. '+(signedIn?'Manage unavailability in the <b>🛠 Tweaks</b> tab.':'<b style="color:var(--amber-deep)">🔒 Sign in to manage tweaks.</b>')+'</div>';
   const c=getSel();
   if(!una.length){
-    h+='<div class="empty"><div class="eic">👥</div><h3>No active unavailability</h3><p>Add a “Teacher away” tweak — for a whole day or for specific periods — and this view will show who engages each affected period.</p></div>';
+    h+='<div class="empty"><div class="eic">👥</div><h3>No active unavailability</h3><p>Add a “Teacher away” tweak — for a whole day or for specific periods — and this view will list who engages each affected period.</p></div>';
     mainEl.innerHTML=h;return;
   }
   const plan=engagementPlan();
@@ -2704,34 +2730,25 @@ function renderEngagement(){
     '<div class="stat"><b>'+plan.covered+'</b><span>engaged</span></div>'+
     '<div class="stat'+(plan.uncovered.length?' warn':'')+'"><b>'+plan.uncovered.length+'</b><span>no cover available</span></div>'+
     '</div>';
+  h+='<div class="eng-actions"><button class="mini-export" id="engPrint">🖨 Print / PDF</button><button class="mini-export" id="engCsv">⇩ Export CSV</button></div>';
   if(plan.uncovered.length){
     h+='<div class="eng-warn">⚠ '+plan.uncovered.length+' period'+(plan.uncovered.length===1?'':'s')+' could not be engaged — every eligible professor is either teaching in that period or unavailable himself. Consider adding faculty or narrowing the tweak.</div>';
   }
-  h+='<div style="text-align:right;margin-bottom:10px"><button class="mini-export" id="engCsv">⇩ Export engagement plan (CSV)</button></div>';
-  const dayOrder=['MON','TUE','WED','THU','FRI'];
-  const slotOrder=['P1','P2','P3','P4','P5'];
-  const grouped={};
-  for(const a of plan.assignments){const k=DAYS[a.d]+' '+SLOTS[a.s];(grouped[k]=grouped[k]||[]).push({sec:a.sec,subj:a.subj,teacher:a.teacher,cover:a.cover});}
-  for(const u of plan.uncovered){const k=DAYS[u.d]+' '+SLOTS[u.s];(grouped[k]=grouped[k]||[]).push({sec:u.sec,subj:u.subj,teacher:u.teacher,cover:null});}
-  const keys=Object.keys(grouped).sort(function(a,b){const pa=a.split(' '),pb=b.split(' ');return dayOrder.indexOf(pa[0])-dayOrder.indexOf(pb[0])||slotOrder.indexOf(pa[1])-slotOrder.indexOf(pb[1]);});
-  h+='<div class="eng-groups">';
-  for(const k of keys){
-    h+='<section class="eng-group"><h4>'+esc(k)+'</h4><div class="eng-rows">';
-    for(const a of grouped[k]){
-      h+='<div class="eng-row'+(a.cover?'':' uncovered')+'">'+
-        '<span class="eng-sec">'+esc(a.sec)+'</span>'+
-        '<span class="eng-subj">'+esc(a.subj)+'</span>'+
-        '<span class="eng-teacher">'+esc(a.teacher)+'</span>'+
-        '<span class="eng-arrow">→</span>'+
-        (a.cover?'<span class="eng-cover">👥 '+esc(a.cover)+'</span>':'<span class="eng-cover none">⚠ no free professor</span>')+
-        '</div>';
-    }
-    h+='</div></section>';
-  }
-  h+='</div>';
+  h+='<div class="eng-stack">'+engagementStatements(plan)+'</div>';
   mainEl.innerHTML=h;
-  const btn=document.getElementById('engCsv');
-  if(btn)btn.addEventListener('click',exportEngagementCSV);
+  const bp=document.getElementById('engPrint');if(bp)bp.addEventListener('click',printEngagement);
+  const bc=document.getElementById('engCsv');if(bc)bc.addEventListener('click',exportEngagementCSV);
+}
+function printEngagement(){
+  const plan=engagementPlan();
+  if(!plan){setTicker('No engagement plan to print','err');return;}
+  let html=pdCover('Engagement — Substitute Allotments',COLLEGE_LINE+' · '+plan.covered+' of '+plan.total+' periods engaged');
+  html+='<div class="eng-print">'+engagementStatements(plan)+'</div>';
+  html+=pdFooter();
+  const area=document.getElementById('printArea');
+  if(!area)return;
+  area.innerHTML=html;
+  window.print();
 }
 function exportEngagementCSV(){
   const plan=engagementPlan();

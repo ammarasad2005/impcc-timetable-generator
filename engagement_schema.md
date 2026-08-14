@@ -69,10 +69,19 @@ all three rules and returns a list of violations (empty = valid).
 ## 5. How it fits the app
 
 - The **Engagement tab** shows the plan for the currently selected combination,
-  derived from the active `Teacher away` tweaks, with a summary (affected / engaged /
-  no-cover), a day+period breakdown and a CSV export (`IMPCC_engagement-plan.csv`).
-- On the **Sections grid**, cells that need a cover are ringed and badged with the
-  cover's name (🟢 `👥 name`) or ⚠ `no cover`.
+  derived from the active `Teacher away` tweaks: a summary (affected / engaged /
+  no-cover) followed by a **statements stack** — one sentence per allotment of the
+  form *“**Prof X** will engage the class of **Prof Y** in **I.Com-II-A** for **P3**
+  in the **MON** slot — *Principles of Accounting*.”* — with the teacher out, the
+  engaging teacher, the class and the slot **bold** and the subject *italic*. It can
+  be **printed (PDF)** or exported as CSV (`IMPCC_engagement-plan.csv`).
+- **Faculty grids stay clean.** An individual faculty member's personal timetable
+  (spotlight grid, faculty cards, PNG export) always shows his **regular schedule
+  only** — engagement allotments are never merged into it; they live solely in the
+  separate engagement output above.
+- On the **Sections grid**, affected cells are ringed and badged with the cover's
+  name (🟢 `👥 name`) or ⚠ `no cover` — a class-facing hint that the period is being
+  engaged, not a change to the teacher's own schedule.
 - **Engagement never modifies the timetable** — it is a pure overlay. It also does
   **not** regenerate; it answers "who covers Prof A's Monday P3 *in this timetable*".
 - Tweaks are synced in the published cloud state, so the engagement plan follows the
