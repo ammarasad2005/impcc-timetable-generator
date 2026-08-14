@@ -2911,9 +2911,9 @@ rep("</style>", r'''.mast .logo{width:88px;height:88px;object-fit:contain;flex:0
 
   /* viewbar */
   .viewbar{gap:8px;margin-bottom:12px}
-  .seg{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;flex-wrap:nowrap;padding:3px;scrollbar-width:none}
-  .seg::-webkit-scrollbar{display:none}
-  .seg button{flex:0 0 auto;padding:9px 13px;font-size:12.5px}
+  .seg{width:100%;display:grid;grid-template-columns:repeat(4,1fr);gap:3px;padding:4px;flex-wrap:wrap;overflow:visible}
+  .seg button{flex:none;justify-content:center;gap:4px;padding:10px 6px;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+  .seg button:last-child{grid-column:1/-1}
   .vb-filter{flex:1 1 auto;justify-content:space-between;padding:7px 12px}
   .vb-filter select{max-width:58vw}
   .vb-info{flex:1 1 100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px}
@@ -3005,6 +3005,7 @@ rep("</style>", r'''.mast .logo{width:88px;height:88px;object-fit:contain;flex:0
   .con-in .btn{font-size:11px;padding:9px 7px}
   .tt{min-width:395px}
   .tg-cell b{font-size:10px}
+  .seg button{font-size:10px;gap:2px;padding:10px 3px}
 }
 </style>''')
 
