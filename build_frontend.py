@@ -2740,9 +2740,9 @@ rep('<div class="mast-auth" id="authUi"></div>',
     '<div class="mast-search" id="facSearchWrap">\n    <input id="facSearchInput" type="text" placeholder="🔍 Search faculty — live location" autocomplete="off">\n    <div class="fac-drop" id="facDrop"></div>\n  </div>\n  <div class="mast-auth" id="authUi"></div>')
 
 # (c) CSS
-rep("</style>", r'''.mast-search{position:relative;flex:0 1 280px;min-width:190px;display:flex;align-items:center}
-.mast-search input{width:100%;padding:8px 14px;border:1px solid var(--line2);border-radius:99px;font-size:12.5px;background:#fff;color:var(--ink);box-shadow:0 1px 3px rgba(14,59,41,.06)}
-.mast-search input:focus{outline:none;border-color:var(--green);box-shadow:0 0 0 3px var(--green-tint)}
+rep("</style>", r'''.mast-search{position:relative;flex:0 1 300px;min-width:210px;display:flex;align-items:center;background:linear-gradient(135deg,var(--green-deep),var(--green));border:2px solid var(--gold);border-radius:99px;padding:3px;box-shadow:0 3px 10px rgba(14,59,41,.28)}
+.mast-search input{width:100%;padding:8px 16px;border:1px solid transparent;border-radius:96px;font-size:12.5px;background:#fff;color:var(--ink);box-shadow:none}
+.mast-search input:focus{outline:none;border-color:var(--amber);box-shadow:0 0 0 2px rgba(232,164,31,.35)}
 .fac-drop{position:absolute;top:calc(100% + 6px);left:0;right:0;background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:0 16px 48px rgba(14,59,41,.22);z-index:120;max-height:360px;overflow:auto;display:none}
 .fac-drop.open{display:block}
 .fac-item{padding:9px 12px;border-bottom:1px solid var(--line2);cursor:default}
@@ -2882,8 +2882,9 @@ rep("</style>", r'''.mast .logo{width:88px;height:88px;object-fit:contain;flex:0
   .mast h1{font-size:clamp(18px,6.2vw,26px);line-height:1.08;margin:1px 0 3px}
   .sub{font-size:11px}
 
-  .mast-search{flex:1 1 100%;order:10;min-width:0;margin-top:6px}
-  .mast-search input{font-size:13px;padding:10px 15px}
+  .mast-search{flex:1 1 100%;order:10;min-width:0;margin-top:8px;background:linear-gradient(135deg,var(--amber),var(--amber-deep));border:2px solid var(--green-deep);border-radius:99px;padding:3px;box-shadow:0 3px 10px rgba(138,98,16,.25)}
+  .mast-search input{font-size:13px;padding:9px 15px;border:1px solid transparent;background:#fff;box-shadow:none}
+  .mast-search input:focus{outline:none;border-color:var(--green);box-shadow:0 0 0 2px rgba(28,107,72,.3)}
   .fac-drop{max-height:290px}
   .fac-item{padding:10px 12px}
 
