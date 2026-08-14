@@ -2197,17 +2197,22 @@ function openCellEditor(ds,cellEl){
 }
 function positionCellEditor(cellEl){
   const el=document.getElementById('cellEditor');
-  if(!cellEl)return;
-  const r=cellEl.getBoundingClientRect();
-  const er=el.getBoundingClientRect();
-  const W=er.width||400, H=er.height||210;
-  const pad=12;
-  let left=r.right+pad;
-  if(left+W>window.innerWidth-8)left=Math.max(8, r.left-W-pad);
-  let top=r.top;
-  if(top+H>window.innerHeight-8)top=Math.max(8, window.innerHeight-H-8);
-  el.style.left=left+'px';
-  el.style.top=top+'px';
+  const vw=window.innerWidth||document.documentElement.clientWidth||1200;
+  const vh=window.innerHeight||document.documentElement.clientHeight||800;
+  const W=Math.min(400, Math.max(200, vw-16));
+  el.style.width=W+'px';
+  el.style.right='auto';
+  let left=vw-W-16, top=96;
+  if(cellEl&&cellEl.getBoundingClientRect){
+    const r=cellEl.getBoundingClientRect();
+    if((r.right-r.left)>4&&(r.bottom-r.top)>4){
+      left=r.right+12;
+      if(left+W>vw-8)left=Math.max(8, r.left-W-12);
+      top=Math.min(Math.max(8, r.top), Math.max(8, vh-260));
+    }
+  }
+  el.style.left=Math.max(8, Math.min(left, vw-W-8))+'px';
+  el.style.top=Math.max(8, Math.min(top, vh-260))+'px';
 }
 function closeCellEditor(){document.getElementById('cellEditor').style.display='none';}
 document.addEventListener('click',function(e){
@@ -2217,7 +2222,6 @@ document.addEventListener('click',function(e){
   if(e.target.closest&&e.target.closest('.tg-cell'))return;
   closeCellEditor();
 });
-window.addEventListener('scroll',function(){closeCellEditor();},{passive:true});
 function applyCellEdit(mode){
   const c=state.editCell;if(!c)return;
   if(mode==='force'){
@@ -2263,7 +2267,7 @@ function reoptimizeWithEdits(){
 rep("const state={combos:[],selected:null,view:'sections',sectionFilter:'all',running:false,runTimer:null,runTarget:0,cpsatBusy:false,cpsatDone:false,cpsatMerged:0,spot:null,seen:new Set()};",
     "const state={combos:[],selected:null,view:'sections',sectionFilter:'all',running:false,runTimer:null,runTarget:0,cpsatBusy:false,cpsatDone:false,cpsatMerged:0,spot:null,seen:new Set(),tweaks:[],editMode:false,edits:[],editCell:null,source:null,lastLocks:null,history:[],swapMode:false,swapMoves:[],swapPick:null,swapDrag:null,lastSwap:null};")
 # (b) CSS
-rep("</style>", ".edited-cell{outline:2px solid var(--amber);outline-offset:-2px;position:relative}\\n.edited-cell::after{content:'✎';position:absolute;top:2px;right:4px;font-size:9px;color:var(--amber-deep)}\\n.cell-editor{display:none;position:fixed;z-index:300;background:var(--surface);border:1px solid var(--line2);border-radius:12px;box-shadow:0 16px 48px rgba(14,59,41,.32);padding:14px 16px;width:min(400px,94vw);animation:ce-in .18s ease}\\n@keyframes ce-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}\\n.cell-editor h3{margin:0 0 4px;font-family:var(--disp);font-weight:900;font-size:17px;color:var(--green-deep)}\\n.ce-cur{font-size:12.5px;color:var(--ink2);margin-bottom:12px}\\n.cell-editor select{width:100%;margin-bottom:12px;padding:9px;border:1px solid var(--line2);border-radius:8px;font-size:13px;background:#fff;color:var(--ink)}\\n.ce-actions{display:flex;gap:8px;flex-wrap:wrap}\\n.tweak-add{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}\\n.tweak-add select,.tweak-add input[type=date]{padding:7px 9px;border:1px solid var(--line2);border-radius:8px;background:#fff;font-size:12.5px;color:var(--ink)}\\n.tweak-nl{font-size:12px;color:var(--ink2);font-style:italic}\\n.tweak-stag{font-family:var(--mono);font-size:10px;padding:2px 8px;border-radius:99px;border:1px solid var(--line2)}\\n.tweak-stag.active{background:var(--green-tint);color:var(--green-deep);border-color:var(--green)}\\n.tweak-stag.expired{background:var(--surface2);color:var(--ink2)}\\n.tweak-stag.upcoming{background:var(--amber-tint);color:var(--amber-deep);border-color:var(--amber)}\\n.ed-chip-wrap{display:inline-flex;gap:4px;flex-wrap:wrap}\\n</style>")
+rep("</style>", ".edited-cell{outline:2px solid var(--amber);outline-offset:-2px;position:relative}\\n.edited-cell::after{content:'✎';position:absolute;top:2px;right:4px;font-size:9px;color:var(--amber-deep)}\\n.cell-editor{display:none;position:fixed;top:96px;right:16px;z-index:300;background:var(--surface);border:1px solid var(--line2);border-radius:12px;box-shadow:0 16px 48px rgba(14,59,41,.32);padding:14px 16px;width:min(400px,94vw)}\\n.cell-editor h3{margin:0 0 4px;font-family:var(--disp);font-weight:900;font-size:17px;color:var(--green-deep)}\\n.ce-cur{font-size:12.5px;color:var(--ink2);margin-bottom:12px}\\n.cell-editor select{width:100%;margin-bottom:12px;padding:9px;border:1px solid var(--line2);border-radius:8px;font-size:13px;background:#fff;color:var(--ink)}\\n.ce-actions{display:flex;gap:8px;flex-wrap:wrap}\\n.tweak-add{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}\\n.tweak-add select,.tweak-add input[type=date]{padding:7px 9px;border:1px solid var(--line2);border-radius:8px;background:#fff;font-size:12.5px;color:var(--ink)}\\n.tweak-nl{font-size:12px;color:var(--ink2);font-style:italic}\\n.tweak-stag{font-family:var(--mono);font-size:10px;padding:2px 8px;border-radius:99px;border:1px solid var(--line2)}\\n.tweak-stag.active{background:var(--green-tint);color:var(--green-deep);border-color:var(--green)}\\n.tweak-stag.expired{background:var(--surface2);color:var(--ink2)}\\n.tweak-stag.upcoming{background:var(--amber-tint);color:var(--amber-deep);border-color:var(--amber)}\\n.ed-chip-wrap{display:inline-flex;gap:4px;flex-wrap:wrap}\\n</style>")
 # (c) Tweaks tab
 rep('<button id="viewSaved">💾 Saved</button>',
     '<button id="viewSaved">💾 Saved</button>\n      <button id="viewTweaks">🛠 Tweaks</button>')
