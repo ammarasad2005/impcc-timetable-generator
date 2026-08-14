@@ -1197,6 +1197,174 @@
     return issues;
   }
 
+  // ------------------------------------------------------------ swapping
+  // Interactive multi-cell swaps. A swap is a set of directed moves (cell X -> cell Y
+  // means "the teacher at X goes to Y's cell"). Moves form chains and circles:
+  //   - a complete circle (each cell gives and receives exactly once) = 0 disruptions;
+  //   - an open chain leaves a vacant cell (head) and a double-teacher cell (tail) =
+  //     net disruptions = vacant + conflicts = 2 per open chain.
+  function swapKeyOf(sec, d, s) { return sec + "|" + d + "|" + s; }
+  function parseSwapKey(k) {
+    const p = String(k).split("|");
+    return { sec: p[0], d: +p[1], s: +p[2] };
+  }
+  function swapAnalyze(moves) {
+    const out = {}, inn = {};
+    for (const m of (moves || [])) {
+      const f = swapKeyOf(m.from.sec, m.from.d, m.from.s);
+      const t = swapKeyOf(m.to.sec, m.to.d, m.to.s);
+      out[f] = t; inn[t] = f;
+    }
+    const visited = {};
+    const chains = [], circles = [];
+    for (const f in out) {                       // chain heads have no incoming
+      if (visited[f] || inn[f]) continue;
+      const chain = []; let cur = f;
+      while (cur && !visited[cur]) { visited[cur] = true; chain.push(cur); cur = out[cur]; }
+      chains.push(chain);
+    }
+    for (const f in out) {                       // remaining nodes are cycles
+      if (visited[f]) continue;
+      const circle = []; let cur = f;
+      while (cur && !visited[cur]) { visited[cur] = true; circle.push(cur); cur = out[cur]; }
+      circles.push(circle);
+    }
+    const vacant = chains.map(c => c[0]);
+    const conflicts = chains.map(c => c[c.length - 1]);
+    return { out, inn, chains, circles, vacant, conflicts, net: vacant.length + conflicts.length };
+  }
+  // Full evaluation against a concrete timetable: adds double-bookings (a teacher
+  // landing on a period where they already teach another class outside the swap) and
+  // constraint violations to the structural disruptions.
+  function swapEvaluate(timetable, moves, R) {
+    const a = swapAnalyze(moves);
+    R = R || resolveConstraints();
+    const involved = {};
+    for (const m of moves) {
+      involved[swapKeyOf(m.from.sec, m.from.d, m.from.s)] = 1;
+      involved[swapKeyOf(m.to.sec, m.to.d, m.to.s)] = 1;
+    }
+    const busy = {};
+    for (const sec in timetable) {
+      const g = timetable[sec]; if (!g) continue;
+      for (let d = 0; d < 5; d++) for (let s = 0; s < 5; s++) {
+        const cell = g[d] && g[d][s]; if (!cell) continue;
+        for (const code of codesOfFullName(cell[1])) {
+          const k = d + "|" + s;
+          (busy[k] = busy[k] || {});
+          (busy[k][code] = busy[k][code] || []).push(sec);
+        }
+      }
+    }
+    const doubleBookings = [], constraintViolations = [];
+    for (const m of moves) {
+      const fromCell = timetable[m.from.sec] && timetable[m.from.sec][m.from.d] && timetable[m.from.sec][m.from.d][m.from.s];
+      if (!fromCell) continue;
+      const codes = codesOfFullName(fromCell[1]);
+      const slot = m.to.d + "|" + m.to.s;
+      const here = busy[slot] || {};
+      for (const code of codes) {
+        const sections = here[code] || [];
+        for (const sec of sections) {
+          const cellKey = swapKeyOf(sec, m.to.d, m.to.s);
+          if (!involved[cellKey]) doubleBookings.push({ code: code, cell: swapKeyOf(m.to.sec, m.to.d, m.to.s), other: cellKey });
+        }
+        if (code && !substituteEligible(code, m.to.d, m.to.s, R)) {
+          constraintViolations.push({ code: code, cell: swapKeyOf(m.to.sec, m.to.d, m.to.s) });
+        }
+      }
+    }
+    const net = a.vacant.length + a.conflicts.length + doubleBookings.length;
+    return Object.assign(a, { doubleBookings, constraintViolations, net });
+  }
+  // Rotate teachers along each circle ("X takes Y's place"): each cell receives the
+  // teacher of its predecessor in the circle. Subjects stay with their cells.
+  function swapApply(timetable, circles) {
+    const tt = JSON.parse(JSON.stringify(timetable));
+    for (const circle of circles) {
+      const teachers = circle.map(k => {
+        const p = parseSwapKey(k);
+        return tt[p.sec][p.d][p.s][1];
+      });
+      for (let i = 0; i < circle.length; i++) {
+        const p = parseSwapKey(circle[i]);
+        tt[p.sec][p.d][p.s][1] = teachers[(i - 1 + circle.length) % circle.length];
+      }
+    }
+    return tt;
+  }
+  // Close open chains with the fewest extra moves: match each chain-tail's displaced
+  // teacher to a vacant head (maximum bipartite matching), avoiding double-bookings and
+  // respecting each teacher's own constraints.
+  function swapComplete(timetable, moves, R) {
+    R = R || resolveConstraints();
+    const ev = swapEvaluate(timetable, moves, R);
+    if (ev.net === 0) return { circles: ev.circles, extraMoves: [], resolved: true, unresolved: [] };
+    const busy = {};
+    for (const sec in timetable) {
+      const g = timetable[sec]; if (!g) continue;
+      for (let d = 0; d < 5; d++) for (let s = 0; s < 5; s++) {
+        const cell = g[d] && g[d][s]; if (!cell) continue;
+        for (const code of codesOfFullName(cell[1])) {
+          const k = d + "|" + s;
+          (busy[k] = busy[k] || {});
+          (busy[k][code] = busy[k][code] || []).push(sec);
+        }
+      }
+    }
+    const involved = {};
+    for (const m of moves) {
+      involved[swapKeyOf(m.from.sec, m.from.d, m.from.s)] = 1;
+      involved[swapKeyOf(m.to.sec, m.to.d, m.to.s)] = 1;
+    }
+    function freeAt(code, d, s) {
+      const list = (busy[d + "|" + s] || {})[code] || [];
+      return list.every(sec => involved[swapKeyOf(sec, d, s)]);
+    }
+    const displaced = ev.conflicts.map(function (k) {
+      const p = parseSwapKey(k);
+      const cell = timetable && timetable[p.sec] && timetable[p.sec][p.d] && timetable[p.sec][p.d][p.s];
+      const codes = cell ? codesOfFullName(cell[1]) : [];
+      return { key: k, code: codes.length === 1 ? codes[0] : null, sec: p.sec, d: p.d, s: p.s };
+    });
+    const vacant = ev.vacant.map(function (k) {
+      const p = parseSwapKey(k);
+      return { key: k, sec: p.sec, d: p.d, s: p.s };
+    });
+    const edges = displaced.map(function (dp) {
+      return vacant.map(function (vc) {
+        return (dp.code && substituteEligible(dp.code, vc.d, vc.s, R) && freeAt(dp.code, vc.d, vc.s)) ? 1 : 0;
+      });
+    });
+    const matchVacant = new Array(vacant.length).fill(-1);
+    const takenDisp = new Array(displaced.length).fill(-1);
+    function tryK(i, seen) {
+      for (let j = 0; j < vacant.length; j++) {
+        if (!edges[i][j] || seen.has(j)) continue;
+        seen.add(j);
+        if (matchVacant[j] === -1 || tryK(matchVacant[j], seen)) { matchVacant[j] = i; takenDisp[i] = j; return true; }
+      }
+      return false;
+    }
+    const order = displaced.map((_, i) => i).sort((x, y) => {
+      return edges[x].reduce((p, q) => p + q, 0) - edges[y].reduce((p, q) => p + q, 0);
+    });
+    for (const i of order) if (edges[i].reduce((p, q) => p + q, 0) > 0) tryK(i, new Set());
+    const extraMoves = [], unresolved = [];
+    for (let i = 0; i < displaced.length; i++) {
+      if (takenDisp[i] >= 0) {
+        extraMoves.push({
+          from: { sec: displaced[i].sec, d: displaced[i].d, s: displaced[i].s },
+          to: { sec: vacant[takenDisp[i]].sec, d: vacant[takenDisp[i]].d, s: vacant[takenDisp[i]].s }
+        });
+      } else unresolved.push(displaced[i]);
+    }
+    const all = moves.concat(extraMoves);
+    const ev2 = swapEvaluate(timetable, all, R);
+    if (ev2.net === 0) return { circles: ev2.circles, extraMoves, resolved: true, unresolved: [] };
+    return { circles: ev2.circles, extraMoves, resolved: false, unresolved, remaining: ev2.doubleBookings.concat(ev2.constraintViolations) };
+  }
+
   // ------------------------------------------------------------ generate
   let _Key = null, _STATIC = null;
   function generate(opts) {
@@ -1251,6 +1419,7 @@
     SLOT_OF, DAY_OF, DEFAULT_CONSTRAINTS, NAME_TO_CODE, resolveConstraints,
     DEFAULT_SECTIONS, normalizeSections, buildUnits,
     generate, validate, score, canonical, toTimetable, locksOk,
-    engage, validateEngagement, codesOfFullName, substituteEligible
+    engage, validateEngagement, codesOfFullName, substituteEligible,
+    swapKeyOf, parseSwapKey, swapAnalyze, swapEvaluate, swapApply, swapComplete
   };
 });

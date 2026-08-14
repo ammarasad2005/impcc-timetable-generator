@@ -1680,7 +1680,8 @@ function currentActionsSnapshot(){
   return {
     tweaks:(state.tweaks||[]).map(function(t){return {kind:t.kind,recurring:t.recurring,window:t.window||null,effect:t.effect||null,natural:t.natural||''};}),
     edits:(state.lastLocks||state.edits||[]).slice(),
-    engagement:eng?{covered:eng.covered,total:eng.total}:null
+    engagement:eng?{covered:eng.covered,total:eng.total}:null,
+    swaps:state.lastSwap?{count:state.lastSwap.circles.length,sizes:state.lastSwap.circles.map(function(c){return c.length;})}:null
   };
 }
 function actionsSummary(a){
@@ -1688,9 +1689,11 @@ function actionsSummary(a){
   const t=(a&&Array.isArray(a.tweaks))?a.tweaks.length:0;
   const e=(a&&Array.isArray(a.edits))?a.edits.length:0;
   const g=(a&&a.engagement&&a.engagement.total)?(a.engagement.covered+'/'+a.engagement.total+' engaged'):null;
+  const s=(a&&a.swaps&&a.swaps.count)?(a.swaps.count+' swap'+(a.swaps.count===1?'':'s')):null;
   if(t)out.push('🛠 '+t+' tweak'+(t===1?'':'s'));
   if(e)out.push('✎ '+e+' edit'+(e===1?'':'s'));
   if(g)out.push('👥 '+g);
+  if(s)out.push('⇄ '+s);
   return out.length?out.join(' · '):'—';
 }
 function savedNameOf(id){
@@ -2171,6 +2174,7 @@ function cellIsEdited(sec,d,s){
 }
 function toggleEditMode(){
   state.editMode=!state.editMode;
+  if(state.editMode)state.swapMode=false;
   renderChrome();renderMain();
   setTicker(state.editMode?'Edit mode — click any cell to adjust it':'Edit mode off','ok');
 }
@@ -2237,7 +2241,7 @@ function reoptimizeWithEdits(){
 # ---- 30) tweaks (temporary/permanent) + manual cell edits + re-optimize ----
 # (a) state fields
 rep("const state={combos:[],selected:null,view:'sections',sectionFilter:'all',running:false,runTimer:null,runTarget:0,cpsatBusy:false,cpsatDone:false,cpsatMerged:0,spot:null,seen:new Set()};",
-    "const state={combos:[],selected:null,view:'sections',sectionFilter:'all',running:false,runTimer:null,runTarget:0,cpsatBusy:false,cpsatDone:false,cpsatMerged:0,spot:null,seen:new Set(),tweaks:[],editMode:false,edits:[],editCell:null,source:null,lastLocks:null,history:[]};")
+    "const state={combos:[],selected:null,view:'sections',sectionFilter:'all',running:false,runTimer:null,runTarget:0,cpsatBusy:false,cpsatDone:false,cpsatMerged:0,spot:null,seen:new Set(),tweaks:[],editMode:false,edits:[],editCell:null,source:null,lastLocks:null,history:[],swapMode:false,swapMoves:[],swapPick:null,swapDrag:null,lastSwap:null};")
 # (b) CSS
 rep("</style>", ".edited-cell{outline:2px solid var(--amber);outline-offset:-2px;position:relative}\\n.edited-cell::after{content:'✎';position:absolute;top:2px;right:4px;font-size:9px;color:var(--amber-deep)}\\n.cell-editor{display:none;position:fixed;inset:0;z-index:300;background:rgba(14,59,41,.45);align-items:center;justify-content:center;padding:16px}\\n.ce-box{background:var(--surface);border-radius:14px;padding:18px 20px;width:min(440px,100%);box-shadow:0 24px 60px rgba(0,0,0,.3);animation:ce-in .18s ease}\\n@keyframes ce-in{from{opacity:0;transform:translateY(8px) scale(.98)}to{opacity:1;transform:none}}\\n.cell-editor h3{margin:0 0 4px;font-family:var(--disp);font-weight:900;font-size:17px;color:var(--green-deep)}\\n.ce-cur{font-size:12.5px;color:var(--ink2);margin-bottom:12px}\\n.cell-editor select{width:100%;margin-bottom:12px;padding:9px;border:1px solid var(--line2);border-radius:8px;font-size:13px;background:#fff;color:var(--ink)}\\n.ce-actions{display:flex;gap:8px;flex-wrap:wrap}\\n.tweak-add{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}\\n.tweak-add select,.tweak-add input[type=date]{padding:7px 9px;border:1px solid var(--line2);border-radius:8px;background:#fff;font-size:12.5px;color:var(--ink)}\\n.tweak-nl{font-size:12px;color:var(--ink2);font-style:italic}\\n.tweak-stag{font-family:var(--mono);font-size:10px;padding:2px 8px;border-radius:99px;border:1px solid var(--line2)}\\n.tweak-stag.active{background:var(--green-tint);color:var(--green-deep);border-color:var(--green)}\\n.tweak-stag.expired{background:var(--surface2);color:var(--ink2)}\\n.tweak-stag.upcoming{background:var(--amber-tint);color:var(--amber-deep);border-color:var(--amber)}\\n.ed-chip-wrap{display:inline-flex;gap:4px;flex-wrap:wrap}\\n</style>")
 # (c) Tweaks tab
@@ -2491,6 +2495,188 @@ rep("    await syncFromCloud();await loadSavedList();",
     "    await syncFromCloud();await loadSavedList();await loadHistory();")
 rep("state.savedList=[];renderAuth();renderChrome();",
     "state.savedList=[];state.history=[];state.source=null;renderAuth();renderChrome();")
+
+# ---- 35) interactive swapping (drag cells into perfect circles) ---------------
+SWAP_CSS = r'''/* ---------- interactive swapping ---------- */
+.swap-badge{position:absolute;left:3px;top:2px;font-family:var(--mono);font-size:9px;line-height:1;padding:2px 4px;border-radius:4px;pointer-events:none;z-index:1}
+.tg-cell.swap-circle{box-shadow:inset 0 0 0 2px var(--green)}
+.tg-cell.swap-circle .swap-badge{background:var(--green-tint);color:var(--green-deep);border:1px solid var(--green)}
+.tg-cell.swap-vacant,.tg-cell.swap-conflict{box-shadow:inset 0 0 0 2px var(--amber);background:var(--amber-tint)}
+.tg-cell.swap-vacant .swap-badge,.tg-cell.swap-conflict .swap-badge{background:var(--amber-tint);color:var(--amber-deep);border:1px solid var(--amber)}
+.tg-cell.swap-out,.tg-cell.swap-in{box-shadow:inset 0 0 0 1px var(--line2)}
+.tg-cell.swap-out .swap-badge,.tg-cell.swap-in .swap-badge{background:var(--surface2);color:var(--ink2);border:1px solid var(--line2)}
+.tg-cell.swap-pick{outline:2px dashed var(--green);outline-offset:-2px}
+.tg-cell.swap-over{outline:2px dashed var(--amber);outline-offset:-2px}
+.tg-cell.swap-drag{opacity:.55}
+.tg-cell[draggable=true]{cursor:grab}
+'''
+rep("</style>", SWAP_CSS + "</style>")
+
+# viewbar: swap controls inside editControls
+rep('<span class="vb-info" id="editCount"></span></span>',
+    '<span class="vb-info" id="editCount"></span><button class="mini-export" id="btnSwapMode">⇄ Swap</button><span class="vb-info" id="swapHud" style="display:none"></span><button class="mini-export" id="btnSwapApply" style="display:none">Apply swap</button><button class="mini-export" id="btnSwapClear" style="display:none">Clear</button></span>')
+
+# click handler: swap-mode intercept before edit mode
+rep("  if(state.editMode){const ec=e.target.closest('.tg-cell');if(ec){openCellEditor(ec.dataset);return;}}",
+    "  if(state.swapMode){const sc=e.target.closest('.tg-cell');if(sc){handleSwapClick(sc);}return;}\n  if(state.editMode){const ec=e.target.closest('.tg-cell');if(ec){openCellEditor(ec.dataset);return;}}")
+
+# renderMain: decorate swap badges after engagement
+rep("  decorateEngagement();",
+    "  decorateEngagement();\n  decorateSwap();")
+
+# renderChrome: swap button + HUD state
+rep("    $('btnEditMode').textContent=state.editMode?'✎ Editing…':'✎ Edit';",
+    "    $('btnEditMode').textContent=state.editMode?'✎ Editing…':'✎ Edit';\n    $('btnSwapMode').textContent=state.swapMode?'⇄ Swapping…':'⇄ Swap';\n    const _sw=state.swapMoves&&state.swapMoves.length?swapLiveEvaluate():null;\n    $('swapHud').style.display=state.swapMode?'':'none';\n    $('btnSwapApply').style.display=state.swapMode?'':'none';\n    $('btnSwapClear').style.display=state.swapMode?'':'none';\n    $('btnSwapApply').disabled=!(state.swapMoves&&state.swapMoves.length);\n    $('btnSwapClear').disabled=!(state.swapMoves&&state.swapMoves.length);\n    $('swapHud').textContent=_sw?('⇄ '+(state.swapMoves.length)+' move'+(state.swapMoves.length===1?'':'s')+' · disruptions '+_sw.net):'';")
+
+# listeners
+rep("$('btnEditMode').addEventListener('click',toggleEditMode);",
+    "$('btnEditMode').addEventListener('click',toggleEditMode);\n$('btnSwapMode').addEventListener('click',toggleSwapMode);\n$('btnSwapApply').addEventListener('click',applySwap);\n$('btnSwapClear').addEventListener('click',swapClear);")
+
+# swap modal (before the version modal)
+rep('<div class="auth-modal" id="versionModal">',
+    '<div class="auth-modal" id="swapModal">\n  <div class="auth-box">\n    <h3>Swap needs re-optimizing</h3>\n    <p id="swapResolveMsg" style="font-size:12.5px;color:var(--ink2);margin:0 0 14px">…</p>\n    <div class="auth-row">\n      <button class="btn primary" id="swapResolve">✨ Resolve & apply</button>\n      <button class="btn" id="swapClose">Cancel</button>\n    </div>\n  </div>\n</div>\n<div class="auth-modal" id="versionModal">')
+
+# swap modal listeners
+rep("$('versionClose').addEventListener('click',()=>{document.getElementById('versionModal').style.display='none';});",
+    "$('versionClose').addEventListener('click',()=>{document.getElementById('versionModal').style.display='none';});\n$('swapResolve').addEventListener('click',doSwapResolve);\n$('swapClose').addEventListener('click',()=>{document.getElementById('swapModal').style.display='none';});")
+
+# combo markers for 'swap' via
+rep("(o.via==='saved'?' 💾':'')))", "(o.via==='saved'?' 💾':(o.via==='swap'?' ⇄':''))))")
+rep("(c.via==='saved'?' · 💾 from your saved list':'')", "(c.via==='saved'?' · 💾 from your saved list':(c.via==='swap'?' · ⇄ swapped':''))")
+rep("(c.via==='saved'?'saved':'in-browser generation')", "(c.via==='saved'?'saved':(c.via==='swap'?'swapped':'in-browser generation'))")
+
+SWAP_MODULE = r'''/* ---------- interactive swapping (drag cells into perfect circles) ---------- */
+function swapLiveEvaluate(){
+  const c=getSel();if(!c)return null;
+  return IMPCC_SOLVER.swapEvaluate(cellsToRaw(c.tt),state.swapMoves||[],effectiveConstraints());
+}
+function toggleSwapMode(){
+  if(!state.swapMode&&!getSel()){setTicker('Generate a combination first','err');return;}
+  state.swapMode=!state.swapMode;
+  if(state.swapMode){state.editMode=false;if(!state.swapMoves)state.swapMoves=[];}
+  else{state.swapMoves=[];state.swapPick=null;state.swapDrag=null;}
+  renderChrome();renderMain();
+  setTicker(state.swapMode?'Swap mode — drag a cell onto another (or tap two cells). Close circles for 0 disruptions, then Apply swap':'Swap mode off','ok');
+}
+function swapClear(){state.swapMoves=[];state.swapPick=null;decorateSwap();renderChrome();setTicker('Swap cleared','ok');}
+function swapCellIsDual(c,sec,d,s){const cell=c.tt[sec][d][s];return !!(cell&&cell.dual);}
+function addSwapMove(from,to){
+  const c=getSel();if(!c)return false;
+  if(from.sec+'|'+from.d+'|'+from.s===to.sec+'|'+to.d+'|'+to.s){setTicker('A cell cannot move onto itself','err');return false;}
+  if(swapCellIsDual(c,from.sec,from.d,from.s)||swapCellIsDual(c,to.sec,to.d,to.s)){setTicker('The shared parallel block cannot be swapped','err');return false;}
+  const dup=(state.swapMoves||[]).some(function(m){return m.to.sec===to.sec&&m.to.d===to.d&&m.to.s===to.s;});
+  if(dup){setTicker('That cell already receives a move — Clear the swap to redo','err');return false;}
+  state.swapMoves=(state.swapMoves||[]).filter(function(m){return !(m.from.sec===from.sec&&m.from.d===from.d&&m.from.s===from.s);});
+  state.swapMoves.push({from:from,to:to});
+  state.swapPick=null;
+  decorateSwap();renderChrome();
+  const ev=swapLiveEvaluate();
+  setTicker('Move added — disruptions '+ev.net+(ev.net===0?' (perfect circle — Apply swap)':''),ev.net===0?'ok':'run');
+  return true;
+}
+function decorateSwap(){
+  const ev=(state.swapMoves&&state.swapMoves.length)?swapLiveEvaluate():null;
+  const circleSet={},vacantSet={},conflictSet={},inSet={},outSet={};
+  if(ev){
+    ev.circles.forEach(function(c){c.forEach(function(k){circleSet[k]=1;});});
+    ev.vacant.forEach(function(k){vacantSet[k]=1;});
+    ev.conflicts.forEach(function(k){conflictSet[k]=1;});
+  }
+  (state.swapMoves||[]).forEach(function(m){
+    inSet[m.to.sec+'|'+m.to.d+'|'+m.to.s]=1;
+    outSet[m.from.sec+'|'+m.from.d+'|'+m.from.s]=1;
+  });
+  document.querySelectorAll('.tg-cell[data-sec]').forEach(function(el){
+    const k=el.dataset.sec+'|'+el.dataset.d+'|'+el.dataset.s;
+    el.draggable=state.swapMode;
+    const old=el.querySelector('.swap-badge');if(old)old.remove();
+    el.classList.remove('swap-circle','swap-vacant','swap-conflict','swap-out','swap-in','swap-pick');
+    if(!state.swapMode)return;
+    if(state.swapPick===k){el.classList.add('swap-pick');addSwapBadge(el,'➜');}
+    if(circleSet[k]){el.classList.add('swap-circle');addSwapBadge(el,'⇄');}
+    else if(vacantSet[k]){el.classList.add('swap-vacant');addSwapBadge(el,'⚠');}
+    else if(conflictSet[k]){el.classList.add('swap-conflict');addSwapBadge(el,'⚠');}
+    else if(outSet[k]&&inSet[k]){el.classList.add('swap-out');addSwapBadge(el,'⇄');}
+    else if(outSet[k]){el.classList.add('swap-out');addSwapBadge(el,'→');}
+    else if(inSet[k]){el.classList.add('swap-in');addSwapBadge(el,'←');}
+  });
+}
+function addSwapBadge(el,label){const b=document.createElement('span');b.className='swap-badge';b.textContent=label;el.appendChild(b);}
+function handleSwapClick(cellEl){
+  const k=cellEl.dataset.sec+'|'+cellEl.dataset.d+'|'+cellEl.dataset.s;
+  if(!state.swapPick){state.swapPick=k;decorateSwap();setTicker('Now click the cell this teacher should move to','run',true);return;}
+  if(state.swapPick===k){state.swapPick=null;decorateSwap();return;}
+  const p=state.swapPick.split('|');
+  addSwapMove({sec:p[0],d:+p[1],s:+p[2]},{sec:cellEl.dataset.sec,d:+cellEl.dataset.d,s:+cellEl.dataset.s});
+}
+function applySwap(){
+  if(!(state.swapMoves&&state.swapMoves.length)){setTicker('No swap moves to apply','err');return;}
+  const c=getSel();if(!c)return;
+  const raw=cellsToRaw(c.tt);
+  const ev=IMPCC_SOLVER.swapEvaluate(raw,state.swapMoves,effectiveConstraints());
+  if(ev.net===0){
+    finishSwap(IMPCC_SOLVER.swapApply(raw,ev.circles),ev.circles,[],ev.constraintViolations);
+  }else{
+    document.getElementById('swapResolveMsg').innerHTML='Net disruptions: <b>'+ev.net+'</b> — the moves do not form perfect circles'+(ev.doubleBookings.length?' (or would double-book a teacher)':'')+'. A targeted optimization will close the chains with the fewest extra cells to bring disruptions to 0.';
+    document.getElementById('swapModal').style.display='flex';
+  }
+}
+function doSwapResolve(){
+  const c=getSel();if(!c)return;
+  const raw=cellsToRaw(c.tt);
+  const res=IMPCC_SOLVER.swapComplete(raw,state.swapMoves,effectiveConstraints());
+  document.getElementById('swapModal').style.display='none';
+  if(res.resolved){
+    finishSwap(IMPCC_SOLVER.swapApply(raw,res.circles),res.circles,res.extraMoves,[]);
+    setTicker('Targeted optimization closed the chains — swap applied','ok');
+  }else{
+    setTicker('Could not resolve '+res.unresolved.length+' disruption(s) — add more cells to the swap or Clear','err');
+  }
+}
+function finishSwap(newtt,circles,extra,warnings){
+  const c=getSel();
+  const combo=makeCombo({score:c.score,timetable:newtt},'swap');
+  state.combos.push(combo);
+  state.selected=combo.id;
+  state.lastSwap={circles:circles,extra:extra};
+  state.swapMoves=[];state.swapMode=false;state.swapPick=null;
+  persist();renderAll();
+  const w=warnings&&warnings.length?(' · ⚠ '+warnings.length+' constraint warning'+(warnings.length===1?'':'s')):'';
+  setTicker('Swap applied — '+circles.length+' circle'+(circles.length===1?'':'s')+' · '+circles.reduce(function(n,c){return n+c.length;},0)+' cells'+(extra.length?(' · '+extra.length+' auto-closed'):'')+w,'ok');
+}
+mainEl.addEventListener('dragstart',function(e){
+  if(!state.swapMode)return;
+  const el=e.target&&e.target.closest?e.target.closest('.tg-cell[data-sec]'):null;
+  if(!el){e.preventDefault();return;}
+  const k=el.dataset.sec+'|'+el.dataset.d+'|'+el.dataset.s;
+  try{e.dataTransfer.setData('text/plain',k);}catch(err){}
+  try{e.dataTransfer.effectAllowed='move';}catch(err){}
+  state.swapDrag=k;el.classList.add('swap-drag');
+});
+mainEl.addEventListener('dragover',function(e){
+  if(!state.swapMode)return;
+  const el=e.target&&e.target.closest?e.target.closest('.tg-cell[data-sec]'):null;
+  if(el){e.preventDefault();el.classList.add('swap-over');}
+});
+mainEl.addEventListener('dragleave',function(e){
+  const el=e.target&&e.target.closest?e.target.closest('.tg-cell[data-sec]'):null;
+  if(el)el.classList.remove('swap-over');
+});
+mainEl.addEventListener('drop',function(e){
+  if(!state.swapMode)return;
+  const el=e.target&&e.target.closest?e.target.closest('.tg-cell[data-sec]'):null;
+  if(el)e.preventDefault();
+  const src=state.swapDrag;state.swapDrag=null;
+  document.querySelectorAll('.tg-cell').forEach(function(x){x.classList.remove('swap-over','swap-drag');});
+  if(!el||!src)return;
+  const p=src.split('|');
+  addSwapMove({sec:p[0],d:+p[1],s:+p[2]},{sec:el.dataset.sec,d:+el.dataset.d,s:+el.dataset.s});
+});
+mainEl.addEventListener('dragend',function(){state.swapDrag=null;document.querySelectorAll('.tg-cell').forEach(function(x){x.classList.remove('swap-over','swap-drag');});});
+
+'''
+rep("/* ---------- boot: restore saved results (no auto-generation) ---------- */",
+    SWAP_MODULE + "/* ---------- boot: restore saved results (no auto-generation) ---------- */")
 
 io.open(DST, "w", encoding="utf-8").write(src)
 print("OK → wrote", DST, "(", len(src), "bytes )")

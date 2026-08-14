@@ -451,6 +451,18 @@ footer b{color:var(--green)}
 .eng-stmt em{color:var(--ink2);font-style:italic}
 .eng-stmt.noc{border-color:var(--amber);background:var(--amber-tint)}
 @media print{#printArea .eng-stmt{break-inside:avoid;border-color:#cfd6c8;font-size:12px}#printArea .eng-print{margin-top:10px}}
+/* ---------- interactive swapping ---------- */
+.swap-badge{position:absolute;left:3px;top:2px;font-family:var(--mono);font-size:9px;line-height:1;padding:2px 4px;border-radius:4px;pointer-events:none;z-index:1}
+.tg-cell.swap-circle{box-shadow:inset 0 0 0 2px var(--green)}
+.tg-cell.swap-circle .swap-badge{background:var(--green-tint);color:var(--green-deep);border:1px solid var(--green)}
+.tg-cell.swap-vacant,.tg-cell.swap-conflict{box-shadow:inset 0 0 0 2px var(--amber);background:var(--amber-tint)}
+.tg-cell.swap-vacant .swap-badge,.tg-cell.swap-conflict .swap-badge{background:var(--amber-tint);color:var(--amber-deep);border:1px solid var(--amber)}
+.tg-cell.swap-out,.tg-cell.swap-in{box-shadow:inset 0 0 0 1px var(--line2)}
+.tg-cell.swap-out .swap-badge,.tg-cell.swap-in .swap-badge{background:var(--surface2);color:var(--ink2);border:1px solid var(--line2)}
+.tg-cell.swap-pick{outline:2px dashed var(--green);outline-offset:-2px}
+.tg-cell.swap-over{outline:2px dashed var(--amber);outline-offset:-2px}
+.tg-cell.swap-drag{opacity:.55}
+.tg-cell[draggable=true]{cursor:grab}
 </style>
 </head>
 <body>
@@ -465,6 +477,16 @@ footer b{color:var(--green)}
   </div>
   <div class="mast-auth" id="authUi"></div>
 </header>
+<div class="auth-modal" id="swapModal">
+  <div class="auth-box">
+    <h3>Swap needs re-optimizing</h3>
+    <p id="swapResolveMsg" style="font-size:12.5px;color:var(--ink2);margin:0 0 14px">…</p>
+    <div class="auth-row">
+      <button class="btn primary" id="swapResolve">✨ Resolve & apply</button>
+      <button class="btn" id="swapClose">Cancel</button>
+    </div>
+  </div>
+</div>
 <div class="auth-modal" id="versionModal">
   <div class="auth-box">
     <h3>Save as version</h3>
@@ -570,7 +592,7 @@ footer b{color:var(--green)}
     </span>
 
     <span class="vb-info" id="vbInfo"></span>
-    <span class="vb-edit" id="editControls" style="display:none"><button class="mini-export" id="btnEditMode">✎ Edit</button><button class="mini-export" id="btnReopt">Re-optimize</button><button class="mini-export" id="btnClearEdits">Clear</button><span class="vb-info" id="editCount"></span></span>
+    <span class="vb-edit" id="editControls" style="display:none"><button class="mini-export" id="btnEditMode">✎ Edit</button><button class="mini-export" id="btnReopt">Re-optimize</button><button class="mini-export" id="btnClearEdits">Clear</button><span class="vb-info" id="editCount"></span><button class="mini-export" id="btnSwapMode">⇄ Swap</button><span class="vb-info" id="swapHud" style="display:none"></span><button class="mini-export" id="btnSwapApply" style="display:none">Apply swap</button><button class="mini-export" id="btnSwapClear" style="display:none">Clear</button></span>
     <button class="mini-export" id="btnComboCsv" title="Download the selected combination as a CSV file (all 11 sections)">⇩ Export combination CSV</button>
     <button class="mini-export" id="btnAllImages" title="Download every section schedule as PNG images, grouped in department folders (ZIP)">⇩ All sections (ZIP)</button>
     <button class="mini-export" id="btnFacultyImages" title="Download every faculty member schedule as PNG images (ZIP)">⇩ Faculty images (ZIP)</button>
@@ -688,7 +710,7 @@ const CONSTRAINTS={
 };
 
 /* ---------- combinations & scoring ---------- */
-const state={combos:[],selected:null,view:'sections',sectionFilter:'all',running:false,runTimer:null,runTarget:0,cpsatBusy:false,cpsatDone:false,cpsatMerged:0,spot:null,seen:new Set(),tweaks:[],editMode:false,edits:[],editCell:null,source:null,lastLocks:null,history:[]};
+const state={combos:[],selected:null,view:'sections',sectionFilter:'all',running:false,runTimer:null,runTarget:0,cpsatBusy:false,cpsatDone:false,cpsatMerged:0,spot:null,seen:new Set(),tweaks:[],editMode:false,edits:[],editCell:null,source:null,lastLocks:null,history:[],swapMode:false,swapMoves:[],swapPick:null,swapDrag:null,lastSwap:null};
 let comboSeq=0;
 
 function makeCombo(sol,via){
@@ -1170,7 +1192,7 @@ function renderScorecard(){
     '<div>'+
       '<span class="rankchip">#'+rank+' of '+total+'</span>'+
       '<div class="stand-text">'+st.phrase+'</div>'+
-      '<div class="pct">'+pctLine+(c.via==='cpsat'?' · merged from CP-SAT ✦':(c.via==='pushed'?' · 📣 published to everyone':(c.via==='saved'?' · 💾 from your saved list':'')))+'</div>'+
+      '<div class="pct">'+pctLine+(c.via==='cpsat'?' · merged from CP-SAT ✦':(c.via==='pushed'?' · 📣 published to everyone':(c.via==='saved'?' · 💾 from your saved list':(c.via==='swap'?' · ⇄ swapped':''))))+'</div>'+
       '<div class="meter"><i style="width:'+Math.max(4,st.pct)+'%"></i></div>'+
       '<div class="bd"><b>'+c.a3+' × 3/wk split</b> · <b>'+c.a2+' × 2/wk split</b>'+(c.a4?(' · <b>'+c.a4+' × 4/wk split</b>'):'')+' &nbsp;· score '+c.score+'</div>'+
     '</div>'+
@@ -1260,13 +1282,14 @@ function renderMain(){
   if(!c)return;
   if(state.view==='sections')renderSections(c.tt);else renderTeachers(c.tt);
   decorateEngagement();
+  decorateSwap();
 }
 function renderChrome(){
   const list=sortedList(),c=getSel();
   let opts='';
   list.forEach(o=>{
     const r=rankOf(o,list);
-    opts+='<option value="'+o.id+'">#'+r+' · score '+o.score+' · '+shortStanding(o,list)+(o.via==='cpsat'?' ✦CP-SAT':(o.via==='pushed'?' 📣':(o.via==='saved'?' 💾':'')))+'</option>';
+    opts+='<option value="'+o.id+'">#'+r+' · score '+o.score+' · '+shortStanding(o,list)+(o.via==='cpsat'?' ✦CP-SAT':(o.via==='pushed'?' 📣':(o.via==='saved'?' 💾':(o.via==='swap'?' ⇄':''))))+'</option>';
   });
   selEl.innerHTML=opts||'<option>— no combinations yet —</option>';
   selEl.disabled=!list.length;
@@ -1277,7 +1300,7 @@ function renderChrome(){
     scoreBadge.textContent='SCORE '+c.score;
     scoreBadge.classList.toggle('best',c.score===list[0].score);
     const shown=sectionsMatching(state.sectionFilter).length;
-    $('vbInfo').textContent='Combination #'+rank+' of '+list.length+' · via '+(c.via==='cpsat'?'CP-SAT solver':(c.via==='pushed'?'published':(c.via==='saved'?'saved':'in-browser generation')))+' · showing '+shown+'/11 sections · '+facultyCount()+' faculty · click any card or class cell for personal courses';
+    $('vbInfo').textContent='Combination #'+rank+' of '+list.length+' · via '+(c.via==='cpsat'?'CP-SAT solver':(c.via==='pushed'?'published':(c.via==='saved'?'saved':(c.via==='swap'?'swapped':'in-browser generation'))))+' · showing '+shown+'/11 sections · '+facultyCount()+' faculty · click any card or class cell for personal courses';
     $('printHead').textContent='IMPCC (H-8) · Intermediate, 1st Shift — Weekly Timetable · Combination #'+rank+' of '+list.length+' · shuffle score '+c.score+(c.via==='cpsat'?' · CP-SAT proven-optimal pool':'')+' · view: '+(state.view==='sections'?'Sections ('+(filterLabel(state.sectionFilter)||'all sections')+')':'Faculty overview')+' · printed '+new Date().toLocaleDateString('en-GB');
   }else{
     rankBadge.textContent='RANK —';scoreBadge.textContent='SCORE —';scoreBadge.classList.remove('best');
@@ -1303,6 +1326,14 @@ function renderChrome(){
     $('btnReopt').disabled=!(state.edits&&state.edits.length);
     $('btnClearEdits').disabled=!(state.edits&&state.edits.length);
     $('btnEditMode').textContent=state.editMode?'✎ Editing…':'✎ Edit';
+    $('btnSwapMode').textContent=state.swapMode?'⇄ Swapping…':'⇄ Swap';
+    const _sw=state.swapMoves&&state.swapMoves.length?swapLiveEvaluate():null;
+    $('swapHud').style.display=state.swapMode?'':'none';
+    $('btnSwapApply').style.display=state.swapMode?'':'none';
+    $('btnSwapClear').style.display=state.swapMode?'':'none';
+    $('btnSwapApply').disabled=!(state.swapMoves&&state.swapMoves.length);
+    $('btnSwapClear').disabled=!(state.swapMoves&&state.swapMoves.length);
+    $('swapHud').textContent=_sw?('⇄ '+(state.swapMoves.length)+' move'+(state.swapMoves.length===1?'':'s')+' · disruptions '+_sw.net):'';
     btnCpsat.disabled=!_signedIn;btnCpsat.title=_signedIn?'Call the CP-SAT backend for proven-optimal results':'Sign in to unlock CP-SAT & AI translation';if(!_signedIn&&!state.cpsatDone){setCpsatStatus('CP-SAT: 🔒 sign in to unlock CP-SAT & AI translation','warn');}
     btnSave.disabled=!_signedIn||!list.length;btnSave.title=_signedIn?'Save the selected combination to your account':'Sign in to save timetables';btnSave.innerHTML='<span class="g">'+(_signedIn?'💾':'🔒')+'</span> Save';
     btnPush.disabled=!_signedIn||!list.length;btnPush.title=_signedIn?'Publish the selected combination so everyone can view it':'Sign in to push a timetable';btnPush.innerHTML='<span class="g">'+(_signedIn?'📣':'🔒')+'</span> Push';
@@ -1549,6 +1580,9 @@ btnSave.addEventListener('click',saveCurrent);
 btnPush.addEventListener('click',pushCurrent);
 btnUnpush.addEventListener('click',unpushCurrent);
 $('btnEditMode').addEventListener('click',toggleEditMode);
+$('btnSwapMode').addEventListener('click',toggleSwapMode);
+$('btnSwapApply').addEventListener('click',applySwap);
+$('btnSwapClear').addEventListener('click',swapClear);
 $('btnReopt').addEventListener('click',reoptimizeWithEdits);
 $('btnClearEdits').addEventListener('click',clearEdits);
 btnPrint.addEventListener('click',printCurrent);
@@ -1588,6 +1622,8 @@ $('viewEngagement').addEventListener('click',()=>setView('engagement'));
 $('versionKeep').addEventListener('click',()=>doSaveVersion('keep'));
 $('versionReplace').addEventListener('click',()=>doSaveVersion('replace'));
 $('versionClose').addEventListener('click',()=>{document.getElementById('versionModal').style.display='none';});
+$('swapResolve').addEventListener('click',doSwapResolve);
+$('swapClose').addEventListener('click',()=>{document.getElementById('swapModal').style.display='none';});
 function setView(v){
   state.view=v;
   $('viewSections').classList.toggle('on',v==='sections');
@@ -1653,6 +1689,7 @@ mainEl.addEventListener('click',e=>{
   const pdfBtn=e.target.closest('.card-pdf');
   if(pdfBtn&&pdfBtn.dataset.pdfStream){printTarget({type:'stream',id:pdfBtn.dataset.pdfStream});return;}
 
+  if(state.swapMode){const sc=e.target.closest('.tg-cell');if(sc){handleSwapClick(sc);}return;}
   if(state.editMode){const ec=e.target.closest('.tg-cell');if(ec){openCellEditor(ec.dataset);return;}}
   const card=e.target.closest('.t-card');
   if(card){openSpotlight(card.dataset.name);return;}
@@ -2314,7 +2351,8 @@ function currentActionsSnapshot(){
   return {
     tweaks:(state.tweaks||[]).map(function(t){return {kind:t.kind,recurring:t.recurring,window:t.window||null,effect:t.effect||null,natural:t.natural||''};}),
     edits:(state.lastLocks||state.edits||[]).slice(),
-    engagement:eng?{covered:eng.covered,total:eng.total}:null
+    engagement:eng?{covered:eng.covered,total:eng.total}:null,
+    swaps:state.lastSwap?{count:state.lastSwap.circles.length,sizes:state.lastSwap.circles.map(function(c){return c.length;})}:null
   };
 }
 function actionsSummary(a){
@@ -2322,9 +2360,11 @@ function actionsSummary(a){
   const t=(a&&Array.isArray(a.tweaks))?a.tweaks.length:0;
   const e=(a&&Array.isArray(a.edits))?a.edits.length:0;
   const g=(a&&a.engagement&&a.engagement.total)?(a.engagement.covered+'/'+a.engagement.total+' engaged'):null;
+  const s=(a&&a.swaps&&a.swaps.count)?(a.swaps.count+' swap'+(a.swaps.count===1?'':'s')):null;
   if(t)out.push('🛠 '+t+' tweak'+(t===1?'':'s'));
   if(e)out.push('✎ '+e+' edit'+(e===1?'':'s'));
   if(g)out.push('👥 '+g);
+  if(s)out.push('⇄ '+s);
   return out.length?out.join(' · '):'—';
 }
 function savedNameOf(id){
@@ -2739,6 +2779,7 @@ function cellIsEdited(sec,d,s){
 }
 function toggleEditMode(){
   state.editMode=!state.editMode;
+  if(state.editMode)state.swapMode=false;
   renderChrome();renderMain();
   setTicker(state.editMode?'Edit mode — click any cell to adjust it':'Edit mode off','ok');
 }
@@ -2918,6 +2959,135 @@ function exportEngagementCSV(){
   downloadCSV('IMPCC_engagement-plan.csv',rows);
   setTicker('Exported engagement plan (CSV)','ok');
 }
+
+/* ---------- interactive swapping (drag cells into perfect circles) ---------- */
+function swapLiveEvaluate(){
+  const c=getSel();if(!c)return null;
+  return IMPCC_SOLVER.swapEvaluate(cellsToRaw(c.tt),state.swapMoves||[],effectiveConstraints());
+}
+function toggleSwapMode(){
+  if(!state.swapMode&&!getSel()){setTicker('Generate a combination first','err');return;}
+  state.swapMode=!state.swapMode;
+  if(state.swapMode){state.editMode=false;if(!state.swapMoves)state.swapMoves=[];}
+  else{state.swapMoves=[];state.swapPick=null;state.swapDrag=null;}
+  renderChrome();renderMain();
+  setTicker(state.swapMode?'Swap mode — drag a cell onto another (or tap two cells). Close circles for 0 disruptions, then Apply swap':'Swap mode off','ok');
+}
+function swapClear(){state.swapMoves=[];state.swapPick=null;decorateSwap();renderChrome();setTicker('Swap cleared','ok');}
+function swapCellIsDual(c,sec,d,s){const cell=c.tt[sec][d][s];return !!(cell&&cell.dual);}
+function addSwapMove(from,to){
+  const c=getSel();if(!c)return false;
+  if(from.sec+'|'+from.d+'|'+from.s===to.sec+'|'+to.d+'|'+to.s){setTicker('A cell cannot move onto itself','err');return false;}
+  if(swapCellIsDual(c,from.sec,from.d,from.s)||swapCellIsDual(c,to.sec,to.d,to.s)){setTicker('The shared parallel block cannot be swapped','err');return false;}
+  const dup=(state.swapMoves||[]).some(function(m){return m.to.sec===to.sec&&m.to.d===to.d&&m.to.s===to.s;});
+  if(dup){setTicker('That cell already receives a move — Clear the swap to redo','err');return false;}
+  state.swapMoves=(state.swapMoves||[]).filter(function(m){return !(m.from.sec===from.sec&&m.from.d===from.d&&m.from.s===from.s);});
+  state.swapMoves.push({from:from,to:to});
+  state.swapPick=null;
+  decorateSwap();renderChrome();
+  const ev=swapLiveEvaluate();
+  setTicker('Move added — disruptions '+ev.net+(ev.net===0?' (perfect circle — Apply swap)':''),ev.net===0?'ok':'run');
+  return true;
+}
+function decorateSwap(){
+  const ev=(state.swapMoves&&state.swapMoves.length)?swapLiveEvaluate():null;
+  const circleSet={},vacantSet={},conflictSet={},inSet={},outSet={};
+  if(ev){
+    ev.circles.forEach(function(c){c.forEach(function(k){circleSet[k]=1;});});
+    ev.vacant.forEach(function(k){vacantSet[k]=1;});
+    ev.conflicts.forEach(function(k){conflictSet[k]=1;});
+  }
+  (state.swapMoves||[]).forEach(function(m){
+    inSet[m.to.sec+'|'+m.to.d+'|'+m.to.s]=1;
+    outSet[m.from.sec+'|'+m.from.d+'|'+m.from.s]=1;
+  });
+  document.querySelectorAll('.tg-cell[data-sec]').forEach(function(el){
+    const k=el.dataset.sec+'|'+el.dataset.d+'|'+el.dataset.s;
+    el.draggable=state.swapMode;
+    const old=el.querySelector('.swap-badge');if(old)old.remove();
+    el.classList.remove('swap-circle','swap-vacant','swap-conflict','swap-out','swap-in','swap-pick');
+    if(!state.swapMode)return;
+    if(state.swapPick===k){el.classList.add('swap-pick');addSwapBadge(el,'➜');}
+    if(circleSet[k]){el.classList.add('swap-circle');addSwapBadge(el,'⇄');}
+    else if(vacantSet[k]){el.classList.add('swap-vacant');addSwapBadge(el,'⚠');}
+    else if(conflictSet[k]){el.classList.add('swap-conflict');addSwapBadge(el,'⚠');}
+    else if(outSet[k]&&inSet[k]){el.classList.add('swap-out');addSwapBadge(el,'⇄');}
+    else if(outSet[k]){el.classList.add('swap-out');addSwapBadge(el,'→');}
+    else if(inSet[k]){el.classList.add('swap-in');addSwapBadge(el,'←');}
+  });
+}
+function addSwapBadge(el,label){const b=document.createElement('span');b.className='swap-badge';b.textContent=label;el.appendChild(b);}
+function handleSwapClick(cellEl){
+  const k=cellEl.dataset.sec+'|'+cellEl.dataset.d+'|'+cellEl.dataset.s;
+  if(!state.swapPick){state.swapPick=k;decorateSwap();setTicker('Now click the cell this teacher should move to','run',true);return;}
+  if(state.swapPick===k){state.swapPick=null;decorateSwap();return;}
+  const p=state.swapPick.split('|');
+  addSwapMove({sec:p[0],d:+p[1],s:+p[2]},{sec:cellEl.dataset.sec,d:+cellEl.dataset.d,s:+cellEl.dataset.s});
+}
+function applySwap(){
+  if(!(state.swapMoves&&state.swapMoves.length)){setTicker('No swap moves to apply','err');return;}
+  const c=getSel();if(!c)return;
+  const raw=cellsToRaw(c.tt);
+  const ev=IMPCC_SOLVER.swapEvaluate(raw,state.swapMoves,effectiveConstraints());
+  if(ev.net===0){
+    finishSwap(IMPCC_SOLVER.swapApply(raw,ev.circles),ev.circles,[],ev.constraintViolations);
+  }else{
+    document.getElementById('swapResolveMsg').innerHTML='Net disruptions: <b>'+ev.net+'</b> — the moves do not form perfect circles'+(ev.doubleBookings.length?' (or would double-book a teacher)':'')+'. A targeted optimization will close the chains with the fewest extra cells to bring disruptions to 0.';
+    document.getElementById('swapModal').style.display='flex';
+  }
+}
+function doSwapResolve(){
+  const c=getSel();if(!c)return;
+  const raw=cellsToRaw(c.tt);
+  const res=IMPCC_SOLVER.swapComplete(raw,state.swapMoves,effectiveConstraints());
+  document.getElementById('swapModal').style.display='none';
+  if(res.resolved){
+    finishSwap(IMPCC_SOLVER.swapApply(raw,res.circles),res.circles,res.extraMoves,[]);
+    setTicker('Targeted optimization closed the chains — swap applied','ok');
+  }else{
+    setTicker('Could not resolve '+res.unresolved.length+' disruption(s) — add more cells to the swap or Clear','err');
+  }
+}
+function finishSwap(newtt,circles,extra,warnings){
+  const c=getSel();
+  const combo=makeCombo({score:c.score,timetable:newtt},'swap');
+  state.combos.push(combo);
+  state.selected=combo.id;
+  state.lastSwap={circles:circles,extra:extra};
+  state.swapMoves=[];state.swapMode=false;state.swapPick=null;
+  persist();renderAll();
+  const w=warnings&&warnings.length?(' · ⚠ '+warnings.length+' constraint warning'+(warnings.length===1?'':'s')):'';
+  setTicker('Swap applied — '+circles.length+' circle'+(circles.length===1?'':'s')+' · '+circles.reduce(function(n,c){return n+c.length;},0)+' cells'+(extra.length?(' · '+extra.length+' auto-closed'):'')+w,'ok');
+}
+mainEl.addEventListener('dragstart',function(e){
+  if(!state.swapMode)return;
+  const el=e.target&&e.target.closest?e.target.closest('.tg-cell[data-sec]'):null;
+  if(!el){e.preventDefault();return;}
+  const k=el.dataset.sec+'|'+el.dataset.d+'|'+el.dataset.s;
+  try{e.dataTransfer.setData('text/plain',k);}catch(err){}
+  try{e.dataTransfer.effectAllowed='move';}catch(err){}
+  state.swapDrag=k;el.classList.add('swap-drag');
+});
+mainEl.addEventListener('dragover',function(e){
+  if(!state.swapMode)return;
+  const el=e.target&&e.target.closest?e.target.closest('.tg-cell[data-sec]'):null;
+  if(el){e.preventDefault();el.classList.add('swap-over');}
+});
+mainEl.addEventListener('dragleave',function(e){
+  const el=e.target&&e.target.closest?e.target.closest('.tg-cell[data-sec]'):null;
+  if(el)el.classList.remove('swap-over');
+});
+mainEl.addEventListener('drop',function(e){
+  if(!state.swapMode)return;
+  const el=e.target&&e.target.closest?e.target.closest('.tg-cell[data-sec]'):null;
+  if(el)e.preventDefault();
+  const src=state.swapDrag;state.swapDrag=null;
+  document.querySelectorAll('.tg-cell').forEach(function(x){x.classList.remove('swap-over','swap-drag');});
+  if(!el||!src)return;
+  const p=src.split('|');
+  addSwapMove({sec:p[0],d:+p[1],s:+p[2]},{sec:el.dataset.sec,d:+el.dataset.d,s:+el.dataset.s});
+});
+mainEl.addEventListener('dragend',function(){state.swapDrag=null;document.querySelectorAll('.tg-cell').forEach(function(x){x.classList.remove('swap-over','swap-drag');});});
 
 /* ---------- boot: restore saved results (no auto-generation) ---------- */
 loadConstraints();

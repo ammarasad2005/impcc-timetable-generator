@@ -84,6 +84,7 @@ python3 make_report.py        # builds compliance_report.md
 | `test_engagement_fuzz.js` | Engagement edge cases + randomized property/fuzz sweep. |
 | `engagement_schema.md` | Spec for the substitute ("engage the slot") engine. |
 | `versioning_schema.md` | Spec for originals → versions → history (versioning). |
+| `swap_schema.md` | Spec for the interactive multi-cell swap engine. |
 
 ---
 
@@ -262,6 +263,19 @@ since the PNGs are already compressed) — validated against Python's `zipfile`.
   history of actions.
 - Backing schema: `saved_timetables` gained `kind`, `parent_id`, `actions`, `archived`;
   new `timetable_history` table (owner RLS, append-only from the client).
+
+## Interactive swapping (multi-cell, perfect circles)
+
+- **⇄ Swap** (Sections view) toggles swap mode. **Drag** a cell onto another (or **tap**
+  two cells) to record a move: "cell X → cell Y" moves X's **teacher** to Y's cell.
+- Moves form **chains and circles**; a **perfect circle** = **0 disruptions** (open chains
+  = vacant + double-teacher cells; a teacher landing where they already teach = a
+  double-booking). The HUD shows `⇄ N moves · disruptions M` live, and the grid preview
+  never changes — only badges/rings animate.
+- **Apply swap**: net 0 → applied directly (new combination, original kept, score
+  unchanged). net ≠ 0 → a dialog shows *"Net disruptions: N — needs re-optimizing"* and a
+  **targeted optimization** closes the chains with the fewest extra cells. Multiple
+  circles supported; the shared parallel block is excluded. See `swap_schema.md`.
 
 ---
 
