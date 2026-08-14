@@ -534,12 +534,19 @@ footer b{color:var(--green)}
   #cpsatStatus{flex:1 1 100%;margin-left:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   #publishedAge{margin-left:0;font-size:10px}
 
-  /* scorecard */
-  .scorecard{padding:15px 16px;border-radius:12px;margin-bottom:14px;gap:14px}
-  .sc-num{font-size:42px}
-  .stand-text{font-size:16px}
-  .bd{font-size:10px}
-  .hist{height:52px}
+  /* scorecard: very minimalist — one compact row */
+  .scorecard{display:flex;flex-direction:row;align-items:center;gap:14px;padding:12px 14px;margin-bottom:12px;border-left-width:5px;border-radius:11px}
+  .scorecard > div:first-child{flex:0 0 auto;min-width:86px}
+  .sc-label{font-size:7.5px;letter-spacing:.12em}
+  .sc-num{font-size:34px;line-height:1;margin:1px 0 0}
+  .sc-delta{display:none}
+  .scorecard > div:nth-child(2){flex:1 1 auto;min-width:0}
+  .rankchip{font-size:10.5px;padding:2px 9px;margin-bottom:3px}
+  .stand-text{font-size:13px;line-height:1.3}
+  .pct{display:none}
+  .meter{display:none}
+  .bd{display:none}
+  .hist-wrap{display:none}
 
   /* viewbar */
   .viewbar{gap:8px;margin-bottom:12px}
