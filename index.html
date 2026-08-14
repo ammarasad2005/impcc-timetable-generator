@@ -3222,7 +3222,7 @@ function renderFacDrop(){
   for(const nm of names){
     const loc=liveLocationOf(nm);
     const up=upcomingFixtures(nm);
-    h+='<div class="fac-item">'+
+    h+='<div class="fac-item" data-fac="'+esc(nm)+'">'+
       '<div class="fn">'+esc(nm)+'</div>'+
       '<div class="fl">🕒 '+esc(loc.text)+'</div>'+
       '<div class="ff">'+(up.length?('▶ '+up.map(function(e){return DAYS[e.d]+' '+SLOTS[e.s]+' · '+esc(e.subj)+' ('+esc(engSecLabel(e.sec))+')';}).join(' · ')):'No upcoming classes')+'</div>'+
@@ -3230,6 +3230,14 @@ function renderFacDrop(){
   }
   drop.innerHTML=h;
   drop.classList.add('open');
+  drop.querySelectorAll('.fac-item[data-fac]').forEach(function(item){
+    item.addEventListener('click',function(){
+      const nm=item.getAttribute('data-fac');
+      drop.classList.remove('open');
+      inp.value='';
+      if(nm)openSpotlight(nm);
+    });
+  });
 }
 function renderAuth(){
   const el=document.getElementById('authUi');if(!el)return;
