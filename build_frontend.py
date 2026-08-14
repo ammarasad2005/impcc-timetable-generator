@@ -1811,5 +1811,33 @@ rep("/* ---------- boot: restore saved results (no auto-generation) ---------- *
     SAVED_MODULE + "/* ---------- boot: restore saved results (no auto-generation) ---------- */")
 
 
+# ---- 29) Unpush (admin removes the public timetable from preview) ---------
+# (a) DOM ref
+rep("btnPush=$('btnPush');", "btnPush=$('btnPush'),btnUnpush=$('btnUnpush');")
+# (b) console button after Push
+rep('<button class="btn" id="btnPush" title="Publish the selected combination so everyone can view it"><span class="g">🔒</span> Push</button>',
+    '<button class="btn" id="btnPush" title="Publish the selected combination so everyone can view it"><span class="g">🔒</span> Push</button>\n    <button class="btn" id="btnUnpush" title="Remove the published timetable so visitors can no longer see it" style="display:none"><span class="g">🕳</span> Unpush</button>')
+# (c) renderChrome: show Unpush only when a pushed combo exists + signed in
+rep("    btnPush.disabled=!_signedIn||!list.length;btnPush.title=_signedIn?'Publish the selected combination so everyone can view it':'Sign in to push a timetable';btnPush.innerHTML='<span class=\"g\">'+(_signedIn?'📣':'🔒')+'</span> Push';",
+    "    btnPush.disabled=!_signedIn||!list.length;btnPush.title=_signedIn?'Publish the selected combination so everyone can view it':'Sign in to push a timetable';btnPush.innerHTML='<span class=\"g\">'+(_signedIn?'📣':'🔒')+'</span> Push';\n    const _pushed=pushedCombo();btnUnpush.style.display=(_signedIn&&_pushed)?'':'none';btnUnpush.disabled=!_signedIn||!_pushed;btnUnpush.title=_signedIn?'Remove the published timetable (visitors will no longer see it)':'Sign in to manage the published timetable';")
+# (d) listener
+rep("btnPush.addEventListener('click',pushCurrent);", "btnPush.addEventListener('click',pushCurrent);\nbtnUnpush.addEventListener('click',unpushCurrent);")
+# (e) unpushCurrent (adds next to pushCurrent in the saved module)
+rep("async function loadSavedCombo(id){", """async function unpushCurrent(){
+  if(!SB||!SB.loggedIn){setTicker('Sign in to manage the published timetable','err');return;}
+  const p=pushedCombo();if(!p){setTicker('Nothing is currently published','err');return;}
+  setTicker('Removing published timetable…','run',true);
+  try{
+    await SB.unpushTimetable();
+    state.combos=state.combos.filter(function(c){return c.via!=='pushed';});
+    const list=sortedList();
+    state.selected=list.length?list[0].id:null;
+    persist();renderAll();
+    setTicker('Unpublished — visitors can no longer see that timetable','ok');
+  }catch(e){setTicker('Unpush failed: '+e.message,'err');}
+}
+async function loadSavedCombo(id){""")
+
+
 io.open(DST, "w", encoding="utf-8").write(src)
 print("OK → wrote", DST, "(", len(src), "bytes )")

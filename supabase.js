@@ -179,6 +179,11 @@
         headers: Object.assign({}, this._headers(), { "Prefer": "resolution=merge-duplicates,return=representation" }),
         body: JSON.stringify(body)
       });
+    },
+
+    async unpushTimetable() {
+      await this.ensureSession();
+      return this._req("/rest/v1/pushed_timetable?id=eq.1", { method: "DELETE", headers: this._headers() });
     }
   };
 

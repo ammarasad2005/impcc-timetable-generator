@@ -237,3 +237,7 @@ since the PNGs are already compressed) — validated against Python's `zipfile`.
   another replaces the previous one.
 - Saved/pushed combinations are full timetables (score + grids); generated pools stay
   per-device as before.
+
+> **Unpush:** the admin can remove the published timetable — an **🕳 Unpush** button appears
+> (signed-in only, when something is pushed) and deletes the public row, so visitors no
+> longer see it. RLS lets only authenticated users delete; anonymous deletes match zero rows.

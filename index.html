@@ -455,6 +455,7 @@ footer b{color:var(--green)}
     <button class="btn amber" id="btnCpsat" title="Call the CP-SAT backend (POST /generate) for proven-optimal results"><span class="g">✦</span> Compute optimal (CP-SAT)</button>
     <button class="btn" id="btnSave" title="Save the selected combination to your account"><span class="g">🔒</span> Save</button>
     <button class="btn" id="btnPush" title="Publish the selected combination so everyone can view it"><span class="g">🔒</span> Push</button>
+    <button class="btn" id="btnUnpush" title="Remove the published timetable so visitors can no longer see it" style="display:none"><span class="g">🕳</span> Unpush</button>
     <div class="con-sel">
       <label for="comboSel">Combination</label>
       <select id="comboSel" aria-label="Select combination"></select>
@@ -671,7 +672,7 @@ function getSel(){return state.combos.find(c=>c.id===state.selected)||null;}
 /* ---------- DOM refs ---------- */
 const $=id=>document.getElementById(id);
 const mainEl=$('main'),scorecardEl=$('scorecard'),selEl=$('comboSel'),secFilterEl=$('secFilter');
-const btnGenerate=$('btnGenerate'),btnMore=$('btnMore'),btnCpsat=$('btnCpsat'),btnPrint=$('btnPrint'),btnSave=$('btnSave'),btnPush=$('btnPush');
+const btnGenerate=$('btnGenerate'),btnMore=$('btnMore'),btnCpsat=$('btnCpsat'),btnPrint=$('btnPrint'),btnSave=$('btnSave'),btnPush=$('btnPush'),btnUnpush=$('btnUnpush');
 const btnPrev=$('btnPrev'),btnNext=$('btnNext');
 const rankBadge=$('rankBadge'),scoreBadge=$('scoreBadge');
 const led=$('led'),tickText=$('tickText'),cpsatStatusEl=$('cpsatStatus'),progFill=$('progFill');
@@ -1247,6 +1248,7 @@ function renderChrome(){
     btnCpsat.disabled=!_signedIn;btnCpsat.title=_signedIn?'Call the CP-SAT backend for proven-optimal results':'Sign in to unlock CP-SAT & AI translation';if(!_signedIn&&!state.cpsatDone){setCpsatStatus('CP-SAT: 🔒 sign in to unlock CP-SAT & AI translation','warn');}
     btnSave.disabled=!_signedIn||!list.length;btnSave.title=_signedIn?'Save the selected combination to your account':'Sign in to save timetables';btnSave.innerHTML='<span class="g">'+(_signedIn?'💾':'🔒')+'</span> Save';
     btnPush.disabled=!_signedIn||!list.length;btnPush.title=_signedIn?'Publish the selected combination so everyone can view it':'Sign in to push a timetable';btnPush.innerHTML='<span class="g">'+(_signedIn?'📣':'🔒')+'</span> Push';
+    const _pushed=pushedCombo();btnUnpush.style.display=(_signedIn&&_pushed)?'':'none';btnUnpush.disabled=!_signedIn||!_pushed;btnUnpush.title=_signedIn?'Remove the published timetable (visitors will no longer see it)':'Sign in to manage the published timetable';
   }
 }
 function popBadge(el){el.classList.remove('pop');void el.offsetWidth;el.classList.add('pop');}
@@ -1486,6 +1488,7 @@ btnMore.addEventListener('click',()=>{state.running?stopRun():startRun('more');}
 btnCpsat.addEventListener('click',runCpsat);
 btnSave.addEventListener('click',saveCurrent);
 btnPush.addEventListener('click',pushCurrent);
+btnUnpush.addEventListener('click',unpushCurrent);
 btnPrint.addEventListener('click',printCurrent);
 btnPrev.addEventListener('click',()=>stepSel(-1));
 btnNext.addEventListener('click',()=>stepSel(1));
@@ -2255,6 +2258,19 @@ async function pushCurrent(){
     renderChrome();renderScorecard();
     setTicker('Pushed — everyone can now view this timetable without signing in','ok');
   }catch(e){setTicker('Push failed: '+e.message,'err');}
+}
+async function unpushCurrent(){
+  if(!SB||!SB.loggedIn){setTicker('Sign in to manage the published timetable','err');return;}
+  const p=pushedCombo();if(!p){setTicker('Nothing is currently published','err');return;}
+  setTicker('Removing published timetable…','run',true);
+  try{
+    await SB.unpushTimetable();
+    state.combos=state.combos.filter(function(c){return c.via!=='pushed';});
+    const list=sortedList();
+    state.selected=list.length?list[0].id:null;
+    persist();renderAll();
+    setTicker('Unpublished — visitors can no longer see that timetable','ok');
+  }catch(e){setTicker('Unpush failed: '+e.message,'err');}
 }
 async function loadSavedCombo(id){
   if(!SB||!SB.loggedIn)return;
