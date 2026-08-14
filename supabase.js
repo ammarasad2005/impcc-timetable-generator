@@ -204,6 +204,12 @@
       });
       return Array.isArray(rows) ? rows : [];
     },
+    async clearHistory() {
+      await this.ensureSession();
+      const uid = this.user && this.user.id;
+      if (!uid) throw new Error("not signed in");
+      return this._req("/rest/v1/timetable_history?user_id=eq." + uid, { method: "DELETE", headers: this._headers() });
+    },
 
     // ---- pushed timetable (one, public read) ----
     async loadPushed() {

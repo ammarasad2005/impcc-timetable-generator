@@ -1884,7 +1884,7 @@ function historyLabel(a){
 }
 function renderHistory(){
   const signedIn=SB&&SB.loggedIn;
-  let h='<div class="cons-note"><b>History.</b> A record of every action on your timetables — it stays even after a version is deleted. '+(signedIn?'':'<b style="color:var(--amber-deep)">🔒 Sign in to view your history.</b>')+'</div>';
+  let h='<div class="cons-note"><b>History.</b> A record of every action on your timetables — it stays even after a version is deleted. '+(signedIn?'<span class="cons-actions"><button class="mini-export" id="histClear">🗑 Clear history</button></span>':'<b style="color:var(--amber-deep)">🔒 Sign in to view your history.</b>')+'</div>';
   if(!signedIn){mainEl.innerHTML=h;return;}
   if(!state.history)state.history=[];
   if(!state.history.length){h+='<div class="empty"><div class="eic">🕘</div><h3>No history yet</h3><p>Actions on your saved timetables will appear here.</p></div>';mainEl.innerHTML=h;return;}
@@ -1904,6 +1904,7 @@ function renderHistory(){
   });
   h+='</div>';
   mainEl.innerHTML=h;
+  const hc=document.getElementById('histClear');if(hc)hc.addEventListener('click',clearHistory);
 }
 
 '''
@@ -2687,6 +2688,47 @@ mainEl.addEventListener('dragend',function(){state.swapDrag=null;document.queryS
 '''
 rep("/* ---------- boot: restore saved results (no auto-generation) ---------- */",
     SWAP_MODULE + "/* ---------- boot: restore saved results (no auto-generation) ---------- */")
+
+# ---- 36) Clear results (generated pool) + Clear history (action log) ---------
+rep('<button class="mini-export" id="btnFacultyImages" title="Download every faculty member schedule as PNG images (ZIP)">⇩ Faculty images (ZIP)</button>',
+    '<button class="mini-export" id="btnFacultyImages" title="Download every faculty member schedule as PNG images (ZIP)">⇩ Faculty images (ZIP)</button>\n    <button class="mini-export" id="btnClearResults" title="Clear all generated combinations (saved timetables stay)">🗑 Clear results</button>')
+rep("  $('btnFacultyImages').disabled=!list.length;",
+    "  $('btnFacultyImages').disabled=!list.length;\n  $('btnClearResults').disabled=!list.length;")
+rep("$('btnFacultyImages').addEventListener('click',exportAllFacultyImages);",
+    "$('btnFacultyImages').addEventListener('click',exportAllFacultyImages);\n$('btnClearResults').addEventListener('click',clearResults);")
+
+CLEAR_MODULE = r'''/* ---------- clear results (generated pool) + clear history (action log) ---------- */
+function clearResults(){
+  clearStorage();
+  state.combos=[];state.selected=null;comboSeq=0;
+  state.cpsatDone=false;state.cpsatMerged=0;
+  state.seen=new Set();
+  state.source=null;state.lastLocks=null;state.lastSwap=null;
+  closeSpotlight();
+  state.sectionFilter='all';secFilterEl.value='all';
+  setCpsatStatus('CP-SAT: idle — press “Compute optimal” to call the backend','');
+  renderChrome();
+  loadPushedTimetable().then(function(){renderMain();renderChrome();});
+  setTicker('Results cleared — saved timetables and the published timetable are untouched','ok');
+}
+async function clearHistory(){
+  if(!SB||!SB.loggedIn){setTicker('Sign in to clear history','err');return;}
+  if(!(state.history&&state.history.length)){setTicker('History is already empty','ok');return;}
+  let ok=true;
+  try{ok=window.confirm('Clear the entire version history? This wipes the action log (messages + version IDs) — saved timetables and versions stay.');}catch(e){ok=true;}
+  if(ok===false)return;
+  setTicker('Clearing history…','run',true);
+  try{
+    await SB.clearHistory();
+    state.history=[];
+    renderMain();
+    setTicker('History cleared — saved timetables and versions are untouched','ok');
+  }catch(e){setTicker('Clear history failed: '+e.message,'err');}
+}
+
+'''
+rep("/* ---------- boot: restore saved results (no auto-generation) ---------- */",
+    CLEAR_MODULE + "/* ---------- boot: restore saved results (no auto-generation) ---------- */")
 
 io.open(DST, "w", encoding="utf-8").write(src)
 print("OK → wrote", DST, "(", len(src), "bytes )")
