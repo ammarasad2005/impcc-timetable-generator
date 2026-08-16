@@ -816,7 +816,7 @@ footer b{color:var(--green)}
     <span class="vb-info" id="vbInfo"></span>
     <span class="vb-edit" id="editControls" style="display:none"><button class="mini-export" id="btnEditMode">✎ Edit</button><button class="mini-export" id="btnReopt">Re-optimize</button><button class="mini-export" id="btnClearEdits">Clear</button><span class="vb-info" id="editCount"></span><button class="mini-export" id="btnSwapMode">⇄ Swap</button><span class="vb-info" id="swapHud" style="display:none"></span><button class="mini-export" id="btnSwapApply" style="display:none">Apply swap</button><button class="mini-export" id="btnSwapClear" style="display:none">Clear</button></span>
     <button class="mini-export" id="btnComboCsv" title="Download the selected combination as a CSV file (all 11 sections)">⇩ Export combination CSV</button>
-    <button class="mini-export" id="btnAllImages" title="Download every section schedule as PNG images, grouped in department folders (ZIP)">⇩ All sections (ZIP)</button>
+    <button class="mini-export" id="btnAllImages" title="Download every section schedule as PNG images (ZIP) plus a combined PDF in the sequential hierarchy (I.Com-I, I.Com-II, ICS-I, ICS-II)">⇩ All sections (ZIP + PDF)</button>
     <button class="mini-export" id="btnFacultyImages" title="Download every faculty member schedule as PNG images (ZIP) plus a combined PDF">⇩ Faculty images (ZIP + PDF)</button>
     <button class="mini-export" id="btnClearResults" title="Clear all generated combinations (saved timetables stay)">🗑 Clear results</button>
   </div>
@@ -3529,6 +3529,26 @@ async function exportAllFacultyImages(){
     setTimeout(function(){downloadBytes(buildPdfFromJpegs(jpegs),'IMPCC_faculty_schedules.pdf','application/pdf');},250);
   }
   setTicker('Exported '+pngs.length+' faculty schedules (ZIP + PDF)','ok');
+}
+
+/* supersedes the ZIP-only section export: also emits a combined PDF in the
+   sequential hierarchy — I.Com-I (A,B,C) · I.Com-II (A,B,C) · ICS-I (A,B,C) · ICS-II (A,B) —
+   one section image laid over each page */
+async function exportAllImages(){
+  const c=getSel();if(!c)return;
+  setTicker('Rendering all section schedules (ZIP + PDF)…','run',true);
+  const files=[];const canvases=[];
+  for(const sec of SECTIONS){
+    const r=await drawSectionCanvas(sec.id);
+    if(r){const folder=sec.stream==='icom'?'I-Com':'ICS';files.push({name:folder+'/'+r.filename,data:await canvasToU8(r.canvas)});canvases.push(r.canvas);}
+  }
+  if(files.length)downloadZip(files,'IMPCC_all-sections_schedules.zip');
+  if(canvases.length){
+    const jpegs=[];
+    for(const cv of canvases)jpegs.push({data:await canvasToJpeg(cv,0.9),w:cv.width,h:cv.height});
+    setTimeout(function(){downloadBytes(buildPdfFromJpegs(jpegs),'IMPCC_all-sections_schedules.pdf','application/pdf');},250);
+  }
+  setTicker('Exported '+files.length+' section schedules (ZIP + PDF)','ok');
 }
 
 /* ---------- boot: restore saved results (no auto-generation) ---------- */

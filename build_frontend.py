@@ -1634,7 +1634,7 @@ rep("    if(imgBtn.dataset.imgSec)exportSectionImage(imgBtn.dataset.imgSec);\n  
     "    if(imgBtn.dataset.imgSec)exportSectionImage(imgBtn.dataset.imgSec);\n    else if(imgBtn.dataset.imgTeacher)exportTeacherImage(imgBtn.dataset.imgTeacher);\n    else if(imgBtn.dataset.imgStream)exportStreamImages(imgBtn.dataset.imgStream);")
 # (d) viewbar: add whole-platform + all-faculty ZIP buttons
 rep('<button class="mini-export" id="btnComboCsv" title="Download the selected combination as a CSV file (all 11 sections)">⇩ Export combination CSV</button>',
-    '<button class="mini-export" id="btnComboCsv" title="Download the selected combination as a CSV file (all 11 sections)">⇩ Export combination CSV</button>\n    <button class="mini-export" id="btnAllImages" title="Download every section schedule as PNG images, grouped in department folders (ZIP)">⇩ All sections (ZIP)</button>\n    <button class="mini-export" id="btnFacultyImages" title="Download every faculty member schedule as PNG images (ZIP) plus a combined PDF">⇩ Faculty images (ZIP + PDF)</button>')
+    '<button class="mini-export" id="btnComboCsv" title="Download the selected combination as a CSV file (all 11 sections)">⇩ Export combination CSV</button>\n    <button class="mini-export" id="btnAllImages" title="Download every section schedule as PNG images (ZIP) plus a combined PDF in the sequential hierarchy (I.Com-I, I.Com-II, ICS-I, ICS-II)">⇩ All sections (ZIP + PDF)</button>\n    <button class="mini-export" id="btnFacultyImages" title="Download every faculty member schedule as PNG images (ZIP) plus a combined PDF">⇩ Faculty images (ZIP + PDF)</button>')
 # (e) disable them when no combination exists
 rep("  $('btnComboCsv').disabled=!list.length;",
     "  $('btnComboCsv').disabled=!list.length;\n  $('btnAllImages').disabled=!list.length;\n  $('btnFacultyImages').disabled=!list.length;")
@@ -3124,6 +3124,26 @@ async function exportAllFacultyImages(){
     setTimeout(function(){downloadBytes(buildPdfFromJpegs(jpegs),'IMPCC_faculty_schedules.pdf','application/pdf');},250);
   }
   setTicker('Exported '+pngs.length+' faculty schedules (ZIP + PDF)','ok');
+}
+
+/* supersedes the ZIP-only section export: also emits a combined PDF in the
+   sequential hierarchy — I.Com-I (A,B,C) · I.Com-II (A,B,C) · ICS-I (A,B,C) · ICS-II (A,B) —
+   one section image laid over each page */
+async function exportAllImages(){
+  const c=getSel();if(!c)return;
+  setTicker('Rendering all section schedules (ZIP + PDF)…','run',true);
+  const files=[];const canvases=[];
+  for(const sec of SECTIONS){
+    const r=await drawSectionCanvas(sec.id);
+    if(r){const folder=sec.stream==='icom'?'I-Com':'ICS';files.push({name:folder+'/'+r.filename,data:await canvasToU8(r.canvas)});canvases.push(r.canvas);}
+  }
+  if(files.length)downloadZip(files,'IMPCC_all-sections_schedules.zip');
+  if(canvases.length){
+    const jpegs=[];
+    for(const cv of canvases)jpegs.push({data:await canvasToJpeg(cv,0.9),w:cv.width,h:cv.height});
+    setTimeout(function(){downloadBytes(buildPdfFromJpegs(jpegs),'IMPCC_all-sections_schedules.pdf','application/pdf');},250);
+  }
+  setTicker('Exported '+files.length+' section schedules (ZIP + PDF)','ok');
 }
 
 '''
