@@ -1634,7 +1634,7 @@ rep("    if(imgBtn.dataset.imgSec)exportSectionImage(imgBtn.dataset.imgSec);\n  
     "    if(imgBtn.dataset.imgSec)exportSectionImage(imgBtn.dataset.imgSec);\n    else if(imgBtn.dataset.imgTeacher)exportTeacherImage(imgBtn.dataset.imgTeacher);\n    else if(imgBtn.dataset.imgStream)exportStreamImages(imgBtn.dataset.imgStream);")
 # (d) viewbar: add whole-platform + all-faculty ZIP buttons
 rep('<button class="mini-export" id="btnComboCsv" title="Download the selected combination as a CSV file (all 11 sections)">⇩ Export combination CSV</button>',
-    '<button class="mini-export" id="btnComboCsv" title="Download the selected combination as a CSV file (all 11 sections)">⇩ Export combination CSV</button>\n    <button class="mini-export" id="btnAllImages" title="Download every section schedule as PNG images, grouped in department folders (ZIP)">⇩ All sections (ZIP)</button>\n    <button class="mini-export" id="btnFacultyImages" title="Download every faculty member schedule as PNG images (ZIP)">⇩ Faculty images (ZIP)</button>')
+    '<button class="mini-export" id="btnComboCsv" title="Download the selected combination as a CSV file (all 11 sections)">⇩ Export combination CSV</button>\n    <button class="mini-export" id="btnAllImages" title="Download every section schedule as PNG images, grouped in department folders (ZIP)">⇩ All sections (ZIP)</button>\n    <button class="mini-export" id="btnFacultyImages" title="Download every faculty member schedule as PNG images (ZIP) plus a combined PDF">⇩ Faculty images (ZIP + PDF)</button>')
 # (e) disable them when no combination exists
 rep("  $('btnComboCsv').disabled=!list.length;",
     "  $('btnComboCsv').disabled=!list.length;\n  $('btnAllImages').disabled=!list.length;\n  $('btnFacultyImages').disabled=!list.length;")
@@ -2689,8 +2689,8 @@ rep("/* ---------- boot: restore saved results (no auto-generation) ---------- *
     SWAP_MODULE + "/* ---------- boot: restore saved results (no auto-generation) ---------- */")
 
 # ---- 36) Clear results (generated pool) + Clear history (action log) ---------
-rep('<button class="mini-export" id="btnFacultyImages" title="Download every faculty member schedule as PNG images (ZIP)">⇩ Faculty images (ZIP)</button>',
-    '<button class="mini-export" id="btnFacultyImages" title="Download every faculty member schedule as PNG images (ZIP)">⇩ Faculty images (ZIP)</button>\n    <button class="mini-export" id="btnClearResults" title="Clear all generated combinations (saved timetables stay)">🗑 Clear results</button>')
+rep('<button class="mini-export" id="btnFacultyImages" title="Download every faculty member schedule as PNG images (ZIP) plus a combined PDF">⇩ Faculty images (ZIP + PDF)</button>',
+    '<button class="mini-export" id="btnFacultyImages" title="Download every faculty member schedule as PNG images (ZIP) plus a combined PDF">⇩ Faculty images (ZIP + PDF)</button>\n    <button class="mini-export" id="btnClearResults" title="Clear all generated combinations (saved timetables stay)">🗑 Clear results</button>')
 rep("  $('btnFacultyImages').disabled=!list.length;",
     "  $('btnFacultyImages').disabled=!list.length;\n  $('btnClearResults').disabled=!list.length;")
 rep("$('btnFacultyImages').addEventListener('click',exportAllFacultyImages);",
@@ -3052,6 +3052,84 @@ rep("</style>", r'''.dev-credit{display:flex;flex-wrap:wrap;gap:6px 18px;align-i
   .dev-links{gap:12px}
 }
 </style>''')
+
+PDF_MODULE = r'''/* ---------- faculty combined PDF (one personal timetable per page) ---------- */
+function canvasToJpeg(canvas,quality){
+  return new Promise(function(resolve,reject){
+    canvas.toBlob(function(b){b?resolve(b):reject(new Error('jpeg encode failed'));},'image/jpeg',quality||0.88);
+  }).then(function(blob){return blob.arrayBuffer();}).then(function(buf){return new Uint8Array(buf);});
+}
+function downloadBytes(u8,filename,mime){
+  const blob=new Blob([u8],{type:mime||'application/pdf'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');a.href=url;a.download=filename;
+  document.body.appendChild(a);a.click();a.remove();
+  setTimeout(function(){URL.revokeObjectURL(url);},1200);
+}
+function buildPdfFromJpegs(images){
+  const enc=new TextEncoder();
+  const chunks=[];let offset=0;
+  function push(u){chunks.push(u);offset+=u.length;}
+  function pushStr(s){const u=enc.encode(s);chunks.push(u);offset+=u.length;}
+  pushStr('%PDF-1.4\n');
+  pushStr('%\xE2\xE3\xCF\xD3\n');
+  const N=images.length;
+  const W=842;
+  const objOffset=new Array(2+3*N+2).fill(0);
+  function writeObj(num){objOffset[num]=offset;pushStr(num+' 0 obj\n');}
+  writeObj(1);
+  pushStr('<< /Type /Catalog /Pages 2 0 R >>\nendobj\n');
+  writeObj(2);
+  let kids='';for(let i=0;i<N;i++)kids+=(3+3*i)+' 0 R ';
+  pushStr('<< /Type /Pages /Kids ['+kids+'] /Count '+N+' >>\nendobj\n');
+  for(let i=0;i<N;i++){
+    const pn=3+3*i,imn=4+3*i,cn=5+3*i;
+    const im=images[i];
+    const H=Math.max(1,Math.round(W*im.h/im.w));
+    writeObj(pn);
+    pushStr('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 '+W+' '+H+'] /Resources << /XObject << /Im'+i+' '+imn+' 0 R >> /ProcSet [/PDF /ImageC] >> /Contents '+cn+' 0 R >>\nendobj\n');
+    writeObj(imn);
+    pushStr('<< /Type /XObject /Subtype /Image /Width '+im.w+' /Height '+im.h+' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length '+im.data.length+' >>\nstream\n');
+    push(im.data);
+    pushStr('\nendstream\nendobj\n');
+    writeObj(cn);
+    const content='q\n'+W+' 0 0 '+H+' 0 0 cm\n/Im'+i+' Do\nQ';
+    pushStr('<< /Length '+content.length+' >>\nstream\n'+content+'\nendstream\nendobj\n');
+  }
+  const xrefStart=offset;
+  const total=2+3*N+1;
+  pushStr('xref\n0 '+total+'\n');
+  pushStr('0000000000 65535 f \n');
+  for(let num=1;num<total;num++)pushStr(String(objOffset[num]).padStart(10,'0')+' 00000 n \n');
+  pushStr('trailer\n<< /Size '+total+' /Root 1 0 R >>\nstartxref\n'+xrefStart+'\n%%EOF\n');
+  const out=new Uint8Array(offset);let p=0;
+  for(const c of chunks){out.set(c,p);p+=c.length;}
+  return out;
+}
+/* supersedes the ZIP-only export: also emits a combined PDF, one page per faculty member */
+async function exportAllFacultyImages(){
+  const c=getSel();if(!c)return;
+  const names=teacherOrder();
+  if(!names.length){setTicker('No faculty to export','err');return;}
+  setTicker('Rendering '+names.length+' faculty schedules (ZIP + PDF)…','run',true);
+  const pngs=[];const canvases=[];
+  for(const name of names){
+    const r=await drawTeacherCanvas(name);
+    if(r){pngs.push({name:r.filename,data:await canvasToU8(r.canvas)});canvases.push(r.canvas);}
+  }
+  if(pngs.length)downloadZip(pngs,'IMPCC_faculty_schedules.zip');
+  if(canvases.length){
+    const jpegs=[];
+    for(const cv of canvases)jpegs.push({data:await canvasToJpeg(cv,0.9),w:cv.width,h:cv.height});
+    setTimeout(function(){downloadBytes(buildPdfFromJpegs(jpegs),'IMPCC_faculty_schedules.pdf','application/pdf');},250);
+  }
+  setTicker('Exported '+pngs.length+' faculty schedules (ZIP + PDF)','ok');
+}
+
+'''
+
+rep("/* ---------- boot: restore saved results (no auto-generation) ---------- */",
+    PDF_MODULE + "/* ---------- boot: restore saved results (no auto-generation) ---------- */")
 
 io.open(DST, "w", encoding="utf-8").write(src)
 print("OK → wrote", DST, "(", len(src), "bytes )")
