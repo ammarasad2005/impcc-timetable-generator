@@ -131,7 +131,7 @@ Type a name in the header and see each teacher's **live location** (which class 
 |---|---|
 | Section | landscape **PNG** |
 | Teacher (personal) | **PNG** |
-| Stream / whole platform / all faculty | **ZIP** of PNGs (the faculty ZIP also downloads a combined **PDF** — one member per page, image fills the page) |
+| Stream / whole platform / all faculty | **ZIP** of PNGs — the *all-sections* ZIP also downloads a combined **PDF** laid out in the splitting hierarchy (cover → stream divider → group divider → section pages), and the *faculty* ZIP downloads a combined **PDF** (one member per page). Every page is the image itself. |
 | Combination / section / stream / teacher | **CSV** |
 | Current view | **Print → PDF** |
 

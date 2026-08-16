@@ -1634,7 +1634,7 @@ rep("    if(imgBtn.dataset.imgSec)exportSectionImage(imgBtn.dataset.imgSec);\n  
     "    if(imgBtn.dataset.imgSec)exportSectionImage(imgBtn.dataset.imgSec);\n    else if(imgBtn.dataset.imgTeacher)exportTeacherImage(imgBtn.dataset.imgTeacher);\n    else if(imgBtn.dataset.imgStream)exportStreamImages(imgBtn.dataset.imgStream);")
 # (d) viewbar: add whole-platform + all-faculty ZIP buttons
 rep('<button class="mini-export" id="btnComboCsv" title="Download the selected combination as a CSV file (all 11 sections)">⇩ Export combination CSV</button>',
-    '<button class="mini-export" id="btnComboCsv" title="Download the selected combination as a CSV file (all 11 sections)">⇩ Export combination CSV</button>\n    <button class="mini-export" id="btnAllImages" title="Download every section schedule as PNG images (ZIP) plus a combined PDF in the sequential hierarchy (I.Com-I, I.Com-II, ICS-I, ICS-II)">⇩ All sections (ZIP + PDF)</button>\n    <button class="mini-export" id="btnFacultyImages" title="Download every faculty member schedule as PNG images (ZIP) plus a combined PDF">⇩ Faculty images (ZIP + PDF)</button>')
+    '<button class="mini-export" id="btnComboCsv" title="Download the selected combination as a CSV file (all 11 sections)">⇩ Export combination CSV</button>\n    <button class="mini-export" id="btnAllImages" title="Download every section schedule as PNG images (ZIP) plus a combined PDF with cover, stream and group divider pages">⇩ All sections (ZIP + PDF)</button>\n    <button class="mini-export" id="btnFacultyImages" title="Download every faculty member schedule as PNG images (ZIP) plus a combined PDF">⇩ Faculty images (ZIP + PDF)</button>')
 # (e) disable them when no combination exists
 rep("  $('btnComboCsv').disabled=!list.length;",
     "  $('btnComboCsv').disabled=!list.length;\n  $('btnAllImages').disabled=!list.length;\n  $('btnFacultyImages').disabled=!list.length;")
@@ -3126,21 +3126,68 @@ async function exportAllFacultyImages(){
   setTicker('Exported '+pngs.length+' faculty schedules (ZIP + PDF)','ok');
 }
 
-/* supersedes the ZIP-only section export: also emits a combined PDF in the
-   sequential hierarchy — I.Com-I (A,B,C) · I.Com-II (A,B,C) · ICS-I (A,B,C) · ICS-II (A,B) —
-   one section image laid over each page */
+/* full-page divider (cover / stream / group) — drawn as an image, same page size
+   as the timetable pages so the whole PDF stays image-based */
+async function drawDividerCanvas(title,sub,opts){
+  const o=opts||{};
+  const accent=o.accent||'#1c6b48';
+  const tint=o.tint||'#e2efe6';
+  const canvas=document.createElement('canvas');
+  const ctx=canvas.getContext('2d');
+  if(!ctx)return null;
+  try{if(document.fonts&&document.fonts.ready)await document.fonts.ready;}catch(e){}
+  const W=1830,H=794,scale=2;
+  canvas.width=W*scale;canvas.height=H*scale;
+  ctx.scale(scale,scale);
+  ctx.fillStyle='#ffffff';ctx.fillRect(0,0,W,H);
+  ctx.fillStyle=tint;ctx.fillRect(0,0,W,H);
+  ctx.fillStyle=accent;ctx.fillRect(0,0,20,H);
+  ctx.fillRect(20,0,W-20,12);
+  ctx.fillRect(20,H-12,W-20,12);
+  ctx.textAlign='left';ctx.textBaseline='alphabetic';
+  ctx.fillStyle=accent;ctx.font='900 78px Fraunces, Georgia, serif';
+  ctx.fillText(title,80,H/2-16);
+  if(sub){
+    ctx.fillStyle='#5b6a61';ctx.font='500 32px "IBM Plex Sans", sans-serif';
+    ctx.fillText(sub,80,H/2+56);
+  }
+  ctx.fillStyle='#8a8f86';ctx.font='400 22px "IBM Plex Sans", sans-serif';
+  ctx.fillText(COLLEGE_LINE,80,H-48);
+  return canvas;
+}
+/* supersedes the ZIP-only section export: emits a combined PDF laid out in the
+   splitting hierarchy — cover → stream divider → group divider → section pages
+   (I.Com-I A/B/C, I.Com-II A/B/C, ICS-I A/B/C, ICS-II A/B) — each page an image */
 async function exportAllImages(){
   const c=getSel();if(!c)return;
   setTicker('Rendering all section schedules (ZIP + PDF)…','run',true);
-  const files=[];const canvases=[];
+  const files=[];const pages=[];
+  const streamMeta={icom:{accent:'#1c6b48',tint:'#e2efe6'},ics:{accent:'#3a55b0',tint:'#e5e9f8'}};
+  const streamName={icom:'I.Com — Commerce Stream',ics:'ICS — Computer Science Stream'};
+  const cover=await drawDividerCanvas('Weekly Timetable — All Sections','ICS & I.Com · Intermediate · 1st Shift',{accent:'#0e3b29',tint:'#e2efe6'});
+  if(cover)pages.push(cover);
+  let curStream=null,curGroup=null;
   for(const sec of SECTIONS){
+    const gid=sec.id.replace(/-(A|B|C)$/,'');
+    if(sec.stream!==curStream){
+      curStream=sec.stream;curGroup=null;
+      const sd=await drawDividerCanvas(streamName[curStream],'Intermediate · 1st Shift',streamMeta[curStream]);
+      if(sd)pages.push(sd);
+    }
+    if(gid!==curGroup){
+      curGroup=gid;
+      const subs=SECTIONS.filter(function(s){return s.id.replace(/-(A|B|C)$/,'')===gid;});
+      const letters=subs.map(function(s){return s.id.slice(-1);}).join(', ');
+      const gd=await drawDividerCanvas(gid,'Sections '+letters,streamMeta[curStream]);
+      if(gd)pages.push(gd);
+    }
     const r=await drawSectionCanvas(sec.id);
-    if(r){const folder=sec.stream==='icom'?'I-Com':'ICS';files.push({name:folder+'/'+r.filename,data:await canvasToU8(r.canvas)});canvases.push(r.canvas);}
+    if(r){const folder=sec.stream==='icom'?'I-Com':'ICS';files.push({name:folder+'/'+r.filename,data:await canvasToU8(r.canvas)});pages.push(r.canvas);}
   }
   if(files.length)downloadZip(files,'IMPCC_all-sections_schedules.zip');
-  if(canvases.length){
+  if(pages.length){
     const jpegs=[];
-    for(const cv of canvases)jpegs.push({data:await canvasToJpeg(cv,0.9),w:cv.width,h:cv.height});
+    for(const cv of pages)jpegs.push({data:await canvasToJpeg(cv,0.9),w:cv.width,h:cv.height});
     setTimeout(function(){downloadBytes(buildPdfFromJpegs(jpegs),'IMPCC_all-sections_schedules.pdf','application/pdf');},250);
   }
   setTicker('Exported '+files.length+' section schedules (ZIP + PDF)','ok');
