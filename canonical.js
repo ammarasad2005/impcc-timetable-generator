@@ -160,7 +160,7 @@
     const out = {};
     for (const code in (get().constraints || {})) {
       const c = get().constraints[code];
-      out[code] = { name: c.name, rules: c.rules };
+      out[code] = { name: c.name, rules: c.rules, soft: c.soft || [] };
     }
     return out;
   }

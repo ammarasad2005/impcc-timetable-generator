@@ -1725,7 +1725,11 @@
     "Haroon",
     "Ishfaq"
    ],
-   "note": "ICS-II-B: students take EITHER Economics (Haroon) OR Statistics (Ishfaq), in parallel rooms."
+   "slots": [
+    "P3",
+    "P4"
+   ],
+   "note": "ICS-II-B: students take EITHER Economics (Haroon) OR Statistics (Ishfaq), in parallel rooms. Structural slot range P3/P4."
   }
  ],
  "dayExclusivePairs": [
@@ -1992,22 +1996,36 @@
      }
     ]
    },
+   "soft": [
+    "forbidden_slots"
+   ],
    "natural": [
     "Must Engage 1st and 2nd periods in ICS",
     "Last period must be free"
    ],
+   "softNote": "P5-free is physically infeasible with the current load (22 periods vs 20 available slots) — treated as a soft preference; violations documented and penalized",
    "name": "Prof. Babar Jahangir"
   },
   "Tanveer": {
    "rules": {
-    "allowed_days": [
-     "THU",
-     "FRI"
+    "allowed_slots_in_stream": [
+     {
+      "stream": "I.COM",
+      "slots": [
+       "P1",
+       "P2",
+       "P3"
+      ]
+     }
     ],
-    "allowed_slots": [
-     "P1",
-     "P2",
-     "P3"
+    "allowed_days_in_stream": [
+     {
+      "stream": "I.COM",
+      "days": [
+       "THU",
+       "FRI"
+      ]
+     }
     ]
    },
    "natural": [
@@ -2173,9 +2191,13 @@
      "P1"
     ]
    },
+   "soft": [
+    "forbidden_slots"
+   ],
    "natural": [
     "1st period must be free"
    ],
+   "softNote": "P1-free is physically infeasible with the current load (21 periods vs 20 available slots) — treated as a soft preference; violations documented and penalized",
    "name": "Prof. Millat Khan"
   }
  },
