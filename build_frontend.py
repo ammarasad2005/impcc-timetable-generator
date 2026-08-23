@@ -4317,5 +4317,265 @@ rep("    state.combos=res.solutions.map(function(sol){return makeCombo(sol,'brow
     "    state.combos=res.solutions.map(function(sol){return (sol.violations!==undefined)?makeCtxCombo(sol,'browser'):makeCombo(sol,'browser');});\n    state.seen=new Set();")
 
 
+
+# =====================================================================
+# ---- 44) GENERAL INSTRUCTIONS ADMIN (PR-9) ---------------------------
+# ---- per-population structured rules + NL translation + cloud sync ---
+# =====================================================================
+
+GI_MODULE = '''
+/* ---------- general instructions (institution rules) admin ---------- */
+const GI_META = {
+  no_same_subject_same_day:  { label: 'No same subject twice a day',    kind: 'none' },
+  same_subject_same_day_allowed: { label: 'Same-subject doubles allowed', kind: 'none' },
+  avoid_shuffling:           { label: 'Avoid period shuffling (score)',  kind: 'none' },
+  non_overriding:           { label: 'Non-overriding classes',          kind: 'nonOverride' },
+  consecutive_days_for_2pw: { label: '2/wk subjects on consecutive days', kind: 'none' },
+  subject_forbidden_days:   { label: 'Subject not on days',             kind: 'subjectDays' },
+  section_off_days:         { label: 'Sections off on days',            kind: 'sectionDays' },
+  first_last_period_occupied: { label: 'First/last periods occupied (library work)', kind: 'none' },
+  combined_classes:         { label: 'Combined classes (linked groups)', kind: 'combined' },
+  soft_individual_spread:   { label: 'Individual spread (soft)',         kind: 'none' }
+};
+function giList(pop){
+  pop = pop || POP_ID;
+  state.giByPop = state.giByPop || {};
+  if(state.giByPop[pop]) return state.giByPop[pop];
+  let list = null;
+  try{
+    const raw = localStorage.getItem('impcc-gi-' + pop);
+    if(raw) list = JSON.parse(raw);
+  }catch(e){}
+  if(!list && CANON){
+    list = JSON.parse(JSON.stringify(((CANON.get().generalInstructions || {})[pop]) || []));
+  }
+  state.giByPop[pop] = list || [];
+  return state.giByPop[pop];
+}
+function giSaveLocal(pop){
+  pop = pop || POP_ID;
+  try{
+    const l = state.giByPop[pop];
+    if(l) localStorage.setItem('impcc-gi-' + pop, JSON.stringify(l));
+  }catch(e){}
+}
+function giEffective(pop){
+  // the rules the solver should apply: this population's list
+  return giList(pop).filter(function(g){ return g.enabled !== false; });
+}
+function giDescribe(gi){
+  const m = GI_META[gi.type];
+  const p = gi.params || {};
+  switch((m || {}).kind){
+    case 'nonOverride':
+      return 'for ' + (p.sections || []).join(', ') + ' — ' + (p.subjects || []).join(' vs ');
+    case 'subjectDays':
+      return p.subject + ' never on ' + (p.days || []).join(',') + (p.scope ? ' (' + p.scope + ')' : '');
+    case 'sectionDays':
+      return (p.sections || []).length + ' section(s) off on ' + (p.days || []).join(',');
+    case 'combined':
+      return (p.groups || []).length + ' linked group(s)';
+    default:
+      return '';
+  }
+}
+let pendingGI = {};   // population -> { text, result, status }
+function giTranslate(){
+  const pop = POP_ID;
+  const ta = document.getElementById('giNlInput');
+  const text = ta ? ta.value.trim() : '';
+  if(!text){ setTicker('Describe the instruction first', 'err'); return; }
+  if(!SB || !SB.loggedIn){ setTicker('Sign in to use AI translation', 'ok'); return; }
+  pendingGI[pop] = { text: text, result: null, status: 'Translating with AI…' };
+  renderMain();
+  const base = (typeof window.IMPCC_API_URL === 'string') ? window.IMPCC_API_URL : '';
+  fetch(base + '/translate-gi', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json',
+               'Authorization': 'Bearer ' + (SB.session && SB.session.access_token ? SB.session.access_token : '') },
+    body: JSON.stringify({ text: text, population: pop })
+  })
+  .then(function(r){ if(!r.ok) throw new Error(r.status === 401 ? 'Sign in required' : 'HTTP ' + r.status); return r.json(); })
+  .then(function(res){
+    pendingGI[pop] = { text: text, result: res, status: res.error ? ('Error: ' + res.error) : null };
+    renderMain();
+    if(!res.error) setTicker('AI interpretation ready — review and Add rule', 'ok');
+  })
+  .catch(function(err){
+    pendingGI[pop] = { text: text, result: null, status: 'Translation failed: ' + err.message };
+    renderMain();
+  });
+}
+function giAddPending(){
+  const pop = POP_ID;
+  const pend = pendingGI[pop];
+  if(!pend || !pend.result || pend.result.error) return;
+  const list = giList(pop);
+  list.push({
+    id: 'gi-' + pop + '-' + Date.now(),
+    type: pend.result.type,
+    params: pend.result.params || {},
+    enabled: true,
+    natural: pend.result.natural || pend.text,
+    notes: pend.result.notes || '',
+    confidence: pend.result.confidence || 0
+  });
+  state.giByPop[pop] = list;
+  giSaveLocal(pop);
+  pendingGI[pop] = null;
+  renderMain();
+  setTicker('Rule added to ' + POP_LABEL() + ' — press Publish to sync', 'ok');
+}
+function giToggle(id){
+  const list = giList(POP_ID);
+  const g = list.filter(function(x){ return x.id === id; })[0];
+  if(g){ g.enabled = (g.enabled === false); }
+  giSaveLocal(POP_ID);
+  renderMain();
+}
+function giRemove(id){
+  state.giByPop[POP_ID] = giList(POP_ID).filter(function(x){ return x.id !== id; });
+  giSaveLocal(POP_ID);
+  renderMain();
+  setTicker('Rule removed (Publish to sync)', 'ok');
+}
+function giAddManual(){
+  const sel = document.getElementById('giTypeSelect');
+  if(!sel || !sel.value) return;
+  const type = sel.value;
+  const params = {};
+  // minimal param capture per kind
+  const m = GI_META[type] || {};
+  if(m.kind === 'subjectDays'){
+    params.subject = (document.getElementById('giParamSubject') || {}).value || 'Subject';
+    params.days = ['FRI'];
+  } else if(m.kind === 'sectionDays'){
+    params.sections = [];
+    params.days = ['FRI'];
+  }
+  const list = giList(POP_ID);
+  list.push({ id: 'gi-' + POP_ID + '-' + Date.now(), type: type, params: params, enabled: true,
+              natural: '', notes: 'added manually' });
+  state.giByPop[POP_ID] = list;
+  giSaveLocal(POP_ID);
+  renderMain();
+}
+function giPublish(){
+  if(!SB || !SB.loggedIn){ setTicker('Sign in to publish general instructions', 'ok'); return; }
+  const pop = POP_ID;
+  SB.savePublished(
+    (pop === 'inter-1' && state.allocation) ? state.allocation : (state.allocByPop[pop] || {}),
+    state.constraints || {}, getFaculty(), state.tweaks || [],
+    pop, giList(pop), (state.ttConfigByPop || {})[pop] || {}
+  ).then(function(){
+    setTicker('General instructions published for ' + POP_LABEL() + ' ✓', 'ok');
+  }).catch(function(err){
+    setTicker('Publish failed: ' + err.message, 'err');
+  });
+}
+function renderGI(){
+  const pop = POP_ID;
+  const list = giList(pop);
+  const pend = pendingGI[pop];
+  const canEdit = (pop !== 'bs-1');   // bs-1 rules apply at the shift level; still viewable
+  let h = '<div class="cons-note"><b>General instructions are institution-level data.</b> '
+    + 'These rules apply to the whole ' + POP_LABEL() + ' population at generation time. '
+    + 'Toggle rules on/off, add structured rules, or describe one in plain language and let the AI translate it. '
+    + (SB && SB.loggedIn ? '' : '<b style="color:var(--amber-deep)">🔒 Sign in for AI translation & publishing.</b> ')
+    + '<span class="cons-actions"><button class="mini-export" id="giPublish">☁ Publish</button>'
+    + '<button class="mini-export" id="giReset">Reset to defaults</button></span></div>';
+
+  // NL translate box
+  h += '<div class="gi-nl-card">'
+    + '<h4>✦ Describe a new instruction in plain language</h4>'
+    + '<textarea id="giNlInput" placeholder="e.g. Physics must not be scheduled in the last two periods on Friday…"></textarea>'
+    + '<div class="cons-btns"><button class="mini-export" id="giTranslateBtn">✦ Translate with AI</button></div>';
+  if(pend){
+    if(pend.status){ h += '<div class="cons-status">' + esc(pend.status) + '</div>'; }
+    if(pend.result){
+      if(pend.result.error){
+        h += '<div class="cons-status" style="color:var(--red)">' + esc(pend.result.error) + '</div>';
+      } else {
+        h += '<div class="gi-preview">'
+          + '<b>' + esc((GI_META[pend.result.type] || {}).label || pend.result.type) + '</b>'
+          + '<span class="gi-conf">confidence ' + Math.round((pend.result.confidence || 0) * 100) + '%</span>'
+          + '<div class="gi-params">' + esc(JSON.stringify(pend.result.params || {})) + '</div>'
+          + (pend.result.notes ? '<div class="gi-note">' + esc(pend.result.notes) + '</div>' : '')
+          + ((pend.result.unmapped || []).length ? '<div class="gi-note" style="color:var(--amber-deep)">unmapped: ' + esc(pend.result.unmapped.join('; ')) + '</div>' : '')
+          + '</div>'
+          + '<div class="cons-btns"><button class="mini-export" id="giAddPending">＋ Add rule</button></div>';
+      }
+    }
+  }
+  h += '</div>';
+
+  // manual add
+  h += '<div class="gi-manual"><select id="giTypeSelect"><option value="">＋ Add a rule type…</option>'
+    + Object.keys(GI_META).map(function(k){ return '<option value="' + k + '">' + esc(GI_META[k].label) + '</option>'; }).join('')
+    + '</select></div>';
+
+  // rule list
+  h += '<div class="cons-grid">';
+  for(const gi of list){
+    const m = GI_META[gi.type] || { label: gi.type };
+    const desc = giDescribe(gi);
+    h += '<article class="cons-card' + (gi.enabled === false ? ' gi-off' : '') + '">'
+      + '<header><h4>' + esc(m.label) + '</h4>'
+      + '<span class="stag' + (gi.enabled === false ? '' : ' ok-tag') + '">' + (gi.enabled === false ? 'disabled' : 'active') + '</span>'
+      + '<label class="gi-toggle"><input type="checkbox" data-gi-toggle="' + esc(gi.id) + '"' + (gi.enabled === false ? '' : ' checked') + '> on</label>'
+      + '</header>'
+      + (desc ? '<div class="gi-desc">' + esc(desc) + '</div>' : '')
+      + (gi.natural ? '<div class="gi-natural">"' + esc(gi.natural) + '"</div>' : '')
+      + '<div class="cons-btns">'
+      + '<button class="card-csv" data-gi-remove="' + esc(gi.id) + '" title="Remove this rule">✕ Remove</button>'
+      + '</div>'
+      + '</article>';
+  }
+  h += '</div>';
+  mainEl.innerHTML = h;
+  const tb = document.getElementById('giTranslateBtn');
+  if(tb) tb.addEventListener('click', giTranslate);
+  const ap = document.getElementById('giAddPending');
+  if(ap) ap.addEventListener('click', giAddPending);
+  const pb = document.getElementById('giPublish');
+  if(pb) pb.addEventListener('click', giPublish);
+  const rs = document.getElementById('giReset');
+  if(rs) rs.addEventListener('click', function(){
+    if(CANON){
+      state.giByPop[pop] = JSON.parse(JSON.stringify(((CANON.get().generalInstructions || {})[pop]) || []));
+      giSaveLocal(pop);
+      renderMain();
+      setTicker('General instructions reset to defaults', 'ok');
+    }
+  });
+  const ms = document.getElementById('giTypeSelect');
+  if(ms) ms.addEventListener('change', function(){ if(ms.value){ giAddManual(); } });
+}
+'''
+rep('/* ---------- population layer (inter-1 / bs-1 / inter-2) ---------- */',
+    '/* ---------- population layer (inter-1 / bs-1 / inter-2) ---------- */' + GI_MODULE)
+
+# viewbar tab
+rep('<button id="viewTweaks">🛠 Tweaks</button>',
+    '<button id="viewGI">📋 Instructions</button><button id="viewTweaks">🛠 Tweaks</button>')
+
+rep("$('viewTweaks').classList.toggle('on',v==='tweaks');",
+    "$('viewTweaks').classList.toggle('on',v==='tweaks');\n  $('viewGI').classList.toggle('on',v==='gi');")
+
+rep("  if(state.view==='tweaks'){renderTweaks();return;}",
+    "  if(state.view==='tweaks'){renderTweaks();return;}\n  if(state.view==='gi'){renderGI();return;}")
+
+rep('.cons-note{',
+    '.gi-nl-card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:14px}\n.gi-nl-card h4{margin:0 0 8px;font-size:13.5px}\n.gi-nl-card textarea{width:100%;min-height:64px;border:1px solid var(--line2);border-radius:8px;padding:8px 10px;font-family:var(--body);font-size:13px;resize:vertical}\n.gi-preview{background:var(--green-tint);border-radius:8px;padding:10px 12px;margin-top:10px;font-size:12.5px}\n.gi-preview .gi-conf{float:right;font-family:var(--mono);font-size:10px;color:var(--ink2)}\n.gi-params{font-family:var(--mono);font-size:10.5px;color:var(--ink2);margin-top:4px}\n.gi-note{margin-top:4px;color:var(--ink2);font-style:italic}\n.gi-manual{margin-bottom:12px}\n.gi-manual select{border:1px solid var(--line2);border-radius:8px;padding:7px 10px;font-size:13px;background:var(--surface)}\n.cons-card.gi-off{opacity:.55}\n.gi-toggle{float:right;font-size:11px;color:var(--ink2);display:flex;gap:4px;align-items:center}\n.gi-desc{font-size:12px;color:var(--ink);margin:6px 0}\n.gi-natural{font-size:11.5px;color:var(--ink2);font-style:italic;border-left:2px solid var(--line2);padding-left:8px;margin:6px 0}\n.stag.ok-tag{background:var(--green-tint);color:var(--green-deep)}\n.cons-note{')
+
+# cloud sync: load general_instructions per population
+rep("      if(POP_ID!=='inter-1'&&pub.allocation&&Object.keys(pub.allocation).length){state.allocByPop[POP_ID]=pub.allocation;}",
+    "      if(POP_ID!=='inter-1'&&pub.allocation&&Object.keys(pub.allocation).length){state.allocByPop[POP_ID]=pub.allocation;}\n      if(Array.isArray(pub.general_instructions)&&pub.general_instructions.length){\n        state.giByPop=state.giByPop||{};\n        state.giByPop[POP_ID]=pub.general_instructions;\n        try{localStorage.setItem('impcc-gi-'+POP_ID,JSON.stringify(pub.general_instructions));}catch(e){}\n      }")
+
+# context consumes the admin's GI list
+rep('  ctx.constraints = effectiveConstraints();',
+    "  ctx.constraints = effectiveConstraints();\n  // the admin's edited general instructions (per population) override the canonical set.\n  // Merge PER POPULATION: inter fields from inter lists, bs fields from the bs-1 list —\n  // later populations never overwrite earlier ones' level-scoped fields.\n  try{\n    const giCtx = CANON.solverContext(shiftPopulations());\n    const adminLists = shiftPopulations().map(function(pid){ return (state.giByPop || {})[pid] || null; });\n    const typeHasAdmin = {};\n    for(const lst of adminLists){ if(lst){ for(const g of lst){ typeHasAdmin[g.type] = true; } } }\n    const unionSFD = [], seenSFD = {}, unionNO = [];\n    for(let pi = 0; pi < shiftPopulations().length; pi++){\n      const pid = shiftPopulations()[pi];\n      const adminList = adminLists[pi];\n      if(adminList){\n        const isBs = (pid === 'bs-1');\n        const byType = {};\n        for(const g of adminList){ if(g.enabled === false) continue; (byType[g.type] = byType[g.type] || []).push(g); }\n        if(isBs){\n          giCtx.instructions.noSameSubjectSameDay.bs = !(byType.same_subject_same_day_allowed);\n        }else{\n          giCtx.instructions.noSameSubjectSameDay.inter = !!(byType.no_same_subject_same_day);\n          giCtx.instructions.consecutiveFor2pw.inter = !!(byType.consecutive_days_for_2pw);\n        }\n        giCtx.instructions.softIndividualSpread = giCtx.instructions.softIndividualSpread || !!byType.soft_individual_spread;\n        for(const g of (byType.subject_forbidden_days || [])){\n          const r = { subject: (g.params||{}).subject, days: (g.params||{}).days||[], scope: (g.params||{}).scope };\n          const k = r.subject + '|' + (r.scope || '');\n          if(!seenSFD[k]){ seenSFD[k] = true; unionSFD.push(r); }\n        }\n        for(const g of (byType.non_overriding || [])){\n          unionNO.push({ sections: (g.params||{}).sections||[], subjects: (g.params||{}).subjects||[] });\n        }\n        // section off-days + first/last live in sectionMeta — recompute\n        for(const g of (byType.section_off_days || [])){\n          for(const sk of ((g.params||{}).sections||[])){\n            if(giCtx.sectionMeta[sk]) giCtx.sectionMeta[sk].offDays = (giCtx.sectionMeta[sk].offDays||[]).concat((g.params||{}).days||[]);\n          }\n        }\n        if(byType.first_last_period_occupied){\n          for(const sk in giCtx.sectionMeta){ if(giCtx.sectionMeta[sk].level === 'bs') giCtx.sectionMeta[sk].firstLast = true; }\n        }\n      }\n    }\n    if(typeHasAdmin['subject_forbidden_days']) giCtx.instructions.subjectForbiddenDays = unionSFD;\n    if(typeHasAdmin['non_overriding']) giCtx.instructions.nonOverriding = unionNO;\n    ctx.instructions = giCtx.instructions;\n    ctx.sectionMeta = giCtx.sectionMeta;\n  }catch(e){/* fall back to the canonical instructions */}")
+
+
 io.open(DST, "w", encoding="utf-8").write(src)
 print("OK → wrote", DST, "(", len(src), "bytes )")

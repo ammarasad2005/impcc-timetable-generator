@@ -323,3 +323,107 @@ def translate_tweak(text):
         "confidence": float(parsed.get("confidence") or 0),
         "unmapped": parsed.get("unmapped") or [],
     }
+
+
+# =====================================================================
+# GENERAL-INSTRUCTION translation (NL -> structured GI rule)
+# =====================================================================
+GI_SYSTEM_PROMPT = """You translate a college's timetable GENERAL INSTRUCTION (institution-level rule) into strict JSON.
+
+CONTEXT: 6-day capacity (MON-SAT), up to 8 periods/day (P1..P8). Populations: "inter-1" (Intermediate 1st shift), "bs-1" (BS departments 1st shift), "inter-2" (Intermediate 2nd shift). Sections look like "I.COM-I-A", "ICS-II-B", "BSAF-SEM-VII".
+
+OUTPUT — return ONLY a JSON object, no markdown fences:
+{
+  "type": "<one of the rule types below>",
+  "params": { ... },
+  "natural": "<the original statement, verbatim>",
+  "confidence": 0.0,
+  "notes": "<one short interpretation note>",
+  "unmapped": ["<anything you could not express>"]
+}
+
+RULE TYPES (use EXACTLY these):
+- "no_same_subject_same_day" params {} — a subject may not appear twice in one day
+- "same_subject_same_day_allowed" params {} — doubles ARE allowed (e.g. BS level)
+- "avoid_shuffling" params {} — keep each subject in the same period slot across the week (soft)
+- "non_overriding" params {"sections": ["I.COM-I-A",...], "subjects": ["Subject A", "Subject B"]} — each listed section must have a period of subject A where the OTHER sections do NOT have subject B
+- "consecutive_days_for_2pw" params {} — subjects with 2 classes/week sit on consecutive days
+- "subject_forbidden_days" params {"subject": "<name>", "days": ["FRI"], "scope": "I.COM"|"ICS"|null} — a subject must not be scheduled on those days (scope optional)
+- "section_off_days" params {"sections": ["BSAF-SEM-VII",...], "days": ["FRI"]} — whole sections have no classes those days
+- "first_last_period_occupied" params {"libraryWorkLabel": "Library Work"} — free boundary periods not allowed; free middle periods become library work
+- "combined_classes" params {"groups": ["<id>"]} — co-taught section pairs at identical slots (admin links groups in the data)
+- "soft_individual_spread" params {} — a teacher engaged in P1 should preferably be free in the last period (soft)
+
+RULES OF CONDUCT
+1. Institution-level only. If the statement is about ONE teacher's personal availability, refuse: {"error":"personal constraint — use the faculty constraints page"}.
+2. Keep subject names VERBATIM from the statement.
+3. Days tokens: MON TUE WED THU FRI SAT. Period tokens: P1..P8.
+4. If a rule cannot be expressed, put it in "unmapped" and pick the closest type.
+5. confidence 0.9+ for mechanical rules; lower for interpretation.
+
+EXAMPLES
+Input: "Friday must be free for 7th semesters of BS"
+Output: {"type":"section_off_days","params":{"sections":["BSAF-SEM-VII","BSCM-SEM-VII","BBA-SEM-VII"],"days":["FRI"]},"natural":"Friday must be free for 7th semesters of BS","confidence":0.95,"notes":"All BS 7th-semester sections.","unmapped":[]}
+
+Input: "Business Mathematics in I.Com must not be set on Friday"
+Output: {"type":"subject_forbidden_days","params":{"subject":"Business Mathematics","days":["FRI"],"scope":"I.COM"},"natural":"Business Mathematics in I.Com must not be set on Friday","confidence":0.95,"notes":"Scoped to I.Com sections.","unmapped":[]}
+"""
+
+GI_RULE_TYPES = {
+    "no_same_subject_same_day", "same_subject_same_day_allowed", "avoid_shuffling",
+    "non_overriding", "consecutive_days_for_2pw", "subject_forbidden_days",
+    "section_off_days", "first_last_period_occupied", "combined_classes",
+    "soft_individual_spread",
+}
+
+
+def translate_general_instruction(text):
+    """Natural-language general instruction -> structured GI rule via the LLM."""
+    api_key = os.environ.get("LLM_API_KEY")
+    if not api_key:
+        return {"error": "LLM not configured — set LLM_API_KEY on the backend"}
+    base_url = os.environ.get("LLM_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
+    model = os.environ.get("LLM_MODEL", "google/gemma-4-26b-a4b-it:free")
+    messages = [
+        {"role": "system", "content": GI_SYSTEM_PROMPT},
+        {"role": "user", "content": text.strip()},
+    ]
+    payload = json.dumps({"model": model, "messages": messages, "temperature": 0}).encode()
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + api_key,
+        "HTTP-Referer": os.environ.get("LLM_HTTP_REFERER", "https://impcc-timetable-generator.vercel.app"),
+        "X-Title": os.environ.get("LLM_X_TITLE", "IMPCC Timetable Generator"),
+    }
+    req = urlreq.Request(f"{base_url}/chat/completions", data=payload, headers=headers)
+    try:
+        with urlreq.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read().decode())
+    except HTTPError as e:
+        return {"error": f"LLM HTTP {e.code}: {e.read().decode()[:300]}"}
+    except URLError as e:
+        return {"error": f"LLM unreachable: {e.reason}"}
+    try:
+        content = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError):
+        return {"error": "LLM returned an unexpected shape"}
+    content = re.sub(r"^```(json)?\s*|\s*```$", "", content.strip(), flags=re.MULTILINE).strip()
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        return {"error": "LLM did not return valid JSON", "raw": content}
+    if not isinstance(parsed, dict):
+        return {"error": "LLM output was not an object", "raw": content}
+    if parsed.get("error"):
+        return parsed
+    rtype = parsed.get("type")
+    if rtype not in GI_RULE_TYPES:
+        return {"error": f"unknown rule type '{rtype}'", "raw": content}
+    return {
+        "type": rtype,
+        "params": parsed.get("params") or {},
+        "natural": parsed.get("natural") or text.strip(),
+        "notes": parsed.get("notes") or "",
+        "confidence": float(parsed.get("confidence") or 0),
+        "unmapped": parsed.get("unmapped") or [],
+    }
