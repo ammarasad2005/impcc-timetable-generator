@@ -3198,5 +3198,592 @@ async function exportAllImages(){
 rep("/* ---------- boot: restore saved results (no auto-generation) ---------- */",
     PDF_MODULE + "/* ---------- boot: restore saved results (no auto-generation) ---------- */")
 
+
+# =====================================================================
+# ---- 41) POPULATION LAYER (PR-6): three timetable populations --------
+# inter-1 + bs-1 (shift 1, ONE solver domain) / inter-2 (shift 2).
+# =====================================================================
+
+# ---- 41a) script includes ------------------------------------------------
+rep('\n<script src="solver.js"></script>\n<script src="supabase.js"></script>',
+    '\n<script src="solver.js"></script>\n<script src="populations.js"></script>'
+    '\n<script src="data.js"></script>\n<script src="canonical.js"></script>'
+    '\n<script src="context_solver.js"></script>\n<script src="supabase.js"></script>')
+
+# ---- 41b) masthead: population switcher ----------------------------------
+rep('<div class="mast-txt">\n    <div class="overline">Islamabad Model Postgraduate College of Commerce \u00b7 H-8/4</div>\n    <h1>Weekly Timetable <em>Generator</em></h1>\n    <div class="sub">Intermediate \u00b7 1st Shift \u00b7 ICS &amp; I.Com</div>\n  </div>',
+    '<div class="mast-txt">\n    <div class="overline">Islamabad Model Postgraduate College of Commerce \u00b7 H-8/4</div>\n    <h1>Weekly Timetable <em>Generator</em></h1>\n    <div class="sub" id="mastSub">Intermediate \u00b7 1st Shift \u00b7 ICS &amp; I.Com</div>\n    <div class="pop-switch" id="popSwitch" title="Timetable populations \u2014 1st shift solves Intermediate and BS together (teachers may span both); 2nd shift is an independent system">\n      <span class="ps-lbl">Population</span>\n      <div class="ps-shift" id="psShift">\n        <button data-shift="1" class="on">1st Shift</button>\n        <button data-shift="2">2nd Shift</button>\n      </div>\n      <div class="ps-pops" id="psPops">\n        <button data-pop="inter-1" class="on">Intermediate</button>\n        <button data-pop="bs-1">BS Departments</button>\n      </div>\n    </div>\n  </div>')
+
+# ---- 41c) CSS: switcher + BS streams + Library Work + violations --------
+rep('.mast .logo{', '.pop-switch{display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap}\n'
+    '.ps-lbl{font-family:var(--mono);font-size:9.5px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--ink2)}\n'
+    '.ps-shift,.ps-pops{display:flex;border:1px solid var(--line2);border-radius:999px;overflow:hidden;background:var(--surface)}\n'
+    '.ps-shift button,.ps-pops button{border:0;background:transparent;font-family:var(--body);font-size:12px;font-weight:600;color:var(--ink2);padding:5px 13px;cursor:pointer;transition:background .15s,color .15s}\n'
+    '.ps-shift button.on{background:var(--green);color:#fff}\n'
+    '.ps-pops button.on{background:var(--green-deep);color:#fff}\n'
+    '.ps-pops button:disabled{opacity:.35;cursor:not-allowed}\n'
+    '.stream.bsaf{--sc:var(--green);--sc-deep:var(--green-deep);--sc-tint:var(--green-tint)}\n'
+    '.stream.bscm{--sc:var(--ics);--sc-deep:var(--ics-deep);--sc-tint:var(--ics-tint)}\n'
+    '.stream.bba{--sc:var(--amber);--sc-deep:var(--amber-deep);--sc-tint:var(--amber-tint)}\n'
+    '.tg-cell.library{background:repeating-linear-gradient(135deg,#f2f3ec 0 6px,#e8eadf 6px 12px);opacity:.85}\n'
+    '.tg-cell.library b{color:var(--ink2);font-weight:500}\n'
+    '.tg-cell.library i{color:var(--ink2);font-style:normal;font-size:8px}\n'
+    '.vio-panel{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-top:10px;grid-column:1/-1}\n'
+    '.vio-panel h4{margin:0 0 6px;font-size:12.5px;color:var(--red);display:flex;align-items:center;gap:6px}\n'
+    '.vio-list{display:flex;flex-direction:column;gap:5px;max-height:180px;overflow:auto}\n'
+    '.vio-row{display:flex;gap:8px;align-items:baseline;font-size:11.5px;color:var(--ink);border-left:3px solid var(--amber);padding:2px 8px;background:var(--amber-tint);border-radius:0 7px 7px 0}\n'
+    '.vio-row .vr-rule{font-family:var(--mono);font-size:10px;color:var(--amber-deep);white-space:nowrap}\n'
+    '.vio-row .vr-pen{font-family:var(--mono);font-size:10px;color:var(--red);margin-left:auto;white-space:nowrap}\n'
+    '.vio-ok{font-size:12px;color:var(--green);font-weight:600;display:flex;align-items:center;gap:6px}\n'
+    '.mast .logo{')
+
+
+# ---- 41d) population JS module (state, switcher, context generation, ------
+# persistence scoping, cloud population passing) — injected before boot
+POP_MODULE = r"""
+/* ---------- population layer (inter-1 / bs-1 / inter-2) ---------- */
+const POPS = (typeof IMPCC_POPULATIONS !== 'undefined') ? IMPCC_POPULATIONS : null;
+const CANON = (typeof IMPCC_CANONICAL !== 'undefined') ? IMPCC_CANONICAL : null;
+const CTXS = (typeof IMPCC_CONTEXT_SOLVER !== 'undefined') ? IMPCC_CONTEXT_SOLVER : null;
+let POP_ID = 'inter-1';                       // active population (display + editing)
+function POP(){ return POPS ? POPS.POPULATIONS[POP_ID].config : {days:5,periods:5,start:'08:30',breakAfterPeriod:3,periodMinutes:40,breakMinutes:25,dayStartOverrides:{}}; }
+function POP_SHIFT(){ return POP_ID === 'inter-2' ? 2 : 1; }
+function POP_LEVEL(){ return POP_ID === 'bs-1' ? 'bs' : 'inter'; }
+function POP_LABEL(){ return POPS ? POPS.POPULATIONS[POP_ID].label : 'Intermediate \u00b7 1st Shift'; }
+function shiftPopulations(){ return POP_SHIFT() === 1 ? ['inter-1','bs-1'] : ['inter-2']; }
+
+// population section descriptors (UI form) — from the canonical dataset
+function popSections(pop){
+  if(!CANON) return SECTIONS.slice();
+  const secs = ((CANON.get().populations[pop] || {}).sections) || [];
+  return secs.map(function(s){
+    if(pop === 'bs-1') return {id:s.key, label:s.label, stream:s.program.toLowerCase(), year:s.semester};
+    return {id:s.key, label:s.label, stream:(s.program === 'I.COM' ? 'icom' : 'ics'), year:s.year};
+  });
+}
+// per-day wall-clock times for the active population (per-day overrides honored)
+function popDayTimes(day){
+  const c = POP();
+  const t = (c.dayStartOverrides && c.dayStartOverrides[day]) || c.start || '08:30';
+  const pm = c.periodMinutes || 40, bm = c.breakMinutes || 25, bp = c.breakAfterPeriod || 0;
+  const p = t.split(':'); let mins = (+p[0]) * 60 + (+p[1]);
+  const fmt = function(m){ const h = Math.floor(m / 60), mm = m % 60; return (h < 10 ? '0' : '') + h + ':' + (mm < 10 ? '0' : '') + mm; };
+  const out = [];
+  for(let i = 1; i <= (c.periods || 5); i++){
+    out.push(fmt(mins) + '\u2013' + fmt(mins + pm));
+    mins += pm;
+    if(i === bp && i < (c.periods || 5)) mins += bm;
+  }
+  return out;
+}
+
+// per-population allocation state (constraints / faculty / tweaks are shared — person-level)
+state.allocByPop = state.allocByPop || {};
+function getPopAllocation(pop){
+  if(state.allocByPop[pop]) return state.allocByPop[pop];
+  let a = null;
+  try{ const raw = localStorage.getItem('impcc-allocation-' + pop); if(raw) a = JSON.parse(raw); }catch(e){}
+  if(!a && CANON){ try{ a = CANON.solverAllocation(pop); }catch(e){} }
+  if(!a && pop === 'inter-1'){ a = defaultAllocation(); }
+  state.allocByPop[pop] = a;
+  return a;
+}
+function savePopAllocationLocal(pop){
+  try{
+    const a = state.allocByPop[pop];
+    if(a) localStorage.setItem('impcc-allocation-' + pop, JSON.stringify(a));
+    else localStorage.removeItem('impcc-allocation-' + pop);
+  }catch(e){}
+}
+function currentAllocation(){
+  if(POP_ID === 'inter-1' && state.allocation) return state.allocation;   // legacy live state
+  return getPopAllocation(POP_ID) || undefined;
+}
+// the OLD single-allocation helpers keep working for inter-1 (legacy path)
+function getWorkingAllocation(){
+  if(POP_ID !== 'inter-1'){ const a = getPopAllocation(POP_ID); state.allocation = a; return a; }
+  if(!state.allocation) state.allocation = getPopAllocation('inter-1') || defaultAllocation();
+  return state.allocation;
+}
+
+/* ---------- context-based generation (the population path) ---------- */
+function buildShiftContext(){
+  const pops = shiftPopulations();
+  const ctx = CANON.solverContext(pops);
+  // the admin's CURRENT data wins over the canonical defaults, per population
+  for(const p of pops){
+    let alloc = (p === 'inter-1' && state.allocation) ? state.allocation : (state.allocByPop[p] || null);
+    if(!alloc){ try{ alloc = CANON.solverAllocation(p); }catch(e){} }
+    if(alloc) for(const k in alloc) ctx.sections[k] = alloc[k];
+  }
+  ctx.constraints = effectiveConstraints();
+  // keep only relationships whose courses actually exist in the current data
+  // (the old allocation + new relationships must not mix: drop mismatches)
+  const secsData = ctx.sections;
+  ctx.relationships.parallelGroups = (ctx.relationships.parallelGroups || []).filter(function(g){
+    return g.sections.every(function(sk){
+      const e = secsData[sk] && secsData[sk].subjects.filter(function(x){ return x.subject === g.course; })[0];
+      return e && g.teachers.every(function(t){ return e.teacher.indexOf(CANON.displayName(t)) >= 0; });
+    });
+  });
+  ctx.relationships.combinedClasses = (ctx.relationships.combinedClasses || []).filter(function(cc){
+    function has(side){ const s = secsData[side.section]; return s && s.subjects.some(function(x){ return x.subject === side.course; }); }
+    return has(cc.a) && has(cc.b);
+  });
+  return ctx;
+}
+function ctxToCells(tt){
+  const out = {};
+  for(const secId in tt){
+    out[secId] = tt[secId].map(function(row){
+      return row.map(function(cell){
+        return {subj:cell[0], teacher:(cell[1] === '' ? '\u2014' : cell[1]),
+                dual:(cell[1] && cell[1].indexOf(' / ') >= 0), library:cell[0] === 'Library Work'};
+      });
+    });
+  }
+  return out;
+}
+function makeCtxCombo(sol, via){
+  comboSeq++;
+  return {id:comboSeq, score:sol.score, penalty:(sol.penalty || 0),
+          violations:(sol.violations || []), total:(sol.score || 0) + (sol.penalty || 0),
+          via:via, tt:ctxToCells(sol.timetable)};
+}
+function comboLabel(c){
+  return (c.penalty > 0) ? (c.score + ' +' + c.penalty + ' penalties') : String(c.score);
+}
+"""
+
+rep("/* ---------- boot: restore saved results (no auto-generation) ---------- */",
+    POP_MODULE + "\n/* ---------- boot: restore saved results (no auto-generation) ---------- */")
+
+
+# ---- 41e) population-aware generation + persistence ----------------------
+
+rep("const STORE_KEY='impcc-timetable-v1';",
+    "function storeKeyForShift(){ return POP_SHIFT() === 1 ? 'impcc-timetable-shift1-v1' : 'impcc-timetable-shift2-v1'; }\n"
+    "const STORE_KEY='impcc-timetable-shift1-v1';   // legacy default (shift 1)\n"
+    "const STORE_KEY_LEGACY='impcc-timetable-v1';   // pre-population pool (adopted once)")
+
+rep("""function persist(){
+  try{
+    let combos=state.combos.slice().sort((a,b)=>a.score-b.score);
+    if(combos.length>STORE_MAX)combos=combos.slice(0,STORE_MAX);
+    localStorage.setItem(STORE_KEY,JSON.stringify({
+      combos:combos.map(c=>({score:c.score,a3:c.a3,a2:c.a2,a4:c.a4,a5:c.a5,via:c.via,tt:c.tt})),
+      selected:state.selected,view:state.view,sectionFilter:state.sectionFilter,
+      cpsatDone:state.cpsatDone,cpsatMerged:state.cpsatMerged
+    }));
+  }catch(e){}
+}""",
+    """function persist(){
+  try{
+    let combos=state.combos.slice().sort((a,b)=>a.score-b.score);
+    if(combos.length>STORE_MAX)combos=combos.slice(0,STORE_MAX);
+    localStorage.setItem(storeKeyForShift(),JSON.stringify({
+      combos:combos.map(c=>({score:c.score,penalty:c.penalty||0,violations:c.violations||[],via:c.via,tt:c.tt})),
+      selected:state.selected,view:state.view,sectionFilter:state.sectionFilter,
+      cpsatDone:state.cpsatDone,cpsatMerged:state.cpsatMerged
+    }));
+  }catch(e){}
+}""")
+
+rep("""function restore(){
+  try{
+    const raw=localStorage.getItem(STORE_KEY);
+    if(!raw)return false;
+    const data=JSON.parse(raw);
+    state.combos=(data.combos||[]).map(c=>({id:++comboSeq,score:c.score,a3:c.a3,a2:c.a2,a4:c.a4,a5:c.a5,via:c.via,tt:c.tt}));
+    state.view=data.view||'sections';
+    state.sectionFilter=data.sectionFilter||'all';
+    state.cpsatDone=!!data.cpsatDone;
+    state.cpsatMerged=data.cpsatMerged||0;
+    state.selected=(data.selected!=null&&state.combos.some(o=>o.id===data.selected))?data.selected:null;
+    return state.combos.length>0;
+  }catch(e){return false;}
+}
+function clearStorage(){try{localStorage.removeItem(STORE_KEY);}catch(e){}}""",
+    """function restore(){
+  try{
+    let raw=localStorage.getItem(storeKeyForShift());
+    if(!raw && storeKeyForShift()==='impcc-timetable-shift1-v1'){
+      raw=localStorage.getItem(STORE_KEY_LEGACY);
+    }
+    if(!raw)return false;
+    const data=JSON.parse(raw);
+    state.combos=(data.combos||[]).map(c=>({id:++comboSeq,score:c.score,penalty:c.penalty||0,violations:c.violations||[],via:c.via,tt:c.tt}));
+    state.view=data.view||'sections';
+    state.sectionFilter=data.sectionFilter||'all';
+    state.cpsatDone=!!data.cpsatDone;
+    state.cpsatMerged=data.cpsatMerged||0;
+    state.selected=(data.selected!=null&&state.combos.some(o=>o.id===data.selected))?data.selected:null;
+    return state.combos.length>0;
+  }catch(e){return false;}
+}
+function clearStorage(){try{localStorage.removeItem(storeKeyForShift());localStorage.removeItem(STORE_KEY_LEGACY);}catch(e){}}""")
+
+rep("function sortedList(){return state.combos.slice().sort((a,b)=>a.score-b.score||a.id-b.id);}",
+    """function poolRanked(){
+  return state.combos.slice().sort(function(a,b){
+    return ((a.penalty>0?1:0)-(b.penalty>0?1:0)) || ((a.score+(a.penalty||0))-(b.score+(b.penalty||0))) || (a.id-b.id);
+  });
+}
+function sortedList(){
+  const all=poolRanked();
+  const valid=all.filter(function(c){return !(c.penalty>0);});
+  const viol=all.filter(function(c){return c.penalty>0;});
+  if(valid.length>=25)return valid.slice(0,25);
+  if(valid.length>=10)return valid;
+  return valid.concat(viol.slice(0,10-valid.length));
+}""")
+
+rep("""function runSlice(){
+  if(state.stopRequested){finishRun(true);return;}
+  const res=IMPCC_SOLVER.generate({maxCount:0,timeMs:320,seed:(Math.random()*2147483647)|0,constraints:effectiveConstraints(),sections:currentAllocation()});
+  for(const sol of res.solutions){
+    const key=JSON.stringify(sol.timetable);
+    if(state.seen.has(key))continue;
+    state.seen.add(key);
+    state.combos.push(makeCombo(sol,'browser'));
+  }""",
+    """function runSlice(){
+  if(state.stopRequested){finishRun(true);return;}
+  if(CANON&&CTXS){
+    const ctx=buildShiftContext();
+    const res=CTXS.generateContext(ctx,{timeMs:340,seed:(Math.random()*2147483647)|0,maxCount:0});
+    const nameOf=function(c){return CANON?CANON.displayName(c):c;};
+    for(const sol of res.solutions){
+      const tt=CTXS.modelToTimetable(sol.grids,res.model,nameOf);
+      const key=JSON.stringify(tt);
+      if(state.seen.has(key))continue;
+      state.seen.add(key);
+      state.combos.push(makeCtxCombo({score:sol.score,penalty:sol.penalty,violations:sol.violations,timetable:tt},'browser'));
+    }
+  }else{
+    const res=IMPCC_SOLVER.generate({maxCount:0,timeMs:320,seed:(Math.random()*2147483647)|0,constraints:effectiveConstraints(),sections:currentAllocation()});
+    for(const sol of res.solutions){
+      const key=JSON.stringify(sol.timetable);
+      if(state.seen.has(key))continue;
+      state.seen.add(key);
+      state.combos.push(makeCombo(sol,'browser'));
+    }
+  }""")
+
+rep("""  fetch(base+'/generate',{
+    method:'POST',
+    headers:{'Content-Type':'application/json','Authorization':'Bearer '+(SB&&SB.session&&SB.session.access_token?SB.session.access_token:'')},
+    body:JSON.stringify({time_limit:120,n_seeds:1,max_solutions:0,constraints:effectiveConstraints(),sections:currentAllocation()})
+  })""",
+    """  const _pops=shiftPopulations();
+  const _ctxBody=CANON?{time_limit:120,n_seeds:1,max_solutions:0,populations:_pops}:{time_limit:120,n_seeds:1,max_solutions:0,constraints:effectiveConstraints(),sections:currentAllocation()};
+  fetch(base+(CANON?'/generate-context':'/generate'),{
+    method:'POST',
+    headers:{'Content-Type':'application/json','Authorization':'Bearer '+(SB&&SB.session&&SB.session.access_token?SB.session.access_token:'')},
+    body:JSON.stringify(_ctxBody)
+  })""")
+
+rep("""  .then(data=>{
+    let added=0;
+    for(const sol of (data.solutions||[])){
+      const key=JSON.stringify(sol.timetable);
+      if(state.seen.has(key))continue;
+      state.seen.add(key);
+      state.combos.push(makeCombo(sol,'cpsat'));
+      added++;
+    }""",
+    """  .then(data=>{
+    let added=0;
+    for(const sol of (data.solutions||[])){
+      const key=JSON.stringify(sol.timetable);
+      if(state.seen.has(key))continue;
+      state.seen.add(key);
+      state.combos.push(CANON?makeCtxCombo(sol,'cpsat'):makeCombo(sol,'cpsat'));
+      added++;
+    }""")
+
+rep("""    const optimal=data.optimal?'proven optimal':'best found';
+    setCpsatStatus('CP-SAT: '+optimal+' — best score '+data.best_score+' ('+added+' new solutions merged)','ok');
+    setTicker('CP-SAT finished — '+added+' solutions merged · best score '+data.best_score+' · elapsed '+data.elapsed_seconds+' s','ok');""",
+    """    const optimal=data.optimal?'proven optimal':'best found';
+    const _bt=data.best_total!=null?data.best_total:data.best_score;
+    setCpsatStatus('CP-SAT: '+optimal+' — best total '+_bt+' ('+added+' new solutions merged)','ok');
+    setTicker('CP-SAT finished — '+added+' solutions merged · best score '+data.best_score+(data.best_total!=null?' · total (incl. soft penalties) '+data.best_total:'')+' · elapsed '+data.elapsed_seconds+' s','ok');""")
+
+
+# ---- 41f) dynamic grids + violations-aware scorecard ----------------------
+
+rep(r"""function sectionCard(sec,grid,idx){
+  let h='<article class="sec-card '+sec.stream+'" style="animation-delay:'+Math.min(idx*45,400)+'ms">'+
+    '<header><span class="stag">'+(sec.stream==='icom'?'I.Com':'ICS')+'</span><h3>'+sec.label+'</h3><span class="pw">25 periods/wk</span><button class="card-csv" data-sec="'+sec.id+'" title="Download this section as CSV">⇩ CSV</button><button class="card-img" data-img-sec="'+sec.id+'" title="Download this section as a landscape PNG image">PNG</button></header>'+
+    '<div class="tt-wrap"><div class="tt"><div class="tg-corner">wk\\p</div>';
+  for(let i=0;i<3;i++)h+='<div class="tg-ph">Period-'+(i+1)+'<span>'+TIMES[i]+'</span></div>';
+  h+='<div class="tg-ph-break">BREAK<span>25 min</span></div>';
+  for(let i=3;i<5;i++)h+='<div class="tg-ph">Period-'+(i+1)+'<span>'+TIMES[i]+'</span></div>';
+  for(let d=0;d<5;d++){
+    h+='<div class="tg-day">'+DAYS[d]+'</div>';
+    for(let s=0;s<5;s++){
+      if(s===3)h+='<div class="tg-break" title="Break · 10:30–10:55 · not a teaching slot"><span>BREAK</span></div>';
+      const cell=grid[d][s];
+      h+='<div class="tg-cell'+(cell.dual?' dual':'')+(cellIsEdited(sec.id,d,s)?' edited-cell':'')+'" data-sec="'+sec.id+'" data-d="'+d+'" data-s="'+s+'" data-teacher="'+esc(cell.teacher)+'" data-subj="'+esc(cell.subj)+'" title="'+esc(cell.subj)+' — '+esc(cell.teacher)+' · click to open the teacher\u2019s personal courses">'+
+         '<b>'+esc(cell.subj)+'</b><i>'+esc(cell.teacher)+'</i>'+(cell.dual?'<em title="Either/or option block — parallel rooms">⇄</em>':'')+'</div>';
+    }
+  }
+  h+='</div></div></article>';
+  return h;
+}""",
+    r"""function sectionCard(sec,grid,idx){
+  const cfg=POP();
+  const times=popDayTimes('MON');
+  const days=cfg.days||5, periods=cfg.periods||5, bp=cfg.breakAfterPeriod||0;
+  let fill=0;
+  for(let d=0;d<days;d++)for(let s2=0;s2<periods;s2++){if(grid[d][s2]&&!grid[d][s2].library)fill++;}
+  const stag=sec.stream==='icom'?'I.Com':(sec.stream==='ics'?'ICS':sec.stream.toUpperCase());
+  let h='<article class="sec-card '+sec.stream+'" style="animation-delay:'+Math.min(idx*45,400)+'ms">'+
+    '<header><span class="stag">'+stag+'</span><h3>'+sec.label+'</h3><span class="pw">'+fill+' periods/wk'+(POP_LEVEL()==='bs'&&fill<days*periods?' · '+(days*periods-fill)+' library':'')+'</span><button class="card-csv" data-sec="'+sec.id+'" title="Download this section as CSV">⇩ CSV</button><button class="card-img" data-img-sec="'+sec.id+'" title="Download this section as a landscape PNG image">PNG</button></header>'+
+    '<div class="tt-wrap"><div class="tt"><div class="tg-corner">wk\\p</div>';
+  for(let i=0;i<periods;i++){
+    if(i===bp&&i<periods)h+='<div class="tg-ph-break">BREAK<span>'+(cfg.breakMinutes||25)+' min</span></div>';
+    h+='<div class="tg-ph">Period-'+(i+1)+'<span>'+(times[i]||'')+'</span></div>';
+  }
+  const friNote=(POP_SHIFT()===2)?' · Friday starts 14:00':'';
+  for(let d=0;d<days;d++){
+    h+='<div class="tg-day">'+DAYS[d]+'</div>';
+    for(let s=0;s<periods;s++){
+      if(s===bp)h+='<div class="tg-break" title="Break · not a teaching slot"><span>BREAK</span></div>';
+      const cell=grid[d][s];
+      h+='<div class="tg-cell'+(cell.dual?' dual':'')+(cell.library?' library':'')+(cellIsEdited(sec.id,d,s)?' edited-cell':'')+'" data-sec="'+sec.id+'" data-d="'+d+'" data-s="'+s+'" data-teacher="'+esc(cell.teacher)+'" data-subj="'+esc(cell.subj)+'" title="'+esc(cell.subj)+' — '+esc(cell.teacher)+(friNote?esc(friNote):'')+' · click to open the teacher\u2019s personal courses">'+
+         '<b>'+esc(cell.subj)+'</b><i>'+esc(cell.library?'':cell.teacher)+'</i>'+(cell.dual?'<em title="Either/or option block — parallel rooms">⇄</em>':'')+'</div>';
+    }
+  }
+  h+='</div></div></article>';
+  return h;
+}""")
+
+rep("""  let idx=0;
+  const groups=[{key:'icom',name:'I.Com — Commerce Stream'},{key:'ics',name:'ICS — Computer Science Stream'}];
+  for(const g of groups){
+    const secs=SECTIONS.filter(s=>s.stream===g.key).filter(s=>f==='all'||f===g.key||f===s.id);
+    if(!secs.length)continue;
+    html+='<section class="stream '+g.key+'"><div class="stream-head"><span class="swatch"></span><h2>'+g.name+'</h2><span class="cnt">'+secs.length+' section'+(secs.length>1?'s':'')+' · '+secs.length*25+' periods/wk</span><button class="card-csv" data-stream="'+g.key+'" title="Download this stream as CSV">⇩ CSV</button><button class="card-pdf" data-pdf-stream="'+g.key+'" title="Print this stream / save as PDF">PDF</button><button class="card-img" data-img-stream="'+g.key+'" title="Download this department section images (ZIP)">ZIP</button></div><div class="sec-grid'+(shown.length===1?' solo':'')+'">';
+    for(const sec of secs){html+=sectionCard(sec,tt[sec.id],idx++);}
+    html+='</div></section>';
+  }
+  mainEl.innerHTML=html;""",
+    """  let idx=0;
+  let groups;
+  if(POP_ID==='bs-1'){
+    groups=[{key:'bsaf',name:'BS Accounting & Finance'},{key:'bscm',name:'BS Commerce'},{key:'bba',name:'BS Business Administration'}];
+  }else{
+    groups=[{key:'icom',name:'I.Com — Commerce Stream'},{key:'ics',name:'ICS — Computer Science Stream'}];
+  }
+  const actsecs=popSections(POP_ID);
+  for(const g of groups){
+    const secs=actsecs.filter(s=>s.stream===g.key).filter(s=>f==='all'||f===g.key||f===s.id);
+    if(!secs.length)continue;
+    let tot=0;
+    secs.forEach(function(s2){ for(const d in tt[s2.id]) for(const sc in tt[s2.id][d]) { const cl=tt[s2.id][d][sc]; if(cl&&!cl.library) tot++; } });
+    html+='<section class="stream '+g.key+'"><div class="stream-head"><span class="swatch"></span><h2>'+g.name+'</h2><span class="cnt">'+secs.length+' class'+(secs.length>1?'es':'')+' · '+tot+' periods/wk</span></div><div class="sec-grid'+(shown.length===1?' solo':'')+'">';
+    for(const sec of secs){html+=sectionCard(sec,tt[sec.id],idx++);}
+    html+='</div></section>';
+  }
+  mainEl.innerHTML=html;""")
+
+rep("""  const pctLine=st.gap===0
+    ?'top of the board — no solution in this pool beats it'
+    :'better than '+st.pct+'% of the others';
+  scorecardEl.innerHTML=
+    '<div>'+
+      '<div class="sc-label">Shuffle score · lower is better</div>'+
+      '<div class="sc-num'+(isPoolBest?' best':'')+'">'+c.score+'</div>'+
+      '<div class="sc-delta">'+delta+'</div>'+
+    '</div>'+
+    '<div>'+
+      '<span class="rankchip">#'+rank+' of '+total+'</span>'+
+      '<div class="stand-text">'+st.phrase+'</div>'+
+      '<div class="pct">'+pctLine+(c.via==='cpsat'?' · merged from CP-SAT ✦':(c.via==='pushed'?' · 📣 published to everyone':(c.via==='saved'?' · 💾 from your saved list':(c.via==='swap'?' · ⇄ swapped':''))))+'</div>'+
+      '<div class="meter"><i style="width:'+Math.max(4,st.pct)+'%"></i></div>'+
+      '<div class="bd"><b>'+c.a3+' × 3/wk split</b> · <b>'+c.a2+' × 2/wk split</b>'+(c.a4?(' · <b>'+c.a4+' × 4/wk split</b>'):'')+' &nbsp;· score '+c.score+'</div>'+
+    '</div>'+
+    '<div class="hist-wrap"><div class="hist">'+bars+'</div><div class="hist-cap">score distribution · '+total+' kept combinations'+(keys.indexOf(560)>=0?' · gold = optimum':'')+'</div></div>';
+}""",
+    """  const pctLine=st.gap===0
+    ?'top of the board — no solution in this pool beats it'
+    :'better than '+st.pct+'% of the others';
+  const hasVio=(typeof c.violations!=='undefined');
+  const vioBlock=hasVio?(c.penalty>0
+    ?'<div class="vio-panel"><h4>⚑ '+c.violations.length+' soft constraint'+(c.violations.length===1?'':'s')+' disobeyed — documented (+'+c.penalty+' penalty)</h4><div class="vio-list">'+
+      c.violations.slice(0,30).map(function(v){return '<div class="vio-row"><span class="vr-rule">'+esc(v.rule)+'</span><span>'+esc(v.detail)+'</span><span class="vr-pen">+'+v.penalty+'</span></div>';}).join('')+
+      (c.violations.length>30?'<div class="vio-row">… and '+(c.violations.length-30)+' more</div>':'')+
+      '</div></div>'
+    :'<div class="vio-panel"><div class="vio-ok">✓ fully valid — every hard and soft constraint satisfied</div></div>'):'';
+  const totalLine=hasVio?('<div class="sc-delta">total '+c.total+' = shuffle '+c.score+(c.penalty>0?' + penalties '+c.penalty:'')+'</div>'):'';
+  scorecardEl.innerHTML=
+    '<div>'+
+      '<div class="sc-label">Shuffle score · lower is better</div>'+
+      '<div class="sc-num'+(isPoolBest?' best':'')+'">'+c.score+'</div>'+
+      '<div class="sc-delta">'+delta+'</div>'+
+      totalLine+
+    '</div>'+
+    '<div>'+
+      '<span class="rankchip">#'+rank+' of '+total+'</span>'+
+      (hasVio&&c.penalty>0?'<span class="rankchip" style="background:var(--amber-tint);color:var(--amber-deep)">documented violator</span>':'')+
+      '<div class="stand-text">'+st.phrase+'</div>'+
+      '<div class="pct">'+pctLine+(c.via==='cpsat'?' · merged from CP-SAT ✦':(c.via==='pushed'?' · 📣 published to everyone':(c.via==='saved'?' · 💾 from your saved list':(c.via==='swap'?' · ⇄ swapped':''))))+'</div>'+
+      '<div class="meter"><i style="width:'+Math.max(4,st.pct)+'%"></i></div>'+
+    '</div>'+
+    '<div class="hist-wrap"><div class="hist">'+bars+'</div><div class="hist-cap">score distribution · '+total+' shown combinations</div></div>'+
+    vioBlock;
+}"""
+)
+
+# combo selector label carries penalties
+rep("""    opts+='<option value="'+o.id+'">#'+r+' · score '+o.score+' · '+shortStanding(o,list)+(o.via==='cpsat'?' ✦CP-SAT':(o.via==='pushed'?' 📣':(o.via==='saved'?' 💾':(o.via==='swap'?' ⇄':''))))+'</option>';""",
+    """    opts+='<option value="'+o.id+'">#'+r+' · score '+o.score+((o.penalty>0)?(' +'+o.penalty+' penalties'):'')+' · '+shortStanding(o,list)+(o.via==='cpsat'?' ✦CP-SAT':(o.via==='pushed'?' 📣':(o.via==='saved'?' 💾':(o.via==='swap'?' ⇄':''))))+'</option>';"""
+)
+
+rep("""    scoreBadge.textContent='SCORE '+c.score;""",
+    """    scoreBadge.textContent='SCORE '+c.score+((c.penalty>0)?(' +'+c.penalty+' pen'):'');"""
+)
+
+
+# ---- 41g) switcher wiring + population-scoped cloud sync + boot ----------
+
+# g1) population switcher wiring + setPopulationUI — inject before the boot block
+POP_SWITCH = r"""
+/* ---------- population switcher wiring ---------- */
+function setPopulationUI(pop){
+  POP_ID = pop;
+  const cfg = POP();
+  const sub = document.getElementById('mastSub');
+  if(sub){
+    if(pop === 'inter-1') sub.textContent = 'Intermediate \u00b7 1st Shift \u00b7 ICS & I.Com';
+    else if(pop === 'bs-1') sub.textContent = 'BS Departments \u00b7 1st Shift \u00b7 BSAF \u00b7 BSCM \u00b7 BBA';
+    else sub.textContent = 'Intermediate \u00b7 2nd Shift \u00b7 starts 13:30 (Fri 14:00) \u00b7 break after P2';
+  }
+  document.querySelectorAll('#psShift button').forEach(function(b){
+    b.classList.toggle('on', (+b.dataset.shift) === POP_SHIFT());
+  });
+  document.querySelectorAll('#psPops button').forEach(function(b){
+    b.classList.toggle('on', b.dataset.pop === POP_ID);
+    b.disabled = (POP_SHIFT() === 2 && b.dataset.pop === 'bs-1');   // BS has no 2nd shift
+  });
+  // rebuild the section preview filter for this population
+  const act = popSections(POP_ID);
+  let opts = '<option value="all" selected>All sections (' + act.length + ')</option>';
+  if(POP_ID !== 'bs-1'){
+    const icom = act.filter(function(s){return s.stream==='icom';}).length;
+    const ics = act.filter(function(s){return s.stream==='ics';}).length;
+    if(icom) opts += '<option value="icom">I.Com stream only (' + icom + ')</option>';
+    if(ics) opts += '<option value="ics">ICS stream only (' + ics + ')</option>';
+  }else{
+    ['bsaf','bscm','bba'].forEach(function(k){
+      const n = act.filter(function(s){return s.stream===k;}).length;
+      if(n) opts += '<option value="'+k+'">'+k.toUpperCase()+' only (' + n + ')</option>';
+    });
+  }
+  act.forEach(function(s){ opts += '<option value="'+s.id+'">'+s.label+'</option>'; });
+  secFilterEl.innerHTML = opts;
+  state.sectionFilter = 'all';
+  secFilterEl.value = 'all';
+  getPopAllocation(POP_ID);      // ensure the population's allocation state is loaded
+  setTicker(POP_LABEL() + ' — population view' + (POP_SHIFT()===1 ? ' (solved jointly with the whole 1st shift)' : ''), 'ok');
+  renderAll();
+}
+document.getElementById('psShift').addEventListener('click', function(e){
+  const b = e.target.closest('button'); if(!b || b.disabled) return;
+  const sh = +b.dataset.shift;
+  const target = (sh === 2) ? 'inter-2' : 'inter-1';
+  if(target === POP_ID) return;
+  setPopulationUI(target);
+});
+document.getElementById('psPops').addEventListener('click', function(e){
+  const b = e.target.closest('button'); if(!b || b.disabled) return;
+  if(b.dataset.pop === POP_ID) return;
+  setPopulationUI(b.dataset.pop);
+});
+"""
+
+rep("/* ---------- boot: restore saved results (no auto-generation) ---------- */",
+    POP_SWITCH + "\n/* ---------- boot: restore saved results (no auto-generation) ---------- */")
+
+# g2) cloud sync passes the ACTIVE population (constraints/faculty/tweaks shared)
+rep("""async function syncFromCloud(){
+  if(!SB)return;
+  try{
+    const pub=await SB.loadPublished();
+    if(pub){
+      if(pub.updated_at){publishedAt=pub.updated_at;}""",
+    """async function syncFromCloud(){
+  if(!SB)return;
+  try{
+    const pub=await SB.loadPublished(POP_ID);
+    if(pub){
+      if(pub.updated_at){publishedAt=pub.updated_at;}
+      if(POP_ID!=='inter-1'&&pub.allocation&&Object.keys(pub.allocation).length){state.allocByPop[POP_ID]=pub.allocation;}""")
+
+rep("""function pushToCloud(){
+  if(!SB||!SB.loggedIn)return;
+  SB.savePublished(state.allocation||defaultAllocation(),state.constraints||{},getFaculty(),state.tweaks||[])
+    .then(()=>{publishedAt=new Date().toISOString();renderPublishedAge();setTicker('Published for all users ✓','ok');})
+    .catch(err=>setTicker('Cloud sync failed: '+err.message,'err'));
+}""",
+    """function pushToCloud(){
+  if(!SB||!SB.loggedIn)return;
+  const alloc=(POP_ID==='inter-1')?(state.allocation||defaultAllocation()):(state.allocByPop[POP_ID]||getPopAllocation(POP_ID));
+  SB.savePublished(alloc,state.constraints||{},getFaculty(),state.tweaks||[],POP_ID)
+    .then(()=>{publishedAt=new Date().toISOString();renderPublishedAge();setTicker('Published for all users \u2713 ('+POP_LABEL()+')','ok');})
+    .catch(err=>setTicker('Cloud sync failed: '+err.message,'err'));
+}""")
+
+# g3) saved list / history / pushed load with the active population
+rep("async function loadSavedList(){", "async function loadSavedList(_pop){")
+rep("state.savedList=await SB.listSaved();", "state.savedList=await SB.listSaved(_pop||POP_ID);")
+rep("async function loadHistory(){", "async function loadHistory(_pop){")
+rep("state.history=await SB.listHistory();", "state.history=await SB.listHistory(_pop||POP_ID);")
+rep("const p=await SB.loadPushed();", "const p=await SB.loadPushed(POP_ID);")
+
+# g4) recordHistory / save / push carry the population
+rep("await SB.recordHistory({action:action,detail:detail});",
+    "await SB.recordHistory({action:action,detail:detail,population:POP_ID});")
+
+
+# g5) allocation page: population-aware working allocation + validation counts
+rep("function sectionTotal(subs){return (subs||[]).reduce((n,e)=>n+(e.periods|0),0);}",
+    "function sectionTotal(subs){return (subs||[]).reduce((n,e)=>n+(e.periods|0),0);}\n"
+    "function activeSectionList(){return popSections(POP_ID);}")
+
+rep("""function saveAllocation(){
+  const a=getWorkingAllocation();
+  const bad=[];
+  for(const sec of SECTIONS){const t=sectionTotal(a[sec.id]?a[sec.id].subjects:[]);if(t!==25)bad.push(sec.id+'='+t);}
+  saveAllocationLocal();pushToCloud();
+  setTicker(bad.length?('Saved, but '+bad.join(', ')+' not 25 periods'):'Allocation saved',bad.length?'':'ok');
+}""",
+    """function saveAllocation(){
+  const a=getWorkingAllocation();
+  const cells=(POP().days||5)*(POP().periods||5);
+  const bad=[];
+  for(const sec of activeSectionList()){const t=sectionTotal(a[sec.id]?a[sec.id].subjects:[]);if(t!==cells)bad.push(sec.id+'='+t);}
+  if(POP_ID==='inter-1')saveAllocationLocal();
+  savePopAllocationLocal(POP_ID);
+  pushToCloud();
+  setTicker(bad.length?('Saved, but '+bad.join(', ')+' not '+cells+' periods'):'Allocation saved ('+POP_LABEL()+')',bad.length?'':'ok');
+}""")
+
+# g6) boot: initialize the population layer (after restore, before render)
+rep("""loadConstraints();
+loadAllocation();
+loadFaculty();
+loadTweaks();
+renderAuth();""",
+    """loadConstraints();
+loadAllocation();
+getPopAllocation('bs-1');
+getPopAllocation('inter-2');
+loadFaculty();
+loadTweaks();
+renderAuth();""")
+
 io.open(DST, "w", encoding="utf-8").write(src)
 print("OK → wrote", DST, "(", len(src), "bytes )")
