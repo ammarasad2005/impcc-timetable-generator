@@ -217,3 +217,23 @@ New endpoint: `POST /generate-context` (auth-gated) —
 `{populations, time_limit, n_seeds, max_solutions}` → ranked solutions with
 `score`, `penalty`, `violations`, `total`, and per-section timetables ("Library
 Work" fills free BS cells).
+
+## 10. The in-browser engine (PR-3b)
+
+`context_solver.js` mirrors the context stack in the browser
+(`IMPCC_CONTEXT_SOLVER`): `contextToModel`, `evaluate`, `shuffleScore`,
+`poolSelection`, `modelToTimetable` are exact ports — verified against the
+Python implementation on a CP-SAT solution fixture (identical penalty,
+violation multiset and shuffle score). `canonical.js` gains
+`solverContext(populationIds)` (the mirror of `solver_context`).
+
+The in-browser SEARCH is a two-stage randomized engine: stage 1 packs each
+section's columns on the fly (global teacher capacities, per-unit slot budgets
+for tight teachers — randomized top-down allocation with engagement-group
+awareness — and group pruning inside the generation DFS), stage 2 colors days
+per slot with unit/section/teacher/pair/consecutive/engagement constraints.
+**Status: best-effort.** The full shift-1 dataset (7 teachers at 80–88% slot
+utilization) sits at the edge of heuristic feasibility — the reliable
+generation path for it is the CP-SAT backend (`POST /generate-context`).
+The JS engine handles lighter contexts (verified on the I.COM-II trio and
+synthetic contexts) and keeps improving.

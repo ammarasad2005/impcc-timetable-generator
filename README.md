@@ -154,6 +154,7 @@ Exports carry **only college identity** — no scores, ranks, solver or site/dev
 | `cp_solver.py` | CP-SAT model (OR-Tools) + `generate_ranked()` API entry point |
 | `populations.js` / `timetable_config.py` | Domain model: the three timetable populations (Inter-1st, BS-1st, Inter-2nd) + schedule configs (active days/periods, start times, breaks, per-day overrides) |
 | `data/canonical.json` · `data.js` · `canonical.js` / `canonical.py` | **The canonical dataset + model adapters** — faculty directory (44, with aliases), subjects registry, per-population allocations, parallel groups, combined classes, constraints, structured general instructions (see `canonical_model.md`; regenerate `data.js` with `python3 tools/gen_data_js.py`) |
+| `context_model.py` · `context_solver.js` | **The context layer** — transforms a solve context into the unit model, evaluates solutions (documented soft violations), pool policy; `context_solver.js` adds the in-browser two-stage search (best-effort; CP-SAT is the reliable path for the full shift-1 density) |
 | `api/index.py` · `auth_check.py` · `llm_translate.py` | FastAPI backend, auth gate, AI translation |
 | `supabase.js` | Dependency-free Supabase client (GoTrue + PostgREST) |
 | `constraints_schema.md` · `tweaks_schema.md` · `engagement_schema.md` · `versioning_schema.md` · `swap_schema.md` · `canonical_model.md` | Feature specs |

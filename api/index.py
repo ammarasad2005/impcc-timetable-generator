@@ -97,6 +97,16 @@ def canonical_js():
     return JSONResponse({"detail": "canonical.js not found"}, status_code=404)
 
 
+@app.get("/context_solver.js", include_in_schema=False)
+def context_solver_js():
+    """The in-browser context solver (IMPCC_CONTEXT_SOLVER)."""
+    root = _find_root()
+    f = root / "context_solver.js"
+    if f.exists():
+        return FileResponse(f, media_type="application/javascript")
+    return JSONResponse({"detail": "context_solver.js not found"}, status_code=404)
+
+
 @app.get("/supabase.js", include_in_schema=False)
 def supabase_js():
     root = _find_root()
