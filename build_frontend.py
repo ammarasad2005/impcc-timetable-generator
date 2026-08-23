@@ -792,6 +792,388 @@ async function exportTeacherImage(name){
 """
 src = src[:i] + engine + src[k:]
 
+# =====================================================================
+# ---- 42) POPULATION-EXPORTS (PR-7) -----------------------------------
+# Canvas exports follow the ACTIVE population: dynamic periods/break/
+# times, BS department groups + Library Work cells, per-population
+# stream colors and identity lines, inter-2 Friday timing.
+# =====================================================================
+
+# (a) COLLEGE_LINE -> population-aware collegeLine()
+rep("const COLLEGE_LINE='Islamabad Model Postgraduate College of Commerce (H-8/4) · Intermediate · 1st Shift';",
+    "const COLLEGE_BASE='Islamabad Model Postgraduate College of Commerce (H-8/4)';\nconst COLLEGE_LINE=COLLEGE_BASE+' · Intermediate · 1st Shift';\nfunction collegeLine(){\n  if(POP_ID==='bs-1')return COLLEGE_BASE+' · BS Departments · 1st Shift';\n  if(POP_ID==='inter-2')return COLLEGE_BASE+' · Intermediate · 2nd Shift';\n  return COLLEGE_BASE+' · Intermediate · 1st Shift';\n}")
+
+# (b) export helpers before the section canvas
+rep('/* ---------- section image export (landscape PNG, fully fitted) ---------- */',
+    "/* ---------- export helpers (population-aware) ---------- */\nfunction exportStreamMeta(){\n  if(POP_ID==='bs-1')return {bsaf:{accent:'#1c6b48',tint:'#e2efe6'},bscm:{accent:'#3a55b0',tint:'#e5e9f8'},bba:{accent:'#e8a41f',tint:'#fdf3dc'}};\n  return {icom:{accent:'#1c6b48',tint:'#e2efe6'},ics:{accent:'#3a55b0',tint:'#e5e9f8'}};\n}\nfunction exportStreamName(k){\n  if(POP_ID==='bs-1')return {bsaf:'BS Accounting & Finance',bscm:'BS Commerce',bba:'BS Business Administration'}[k]||k;\n  return {icom:'I.Com — Commerce Stream',ics:'ICS — Computer Science Stream'}[k]||k;\n}\nfunction exportSectionOf(id){ return popSections(POP_ID).filter(function(s){return s.id===id;})[0]; }\nfunction exportAccentOf(sec){ const m=exportStreamMeta(); return (m[sec.stream]||{accent:'#1c6b48'}).accent; }\nfunction exportTintOf(sec){ const m=exportStreamMeta(); return (m[sec.stream]||{tint:'#e2efe6'}).tint; }\nfunction exportGridGeom(){\n  const cfg=POP();\n  const periods=cfg.periods||5, bp=cfg.breakAfterPeriod||0, days=cfg.days||5;\n  const pad=48,colDay=124,colP=300,colB=86;\n  const cols=[colDay];\n  for(let i=0;i<periods;i++){ if(i===bp&&i<periods)cols.push(colB); cols.push(colP); }\n  return {pad:pad,cols:cols,periods:periods,bp:bp,days:days,gap:4,titleH:58,subH:26,headGap:30,hdrH:64,rowH:104};\n}\nfunction exportHeads(day){\n  const cfg=POP();\n  const times=popDayTimes(day||'MON');\n  const bp=cfg.breakAfterPeriod||0;\n  const out=[['Week','']];\n  for(let i=0;i<(cfg.periods||5);i++){\n    if(i===bp&&i<(cfg.periods||5))out.push(['Break',(cfg.breakMinutes||25)+' min']);\n    out.push(['Period-'+(i+1),times[i]||'']);\n  }\n  return out;\n}\n\n/* ---------- section image export (landscape PNG, fully fitted) ---------- */")
+
+rep(r'''async function drawSectionCanvas(secId){
+  const c=getSel();if(!c)return;
+  const sec=SECTIONS.find(s=>s.id===secId);if(!sec)return;
+  const grid=c.tt[secId];
+  const accent=sec.stream==='icom'?'#1c6b48':'#3a55b0';
+  const tint=sec.stream==='icom'?'#e2efe6':'#e5e9f8';
+  const ink='#182720',muted='#5b6a61',line='#d7dbcc';
+  const amberTint='#fdf3dc',amber='#8a6210';
+
+  const canvas=document.createElement('canvas');
+  const ctx=canvas.getContext('2d');
+  if(!ctx){setTicker('Image export is not supported in this browser','err');return;}
+  try{if(document.fonts&&document.fonts.ready)await document.fonts.ready;}catch(e){}
+
+  const pad=48,colDay=124,colP=300,colB=86;
+  const cols=[colDay,colP,colP,colP,colB,colP,colP];
+  const gap=4;
+  const W=pad*2+cols.reduce((a,b)=>a+b,0)+gap*(cols.length-1);
+  const titleH=58,subH=26,headGap=30,hdrH=64,rowH=104;
+  const H=pad*2+titleH+subH+headGap+hdrH+rowH*5;
+
+  const scale=2;
+  canvas.width=Math.round(W*scale);canvas.height=Math.round(H*scale);
+  ctx.scale(scale,scale);
+  ctx.fillStyle='#ffffff';ctx.fillRect(0,0,W,H);
+
+  ctx.textAlign='left';ctx.textBaseline='alphabetic';
+  ctx.fillStyle=accent;ctx.font='900 40px Fraunces, Georgia, serif';
+  ctx.fillText(sec.label,pad,pad+titleH-12);
+  ctx.fillStyle=muted;ctx.font='500 20px "IBM Plex Sans", sans-serif';
+  ctx.fillText(COLLEGE_LINE,pad,pad+titleH+subH-2);
+
+  function cellRect(cx,cy,cw,ch,fill){
+    ctx.fillStyle=fill;ctx.fillRect(cx,cy,cw,ch);
+    ctx.strokeStyle=line;ctx.lineWidth=1;ctx.strokeRect(cx+0.5,cy+0.5,cw-1,ch-1);
+  }
+
+  const tx=pad,ty=pad+titleH+subH+headGap;
+  const heads=[['Week',''],['Period-1',TIMES[0]],['Period-2',TIMES[1]],['Period-3',TIMES[2]],['Break','10:30–10:55'],['Period-4',TIMES[3]],['Period-5',TIMES[4]]];
+  let cx=tx;
+  for(let ci=0;ci<cols.length;ci++){
+    const isBrk=(ci===4);
+    cellRect(cx,ty,cols[ci],hdrH,isBrk?amberTint:tint);
+    ctx.textAlign='center';
+    ctx.fillStyle=isBrk?amber:accent;ctx.font='600 15px "IBM Plex Sans", sans-serif';
+    ctx.fillText(heads[ci][0],cx+cols[ci]/2,ty+hdrH/2-2);
+    if(heads[ci][1]){
+      ctx.fillStyle=muted;ctx.font='400 12px "IBM Plex Sans", sans-serif';
+      ctx.fillText(heads[ci][1],cx+cols[ci]/2,ty+hdrH/2+16);
+    }
+    cx+=cols[ci]+gap;
+  }
+
+  let y=ty+hdrH;
+  for(let d=0;d<5;d++){
+    let rx=tx;
+    cellRect(rx,y,cols[0],rowH,'#fafbf8');
+    ctx.fillStyle=ink;ctx.font='600 18px "IBM Plex Sans", sans-serif';
+    ctx.textAlign='center';ctx.fillText(DAYS[d],rx+cols[0]/2,y+rowH/2+6);
+    rx+=cols[0]+gap;
+    // 6 visual columns per row: P1, P2, P3, Break, P4, P5
+    for(let s=0;s<6;s++){
+      const cw=cols[s+1];
+      if(s===3){
+        cellRect(rx,y,cw,rowH,amberTint);
+        ctx.fillStyle=amber;ctx.font='600 13px "IBM Plex Sans", sans-serif';
+        ctx.textAlign='center';ctx.fillText('Break',rx+cw/2,y+rowH/2+4);
+      }else{
+        const cell=grid[d][s<3?s:s-1];   // P1..P3 from grid[0..2]; P4,P5 from grid[3..4]
+        cellRect(rx,y,cw,rowH,'#ffffff');
+        const dual=cell.dual;
+        ctx.textAlign='center';
+        let sz=24,lines;
+        do{lines=wrapLines(ctx,cell.subj,cw-26,'700 '+sz+'px "IBM Plex Sans", sans-serif');sz-=2;}while(lines.length>2&&sz>16);
+        let ly=y+rowH/2-8-(lines.length===2?7:0);
+        ctx.fillStyle=dual?accent:ink;
+        for(const ln of lines){ctx.fillText(ln,rx+cw/2,ly);ly+=sz+4;}
+        let tsz=16,tlines;
+        do{tlines=wrapLines(ctx,cell.teacher,cw-26,'400 '+tsz+'px "IBM Plex Sans", sans-serif');tsz-=1.5;}while(tlines.length>2&&tsz>12);
+        ly+=6;ctx.fillStyle=muted;
+        for(const ln of tlines){ctx.fillText(ln,rx+cw/2,ly);ly+=tsz+3;}
+      }
+      rx+=cw+gap;
+    }
+    y+=rowH;
+  }
+
+  return {canvas:canvas, filename:'IMPCC_'+secId+'.png'};
+}
+''',
+    r'''async function drawSectionCanvas(secId){
+  const c=getSel();if(!c)return;
+  const sec=exportSectionOf(secId);if(!sec)return;
+  const grid=c.tt[secId];
+  const accent=exportAccentOf(sec);
+  const tint=exportTintOf(sec);
+  const ink='#182720',muted='#5b6a61',line='#d7dbcc';
+  const amberTint='#fdf3dc',amber='#8a6210';
+
+  const canvas=document.createElement('canvas');
+  const ctx=canvas.getContext('2d');
+  if(!ctx){setTicker('Image export is not supported in this browser','err');return;}
+  try{if(document.fonts&&document.fonts.ready)await document.fonts.ready;}catch(e){}
+
+  const G=exportGridGeom();
+  const W=G.pad*2+G.cols.reduce((a,b)=>a+b,0)+G.gap*(G.cols.length-1);
+  const H=G.pad*2+G.titleH+G.subH+G.headGap+G.hdrH+G.rowH*G.days;
+
+  const scale=2;
+  canvas.width=Math.round(W*scale);canvas.height=Math.round(H*scale);
+  ctx.scale(scale,scale);
+  ctx.fillStyle='#ffffff';ctx.fillRect(0,0,W,H);
+
+  ctx.textAlign='left';ctx.textBaseline='alphabetic';
+  ctx.fillStyle=accent;ctx.font='900 40px Fraunces, Georgia, serif';
+  ctx.fillText(sec.label,G.pad,G.pad+G.titleH-12);
+  ctx.fillStyle=muted;ctx.font='500 20px "IBM Plex Sans", sans-serif';
+  ctx.fillText(collegeLine(),G.pad,G.pad+G.titleH+G.subH-2);
+
+  function cellRect(cx,cy,cw,ch,fill){
+    ctx.fillStyle=fill;ctx.fillRect(cx,cy,cw,ch);
+    ctx.strokeStyle=line;ctx.lineWidth=1;ctx.strokeRect(cx+0.5,cy+0.5,cw-1,ch-1);
+  }
+
+  const tx=G.pad,ty=G.pad+G.titleH+G.subH+G.headGap;
+  const heads=exportHeads('MON');
+  {
+    let cx=tx;
+    for(let ci=0;ci<G.cols.length;ci++){
+      const isBrk=heads[ci]&&heads[ci][0]==='Break';
+      cellRect(cx,ty,G.cols[ci],G.hdrH,isBrk?amberTint:tint);
+      ctx.textAlign='center';
+      ctx.fillStyle=isBrk?amber:accent;ctx.font='600 15px "IBM Plex Sans", sans-serif';
+      ctx.fillText(heads[ci][0],cx+G.cols[ci]/2,ty+G.hdrH/2-2);
+      if(heads[ci][1]){
+        ctx.fillStyle=muted;ctx.font='400 12px "IBM Plex Sans", sans-serif';
+        ctx.fillText(heads[ci][1],cx+G.cols[ci]/2,ty+G.hdrH/2+16);
+      }
+      cx+=G.cols[ci]+G.gap;
+    }
+  }
+
+  let y=ty+G.hdrH;
+  for(let d=0;d<G.days;d++){
+    let rx=tx;
+    cellRect(rx,y,G.cols[0],G.rowH,'#fafbf8');
+    ctx.fillStyle=ink;ctx.font='600 18px "IBM Plex Sans", sans-serif';
+    ctx.textAlign='center';ctx.fillText(DAYS[d],rx+G.cols[0]/2,y+G.rowH/2+6);
+    rx+=G.cols[0]+G.gap;
+    let gi=0;
+    for(let ci=1;ci<G.cols.length;ci++){
+      const cw=G.cols[ci];
+      const isBrk=(ci-1)===G.bp;
+      if(isBrk){
+        cellRect(rx,y,cw,G.rowH,amberTint);
+        ctx.fillStyle=amber;ctx.font='600 13px "IBM Plex Sans", sans-serif';
+        ctx.textAlign='center';ctx.fillText('Break',rx+cw/2,y+G.rowH/2+4);
+      }else{
+        const cell=(grid[d]&&grid[d][gi])||{subj:'',teacher:''};
+        gi++;
+        cellRect(rx,y,cw,G.rowH,cell.library?'#f2f3ec':'#ffffff');
+        const dual=cell.dual;
+        ctx.textAlign='center';
+        if(cell.library){
+          ctx.fillStyle=muted;ctx.font='500 20px "IBM Plex Sans", sans-serif';
+          ctx.fillText('Library Work',rx+cw/2,y+G.rowH/2+4);
+        }else if(cell.subj){
+          let sz=24,lines;
+          do{lines=wrapLines(ctx,cell.subj,cw-26,'700 '+sz+'px "IBM Plex Sans", sans-serif');sz-=2;}while(lines.length>2&&sz>16);
+          let ly=y+G.rowH/2-8-(lines.length===2?7:0);
+          ctx.fillStyle=dual?accent:ink;
+          for(const ln of lines){ctx.fillText(ln,rx+cw/2,ly);ly+=sz+4;}
+          let tsz=16,tlines;
+          do{tlines=wrapLines(ctx,cell.teacher,cw-26,'400 '+tsz+'px "IBM Plex Sans", sans-serif');tsz-=1.5;}while(tlines.length>2&&tsz>12);
+          ly+=6;ctx.fillStyle=muted;
+          for(const ln of tlines){ctx.fillText(ln,rx+cw/2,ly);ly+=tsz+3;}
+        }
+      }
+      rx+=cw+G.gap;
+    }
+    y+=G.rowH;
+  }
+
+  return {canvas:canvas, filename:'IMPCC_'+secId+'.png'};
+}''')
+
+rep(r'''async function drawTeacherCanvas(name){
+  const c=getSel();if(!c)return;
+  const entries=(buildTeacherIndex(c.tt)[name])||[];
+  const m={};entries.forEach(e=>{m[e.d+'_'+e.s]=e;});
+  const accent='#1c6b48',tint='#e2efe6',ink='#182720',muted='#5b6a61',line='#d7dbcc';
+  const amberTint='#fdf3dc',amber='#8a6210';
+
+  const canvas=document.createElement('canvas');
+  const ctx=canvas.getContext('2d');
+  if(!ctx){setTicker('Image export is not supported in this browser','err');return;}
+  try{if(document.fonts&&document.fonts.ready)await document.fonts.ready;}catch(e){}
+
+  const pad=48,colDay=124,colP=300,colB=86;
+  const cols=[colDay,colP,colP,colP,colB,colP,colP];
+  const gap=4;
+  const W=pad*2+cols.reduce((a,b)=>a+b,0)+gap*(cols.length-1);
+  const titleH=58,subH=26,headGap=30,hdrH=64,rowH=104;
+  const H=pad*2+titleH+subH+headGap+hdrH+rowH*5;
+
+  const scale=2;
+  canvas.width=Math.round(W*scale);canvas.height=Math.round(H*scale);
+  ctx.scale(scale,scale);
+  ctx.fillStyle='#ffffff';ctx.fillRect(0,0,W,H);
+
+  ctx.textAlign='left';ctx.textBaseline='alphabetic';
+  ctx.fillStyle=accent;ctx.font='900 40px Fraunces, Georgia, serif';
+  ctx.fillText(name+' — Personal Timetable',pad,pad+titleH-12);
+  ctx.fillStyle=muted;ctx.font='500 20px "IBM Plex Sans", sans-serif';
+  ctx.fillText(COLLEGE_LINE+' · '+entries.length+' periods/week',pad,pad+titleH+subH-2);
+
+  function cellRect(cx,cy,cw,ch,fill){
+    ctx.fillStyle=fill;ctx.fillRect(cx,cy,cw,ch);
+    ctx.strokeStyle=line;ctx.lineWidth=1;ctx.strokeRect(cx+0.5,cy+0.5,cw-1,ch-1);
+  }
+
+  const tx=pad,ty=pad+titleH+subH+headGap;
+  const heads=[['Week',''],['Period-1',TIMES[0]],['Period-2',TIMES[1]],['Period-3',TIMES[2]],['Break','10:30–10:55'],['Period-4',TIMES[3]],['Period-5',TIMES[4]]];
+  let cx=tx;
+  for(let ci=0;ci<cols.length;ci++){
+    const isBrk=(ci===4);
+    cellRect(cx,ty,cols[ci],hdrH,isBrk?amberTint:tint);
+    ctx.textAlign='center';
+    ctx.fillStyle=isBrk?amber:accent;ctx.font='600 15px "IBM Plex Sans", sans-serif';
+    ctx.fillText(heads[ci][0],cx+cols[ci]/2,ty+hdrH/2-2);
+    if(heads[ci][1]){
+      ctx.fillStyle=muted;ctx.font='400 12px "IBM Plex Sans", sans-serif';
+      ctx.fillText(heads[ci][1],cx+cols[ci]/2,ty+hdrH/2+16);
+    }
+    cx+=cols[ci]+gap;
+  }
+
+  let y=ty+hdrH;
+  for(let d=0;d<5;d++){
+    let rx=tx;
+    cellRect(rx,y,cols[0],rowH,'#fafbf8');
+    ctx.fillStyle=ink;ctx.font='600 18px "IBM Plex Sans", sans-serif';
+    ctx.textAlign='center';ctx.fillText(DAYS[d],rx+cols[0]/2,y+rowH/2+6);
+    rx+=cols[0]+gap;
+    for(let s=0;s<6;s++){
+      const cw=cols[s+1];
+      if(s===3){
+        cellRect(rx,y,cw,rowH,amberTint);
+        ctx.fillStyle=amber;ctx.font='600 13px "IBM Plex Sans", sans-serif';
+        ctx.textAlign='center';ctx.fillText('Break',rx+cw/2,y+rowH/2+4);
+      }else{
+        const e=m[d+'_'+(s<3?s:s-1)];
+        cellRect(rx,y,cw,rowH,'#ffffff');
+        ctx.textAlign='center';
+        if(e){
+          ctx.fillStyle=e.dual?accent:ink;
+          let sz=24,lines;
+          do{lines=wrapLines(ctx,e.subj,cw-26,'700 '+sz+'px "IBM Plex Sans", sans-serif');sz-=2;}while(lines.length>2&&sz>16);
+          let ly=y+rowH/2-8-(lines.length===2?7:0);
+          for(const ln of lines){ctx.fillText(ln,rx+cw/2,ly);ly+=sz+4;}
+          ctx.fillStyle=muted;ctx.font='400 16px "IBM Plex Sans", sans-serif';
+          ctx.fillText(e.sec,rx+cw/2,ly+6);
+        }else{
+          ctx.fillStyle='#c2c9ba';ctx.font='400 16px "IBM Plex Sans", sans-serif';
+          ctx.fillText('·',rx+cw/2,y+rowH/2+6);
+        }
+      }
+      rx+=cw+gap;
+    }
+    y+=rowH;
+  }
+
+  return {canvas:canvas, filename:'IMPCC_personal-timetable_'+slug(name)+'.png'};
+}
+''',
+    r'''async function drawTeacherCanvas(name){
+  const c=getSel();if(!c)return;
+  const entries=(buildTeacherIndex(c.tt)[name])||[];
+  const m={};entries.forEach(e=>{m[e.d+'_'+e.s]=e;});
+  const accent='#1c6b48',tint='#e2efe6',ink='#182720',muted='#5b6a61',line='#d7dbcc';
+  const amberTint='#fdf3dc',amber='#8a6210';
+
+  const canvas=document.createElement('canvas');
+  const ctx=canvas.getContext('2d');
+  if(!ctx){setTicker('Image export is not supported in this browser','err');return;}
+  try{if(document.fonts&&document.fonts.ready)await document.fonts.ready;}catch(e){}
+
+  const G=exportGridGeom();
+  const W=G.pad*2+G.cols.reduce((a,b)=>a+b,0)+G.gap*(G.cols.length-1);
+  const H=G.pad*2+G.titleH+G.subH+G.headGap+G.hdrH+G.rowH*G.days;
+
+  const scale=2;
+  canvas.width=Math.round(W*scale);canvas.height=Math.round(H*scale);
+  ctx.scale(scale,scale);
+  ctx.fillStyle='#ffffff';ctx.fillRect(0,0,W,H);
+
+  ctx.textAlign='left';ctx.textBaseline='alphabetic';
+  ctx.fillStyle=accent;ctx.font='900 40px Fraunces, Georgia, serif';
+  ctx.fillText(name+' \u2014 Personal Timetable',G.pad,G.pad+G.titleH-12);
+  ctx.fillStyle=muted;ctx.font='500 20px "IBM Plex Sans", sans-serif';
+  ctx.fillText(collegeLine()+' \u00b7 '+entries.length+' periods/week',G.pad,G.pad+G.titleH+G.subH-2);
+
+  function cellRect(cx,cy,cw,ch,fill){
+    ctx.fillStyle=fill;ctx.fillRect(cx,cy,cw,ch);
+    ctx.strokeStyle=line;ctx.lineWidth=1;ctx.strokeRect(cx+0.5,cy+0.5,cw-1,ch-1);
+  }
+
+  const tx=G.pad,ty=G.pad+G.titleH+G.subH+G.headGap;
+  const heads=exportHeads('MON');
+  {
+    let cx=tx;
+    for(let ci=0;ci<G.cols.length;ci++){
+      const isBrk=heads[ci]&&heads[ci][0]==='Break';
+      cellRect(cx,ty,G.cols[ci],G.hdrH,isBrk?amberTint:tint);
+      ctx.textAlign='center';
+      ctx.fillStyle=isBrk?amber:accent;ctx.font='600 15px "IBM Plex Sans", sans-serif';
+      ctx.fillText(heads[ci][0],cx+G.cols[ci]/2,ty+G.hdrH/2-2);
+      if(heads[ci][1]){
+        ctx.fillStyle=muted;ctx.font='400 12px "IBM Plex Sans", sans-serif';
+        ctx.fillText(heads[ci][1],cx+G.cols[ci]/2,ty+G.hdrH/2+16);
+      }
+      cx+=G.cols[ci]+G.gap;
+    }
+  }
+
+  let y=ty+G.hdrH;
+  for(let d=0;d<G.days;d++){
+    let rx=tx;
+    cellRect(rx,y,G.cols[0],G.rowH,'#fafbf8');
+    ctx.fillStyle=ink;ctx.font='600 18px "IBM Plex Sans", sans-serif';
+    ctx.textAlign='center';ctx.fillText(DAYS[d],rx+G.cols[0]/2,y+G.rowH/2+6);
+    rx+=G.cols[0]+G.gap;
+    let gi=0;
+    for(let ci=1;ci<G.cols.length;ci++){
+      const cw=G.cols[ci];
+      const isBrk=(ci-1)===G.bp;
+      if(isBrk){
+        cellRect(rx,y,cw,G.rowH,amberTint);
+        ctx.fillStyle=amber;ctx.font='600 13px "IBM Plex Sans", sans-serif';
+        ctx.textAlign='center';ctx.fillText('Break',rx+cw/2,y+G.rowH/2+4);
+      }else{
+        const e=m[d+'_'+gi];
+        gi++;
+        cellRect(rx,y,cw,G.rowH,'#ffffff');
+        ctx.textAlign='center';
+        if(e){
+          ctx.fillStyle=e.dual?accent:ink;
+          let sz=24,lines;
+          do{lines=wrapLines(ctx,e.subj,cw-26,'700 '+sz+'px "IBM Plex Sans", sans-serif');sz-=2;}while(lines.length>2&&sz>16);
+          let ly=y+G.rowH/2-8-(lines.length===2?7:0);
+          for(const ln of lines){ctx.fillText(ln,rx+cw/2,ly);ly+=sz+4;}
+          ctx.fillStyle=muted;ctx.font='400 16px "IBM Plex Sans", sans-serif';
+          ctx.fillText(e.sec,rx+cw/2,ly+6);
+        }else{
+          ctx.fillStyle='#c2c9ba';ctx.font='400 16px "IBM Plex Sans", sans-serif';
+          ctx.fillText('\u00b7',rx+cw/2,y+G.rowH/2+6);
+        }
+      }
+      rx+=cw+G.gap;
+    }
+    y+=G.rowH;
+  }
+
+  return {canvas:canvas, filename:'IMPCC_personal-timetable_'+slug(name)+'.png'};
+}''')
+
+
 # (g) spotlight drawer PDF button routes through the same engine
 rep("$('spPrint').addEventListener('click',printCurrent);",
     "$('spPrint').addEventListener('click',()=>{if(state.spot)exportTeacherImage(state.spot);});")
