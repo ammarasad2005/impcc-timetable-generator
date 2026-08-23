@@ -27,7 +27,8 @@ from pydantic import BaseModel, Field
 import cp_solver as CS
 import llm_translate
 import auth_check
-from solver import UNITS, SECTIONS, TEACHER_FULL, DAYS, SLOTS, DEFAULT_CONSTRAINTS
+import solver as _solver_mod
+from solver import UNITS, SECTIONS, TEACHER_FULL, DEFAULT_CONSTRAINTS
 
 app = FastAPI(
     title="IMPCC Timetable Generator API",
@@ -106,6 +107,10 @@ class GenerateRequest(BaseModel):
                          description="number of randomized optimization seeds")
     max_solutions: int = Field(default=0, ge=0,
                                description="cap on returned solutions (0 = no cap)")
+    days: int = Field(default=5, ge=1, le=6,
+                      description="ACTIVE day count (capacity 6 = Mon-Sat; default Mon-Fri)")
+    periods: int = Field(default=5, ge=1, le=8,
+                         description="ACTIVE periods per day (capacity 8; default 5)")
     constraints: dict = Field(default=None,
                               description="optional faculty-constraint overrides (see constraints_schema.md)")
     sections: dict = Field(default=None,
@@ -173,6 +178,8 @@ def generate(req: GenerateRequest, user: dict = Depends(require_user)):
         max_solutions=req.max_solutions,
         constraints=req.constraints,
         sections=req.sections,
+        days=req.days,
+        periods=req.periods,
     )
     solutions = []
     for sc, g in ranked:
@@ -187,8 +194,22 @@ def generate(req: GenerateRequest, user: dict = Depends(require_user)):
         "worst_score": ranked[-1][0] if ranked else None,
         "elapsed_seconds": round(time.time() - t0, 2),
         "meta": {
-            "days": DAYS,
-            "slots": SLOTS,
+            "days": _solver_mod.DAYS,
+            "slots": _solver_mod.SLOTS,
             "section_order": [s["key"] for s in SECTIONS],
+        },
+    }
+
+
+@app.get("/populations")
+def populations():
+    """The timetable population registry + schedule configurations (domain model)."""
+    import timetable_config as TC
+    return {
+        "capacity": TC.CAPACITY,
+        "populations": {
+            pid: {"label": p["label"], "short": p["short"], "shift": p["shift"],
+                  "level": p["level"], "config": p["config"]}
+            for pid, p in TC.POPULATIONS.items()
         },
     }

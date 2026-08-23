@@ -1,11 +1,16 @@
 /*
- * solver.js — IMPCC Inter (1st Shift) timetable generator (in-browser).
+ * solver.js — IMPCC timetable generator (in-browser).
  *
  * A faithful JavaScript port of the CP-SAT model in cp_solver.py (same data,
  * same slot/day domains, same structural rules, same validator and the same
  * shuffle score). The search is a randomized backtracking solver with
  * minimum-remaining-values (MRV) ordering and forward checking. It runs fully
  * client-side — no server, no precomputed data.
+ *
+ * The timetable grid is parameterized: generate({days, periods}) selects the
+ * active grid (capacity 6 days x 8 periods — see populations.js). The default
+ * is the historical 5x5 so existing callers behave exactly as before. Sections
+ * must fill the active grid exactly (partial fill arrives with the BS support).
  *
  * Exposes IMPCC_SOLVER.generate(opts); also require()-able in Node.
  */
@@ -15,8 +20,16 @@
 })(typeof self !== "undefined" ? self : this, function () {
   "use strict";
 
-  const DAYS = ["MON", "TUE", "WED", "THU", "FRI"];
-  const SLOTS = ["P1", "P2", "P3", "P4", "P5"];
+  // ------------------------------------------------------------- grid
+  // Capacity (reserved maximum): 6 days x 8 periods (see populations.js).
+  // The ACTIVE grid is data: generate({days, periods}) selects it. The default
+  // remains the historical 5 x 5 so every existing caller is unaffected.
+  const DAY_NAMES = ["MON", "TUE", "WED", "THU", "FRI", "SAT"];
+  const PERIOD_LABELS = ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8"];
+  let DAYS = DAY_NAMES.slice(0, 5);        // active day names (set by generate)
+  let SLOTS = PERIOD_LABELS.slice(0, 5);   // active period labels (set by generate)
+  let D = 5;                               // active day count
+  let P = 5;                               // active period count
 
   // ---------------------------------------------------------------- data
   let SECTIONS = [
@@ -282,7 +295,8 @@
       const m = r.subject_slots.find(e => e.subject === subj);
       if (m) return m.slots.map(x => SLOT_OF[x]);
     }
-    let dom = [0, 1, 2, 3, 4];
+    let dom = [];
+    for (let i = 0; i < P; i++) dom.push(i);
     if (r && r.allowed_slots)   dom = dom.filter(x => _slotSet(r.allowed_slots).has(x));
     if (r && r.forbidden_slots) dom = dom.filter(x => !_slotSet(r.forbidden_slots).has(x));
     return dom;
@@ -290,7 +304,8 @@
   function slotDomain(u, R) { return slotDomainT(u.teacher, u.subject, R); }
   function dayDomainT(t, subj, R) {
     const r = R && R[t] && R[t].rules;
-    let dom = [0, 1, 2, 3, 4];
+    let dom = [];
+    for (let i = 0; i < D; i++) dom.push(i);
     if (r && r.allowed_days)   dom = dom.filter(d => _daySet(r.allowed_days).has(d));
     if (r && r.forbidden_days) dom = dom.filter(d => !_daySet(r.forbidden_days).has(d));
     if (r && r.subject_forbidden_days) {
@@ -303,18 +318,18 @@
 
   // -------------------------------------------------- packings (Stage 1)
   function enumeratePackings(subjs, R) {
-    const slotUsed = [0, 0, 0, 0, 0];
+    const slotUsed = new Array(P).fill(0);
     const out = [];
     const cur = subjs.map(() => null);
     function rec(idx) {
       if (idx === subjs.length) {
-        if (slotUsed.every(v => v === 5)) out.push(cur.map(c => c.slice()));
+        if (slotUsed.every(v => v === D)) out.push(cur.map(c => c.slice()));
         return;
       }
       const [subject, teacher, count] = subjs[idx];
       const sd = slotDomainT(teacher, subject, R);
       for (const s of sd) {
-        if (slotUsed[s] + count <= 5) {
+        if (slotUsed[s] + count <= D) {
           slotUsed[s] += count; cur[idx] = [{ slot: s, k: count }];
           rec(idx + 1); slotUsed[s] -= count;
         }
@@ -322,7 +337,7 @@
       if (count === 3) {
         for (const s1 of sd) for (const s2 of sd) {
           if (s2 <= s1) continue;
-          if (slotUsed[s1] + 2 <= 5 && slotUsed[s2] + 1 <= 5) {
+          if (slotUsed[s1] + 2 <= D && slotUsed[s2] + 1 <= D) {
             slotUsed[s1] += 2; slotUsed[s2] += 1;
             cur[idx] = [{ slot: s1, k: 2 }, { slot: s2, k: 1 }];
             rec(idx + 1); slotUsed[s1] -= 2; slotUsed[s2] -= 1;
@@ -330,7 +345,7 @@
         }
         for (const s1 of sd) for (const s2 of sd) for (const s3 of sd) {
           if (s2 <= s1 || s3 <= s2) continue;
-          if (slotUsed[s1] + 1 <= 5 && slotUsed[s2] + 1 <= 5 && slotUsed[s3] + 1 <= 5) {
+          if (slotUsed[s1] + 1 <= D && slotUsed[s2] + 1 <= D && slotUsed[s3] + 1 <= D) {
             slotUsed[s1]++; slotUsed[s2]++; slotUsed[s3]++;
             cur[idx] = [{ slot: s1, k: 1 }, { slot: s2, k: 1 }, { slot: s3, k: 1 }];
             rec(idx + 1); slotUsed[s1]--; slotUsed[s2]--; slotUsed[s3]--;
@@ -339,7 +354,7 @@
       } else if (count === 2) {
         for (const s1 of sd) for (const s2 of sd) {
           if (s2 <= s1) continue;
-          if (slotUsed[s1] + 1 <= 5 && slotUsed[s2] + 1 <= 5) {
+          if (slotUsed[s1] + 1 <= D && slotUsed[s2] + 1 <= D) {
             slotUsed[s1]++; slotUsed[s2]++;
             cur[idx] = [{ slot: s1, k: 1 }, { slot: s2, k: 1 }];
             rec(idx + 1); slotUsed[s1]--; slotUsed[s2]--;
@@ -389,7 +404,7 @@
   function buildStatic(R) {
     const secUnits = {};
     const PACKINGS = {}, PACK_SIGS = {}, PACK_GREQ = {}, PACK_COST = {}, MINCOST = {};
-    const CAP2D = TEACHER_CODES.map(c => [0, 0, 0, 0, 0]);
+    const CAP2D = TEACHER_CODES.map(c => new Array(P).fill(0));
     const GROUPS = makeGroups(R).groups;
     const hasUnitInGroup = {};
 
@@ -406,13 +421,13 @@
       };
       for (let ti = 0; ti < TEACHER_CODES.length; ti++) {
         const t = TEACHER_CODES[ti];
-        for (let sl = 0; sl < 5; sl++) {
+        for (let sl = 0; sl < P; sl++) {
           const union = new Set();
           for (const ui of unitsFor(t)) {
             const u = UNITS[ui];
             if (slotDomain(u, R).includes(sl)) for (const d of dayDomain(u, R)) union.add(d);
           }
-          CAP2D[ti][sl] = Math.min(5, union.size);
+          CAP2D[ti][sl] = Math.min(D, union.size);
         }
       }
     })();
@@ -448,7 +463,7 @@
           for (const tt of tlist) {
             const ti = TEACHER_IDX[tt];
             for (const o of pkg[j]) {
-              const pk = ti * 5 + o.slot;
+              const pk = ti * P + o.slot;
               delta[pk] = (delta[pk] || 0) + o.k;
             }
           }
@@ -484,7 +499,7 @@
   }
 
   function stage1(rng, nodeBudget, R, S) {
-    const tchSlot = new Array(TEACHER_CODES.length * 5).fill(0);
+    const tchSlot = new Array(TEACHER_CODES.length * P).fill(0);
     const covMask = new Array(S.GROUPS.length).fill(0);
     const remUnits = S.GROUPS.map(g => g.units.length);
     const x = {};
@@ -492,7 +507,7 @@
 
     function packingFits(secKey, sig, greq) {
       for (const [p, d] of sig) {
-        const ti = (p / 5) | 0, sl = p % 5;
+        const ti = (p / P) | 0, sl = p % P;
         if (tchSlot[p] + d > S.CAP2D[ti][sl]) return false;
       }
       for (const [g, mask] of greq) {
@@ -514,7 +529,7 @@
           const tlist = UNITS[ui].teacher === "PARALLEL" ? ["PARALLEL", "Ishfaq", "NaeemAsghar"] : [UNITS[ui].teacher];
           for (const tt of tlist) {
             const ti = TEACHER_IDX[tt];
-            for (const o of pkg[j]) tchSlot[ti * 5 + o.slot] += o.k;
+            for (const o of pkg[j]) tchSlot[ti * P + o.slot] += o.k;
           }
         }
         for (let g = 0; g < S.GROUPS.length; g++) {
@@ -537,7 +552,7 @@
           const tlist = UNITS[ui].teacher === "PARALLEL" ? ["PARALLEL", "Ishfaq", "NaeemAsghar"] : [UNITS[ui].teacher];
           for (const tt of tlist) {
             const ti = TEACHER_IDX[tt];
-            for (const o of pkg[j]) tchSlot[ti * 5 + o.slot] -= o.k;
+            for (const o of pkg[j]) tchSlot[ti * P + o.slot] -= o.k;
           }
           delete x[ui];
         }
@@ -740,13 +755,13 @@
       return color() === "OK";
     }
 
-    for (let s = 0; s < 5; s++) {
+    for (let s = 0; s < P; s++) {
       if (!btSlot(s)) return null;
     }
 
     // materialize grids
     const grids = {};
-    for (const sec of SECTIONS) grids[sec.key] = Array.from({ length: 5 }, () => new Array(5).fill(null));
+    for (const sec of SECTIONS) grids[sec.key] = Array.from({ length: D }, () => new Array(P).fill(null));
     for (let ui = 0; ui < UNITS.length; ui++) {
       const sec = UNITS[ui].sec;
       for (const s in dayOfSlot[ui]) {
@@ -783,12 +798,14 @@
   function validate(grids, R) {
     if (!R) R = resolveConstraints();
     const issues = [];
+    const g0 = grids[SECTIONS[0].key];
+    const Dg = g0.length, Pg = g0[0].length;   // infer grid dims from the data
     for (const sec of SECTIONS) {
       const g = grids[sec.key];
       const counts = {};
-      for (let d = 0; d < 5; d++) {
+      for (let d = 0; d < Dg; d++) {
         const seen = new Set();
-        for (let s = 0; s < 5; s++) {
+        for (let s = 0; s < Pg; s++) {
           const uid = g[d][s];
           if (uid === null) { issues.push(`${sec.key}: empty day${d} slot${s}`); continue; }
           const u = UNITS[uid];
@@ -804,8 +821,8 @@
     const occ = {};
     for (const sec of SECTIONS) {
       const g = grids[sec.key];
-      for (let d = 0; d < 5; d++) {
-        for (let s = 0; s < 5; s++) {
+      for (let d = 0; d < Dg; d++) {
+        for (let s = 0; s < Pg; s++) {
           const uid = g[d][s];
           if (uid === null) continue;
           const t = UNITS[uid].teacher;
@@ -816,7 +833,7 @@
     for (const t in occ) {
       const seen = new Set();
       for (const [d, s] of occ[t]) {
-        const k = d * 5 + s;
+        const k = d * Pg + s;
         if (seen.has(k)) issues.push(`teacher ${t} double-booked ${DAYS[d]} ${SLOTS[s]}`);
         seen.add(k);
       }
@@ -854,7 +871,7 @@
     // subject placement rules
     for (const sec of SECTIONS) {
       const g = grids[sec.key];
-      for (let d = 0; d < 5; d++) for (let s = 0; s < 5; s++) {
+      for (let d = 0; d < Dg; d++) for (let s = 0; s < Pg; s++) {
         const uid = g[d][s];
         if (uid === null) continue;
         const u = UNITS[uid];
@@ -873,20 +890,20 @@
     if (par.length !== 4) issues.push(`parallel size ${par.length}`);
     const parSlots = new Set(par.map(x => x[1]));
     if (parSlots.size !== 1 || (!parSlots.has(2) && !parSlots.has(3))) issues.push(`parallel slot ${[...parSlots]}`);
-    const parKeys = new Set(par.map(x => x[0] * 5 + x[1]));
+    const parKeys = new Set(par.map(x => x[0] * Pg + x[1]));
     for (const [d, s, k] of occ.Ishfaq || []) {
-      if (parKeys.has(d * 5 + s) && k !== "ICS-II-B") issues.push("Ishfaq clash parallel");
+      if (parKeys.has(d * Pg + s) && k !== "ICS-II-B") issues.push("Ishfaq clash parallel");
     }
     for (const [d, s] of occ.NaeemAsghar || []) {
-      if (!parKeys.has(d * 5 + s)) issues.push("NaeemAsghar outside parallel");
+      if (!parKeys.has(d * Pg + s)) issues.push("NaeemAsghar outside parallel");
     }
 
     const com1 = ["I.COM-I-A", "I.COM-I-B", "I.COM-I-C"];
     for (const x of com1) {
       const gx = grids[x];
       let found = false;
-      for (let d = 0; d < 5 && !found; d++) {
-        for (let s = 0; s < 5 && !found; s++) {
+      for (let d = 0; d < Dg && !found; d++) {
+        for (let s = 0; s < Pg && !found; s++) {
           if (UNITS[gx[d][s]].subject === "Principles of Accounting") {
             let okall = true;
             for (const y of com1) {
@@ -907,9 +924,10 @@
     let pen = 0;
     for (const sec of SECTIONS) {
       const g = grids[sec.key];
+      const Dg = g.length, Pg = g[0].length;
       const slotsBySubj = {};
-      for (let d = 0; d < 5; d++) {
-        for (let s = 0; s < 5; s++) {
+      for (let d = 0; d < Dg; d++) {
+        for (let s = 0; s < Pg; s++) {
           const uid = g[d][s];
           if (uid !== null) (slotsBySubj[UNITS[uid].subject] = slotsBySubj[UNITS[uid].subject] || new Set()).add(s);
         }
@@ -929,8 +947,9 @@
     const parts = [];
     for (const sec of SECTIONS) {
       const g = grids[sec.key];
-      for (let d = 0; d < 5; d++) {
-        for (let s = 0; s < 5; s++) {
+      const Dg = g.length, Pg = g[0].length;
+      for (let d = 0; d < Dg; d++) {
+        for (let s = 0; s < Pg; s++) {
           const u = UNITS[g[d][s]];
           parts.push(`${sec.key}|${d}|${s}|${u.subject}|${u.teacher}`);
         }
@@ -996,6 +1015,14 @@
     R = R || resolveConstraints();
     opts = opts || {};
     const secKeys = Object.keys(timetable || {});
+    // infer grid dims from the timetable itself
+    let Dg = 5, Pg = 5;
+    for (const sec of secKeys) {
+      const g = timetable[sec];
+      if (g && g.length) { Dg = g.length; Pg = g[0].length; break; }
+    }
+    const allDays = []; for (let i = 0; i < Dg; i++) allDays.push(i);
+    const allSlots = []; for (let i = 0; i < Pg; i++) allSlots.push(i);
     // Substitute pool: default to the college roster; `opts.roster` REPLACES it
     // (so callers can pass a custom pool, e.g. directory faculty or a test subset).
     let roster;
@@ -1015,8 +1042,8 @@
     for (const w of (unavailable || [])) {
       if (!w || !w.teacher) continue;
       const codes = codesOfFullName(w.teacher);
-      const days = _normIdx(w.days, DAY_OF, [0, 1, 2, 3, 4]);
-      const slots = _normIdx(w.slots, SLOT_OF, [0, 1, 2, 3, 4]);
+      const days = _normIdx(w.days, DAY_OF, allDays);
+      const slots = _normIdx(w.slots, SLOT_OF, allSlots);
       for (const c of codes) for (const d of days) for (const s of slots)
         blocked[c + "|" + d + "|" + s] = true;
     }
@@ -1030,7 +1057,7 @@
     for (const sec of secKeys) {
       const g = timetable[sec];
       if (!g) continue;
-      for (let d = 0; d < 5; d++) for (let s = 0; s < 5; s++) {
+      for (let d = 0; d < Dg; d++) for (let s = 0; s < Pg; s++) {
         const cell = g[d] && g[d][s];
         if (!cell) continue;
         for (const c of codesOfFullName(cell[1])) markBusy(d, s, c);
@@ -1042,7 +1069,7 @@
     for (const sec of secKeys) {
       const g = timetable[sec];
       if (!g) continue;
-      for (let d = 0; d < 5; d++) for (let s = 0; s < 5; s++) {
+      for (let d = 0; d < Dg; d++) for (let s = 0; s < Pg; s++) {
         const cell = g[d] && g[d][s];
         if (!cell) continue;
         const codes = codesOfFullName(cell[1]);
@@ -1143,13 +1170,21 @@
   function validateEngagement(timetable, R, assignments, unavailable) {
     R = R || resolveConstraints();
     const issues = [];
+    // infer grid dims from the timetable itself
+    let Dg = 5, Pg = 5;
+    for (const sec of Object.keys(timetable || {})) {
+      const g = timetable[sec];
+      if (g && g.length) { Dg = g.length; Pg = g[0].length; break; }
+    }
+    const allDays = []; for (let i = 0; i < Dg; i++) allDays.push(i);
+    const allSlots = []; for (let i = 0; i < Pg; i++) allSlots.push(i);
     // a cover must not himself be unavailable at that day+period
     const blocked = {};
     for (const w of (unavailable || [])) {
       if (!w || !w.teacher) continue;
       const codes = codesOfFullName(w.teacher);
-      const days = _normIdx(w.days, DAY_OF, [0, 1, 2, 3, 4]);
-      const slots = _normIdx(w.slots, SLOT_OF, [0, 1, 2, 3, 4]);
+      const days = _normIdx(w.days, DAY_OF, allDays);
+      const slots = _normIdx(w.slots, SLOT_OF, allSlots);
       for (const c of codes) for (const d of days) for (const s of slots)
         blocked[c + "|" + d + "|" + s] = true;
     }
@@ -1161,7 +1196,7 @@
     for (const sec of Object.keys(timetable || {})) {
       const g = timetable[sec];
       if (!g) continue;
-      for (let d = 0; d < 5; d++) for (let s = 0; s < 5; s++) {
+      for (let d = 0; d < Dg; d++) for (let s = 0; s < Pg; s++) {
         const cell = g[d] && g[d][s];
         if (!cell) continue;
         for (const c of codesOfFullName(cell[1])) markBusy(d, s, c);
@@ -1247,7 +1282,8 @@
     const busy = {};
     for (const sec in timetable) {
       const g = timetable[sec]; if (!g) continue;
-      for (let d = 0; d < 5; d++) for (let s = 0; s < 5; s++) {
+      const Dg = g.length, Pg = g[0].length;
+      for (let d = 0; d < Dg; d++) for (let s = 0; s < Pg; s++) {
         const cell = g[d] && g[d][s]; if (!cell) continue;
         for (const code of codesOfFullName(cell[1])) {
           const k = d + "|" + s;
@@ -1303,7 +1339,8 @@
     const busy = {};
     for (const sec in timetable) {
       const g = timetable[sec]; if (!g) continue;
-      for (let d = 0; d < 5; d++) for (let s = 0; s < 5; s++) {
+      const Dg = g.length, Pg = g[0].length;
+      for (let d = 0; d < Dg; d++) for (let s = 0; s < Pg; s++) {
         const cell = g[d] && g[d][s]; if (!cell) continue;
         for (const code of codesOfFullName(cell[1])) {
           const k = d + "|" + s;
@@ -1370,12 +1407,23 @@
   function generate(opts) {
     // No hard count cutoff by default: keep every distinct valid solution
     // until the time budget is exhausted. Pass maxCount>0 only to cap explicitly.
+    //
+    // Grid: `days` (1..6) and `periods` (1..8) select the ACTIVE timetable grid
+    // (capacity 6x8, see populations.js). Default = the historical 5x5, so all
+    // existing callers are unaffected. NOTE: sections must fill the whole active
+    // grid exactly (days*periods periods per section) — partial fill arrives with
+    // the BS expansion; a mismatch yields zero solutions.
+    const days = Math.max(1, Math.min(6, (opts && opts.days) || 5));
+    const periods = Math.max(1, Math.min(8, (opts && opts.periods) || 5));
+    D = days; P = periods;
+    DAYS = DAY_NAMES.slice(0, D);
+    SLOTS = PERIOD_LABELS.slice(0, P);
     const maxCount = (opts && opts.maxCount > 0) ? opts.maxCount : Infinity;
     const timeMs = (opts && opts.timeMs) || 15000;
     const seed = (opts && opts.seed) || (Date.now() % 2147483647);
     const R = resolveConstraints(opts && opts.constraints);
     const SECTIONS2 = normalizeSections(opts && opts.sections);
-    const key = JSON.stringify(SECTIONS2) + "|" + JSON.stringify(R);
+    const key = days + "x" + periods + "|" + JSON.stringify(SECTIONS2) + "|" + JSON.stringify(R);
     if (_Key !== key) {
       SECTIONS = SECTIONS2;
       UNITS = buildUnits(SECTIONS);
@@ -1416,6 +1464,7 @@
 
   return {
     DAYS, SLOTS, SECTIONS, TEACHER_FULL, RULES, UNITS,
+    CAPACITY: { days: 6, periods: 8 }, DAY_NAMES, PERIOD_LABELS,
     SLOT_OF, DAY_OF, DEFAULT_CONSTRAINTS, NAME_TO_CODE, resolveConstraints,
     DEFAULT_SECTIONS, normalizeSections, buildUnits,
     generate, validate, score, canonical, toTimetable, locksOk,
