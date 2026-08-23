@@ -187,6 +187,19 @@ def translate(req: TranslateRequest, user: dict = Depends(require_user)):
     return result
 
 
+class GITranslateRequest(BaseModel):
+    text: str = Field(..., description="the plain-language general instruction")
+    population: str = Field(default=None, description="optional population context (inter-1/bs-1/inter-2)")
+
+
+@app.post("/translate-gi")
+def translate_gi(req: GITranslateRequest, user: dict = Depends(require_user)):
+    """Translate a plain-language GENERAL instruction into the structured GI schema."""
+    if not (req.text or "").strip():
+        return {"error": "text is required"}
+    return llm_translate.translate_general_instruction(req.text.strip())
+
+
 class TweakTranslateRequest(BaseModel):
     text: str = Field(..., description="the plain-language tweak statement")
 
