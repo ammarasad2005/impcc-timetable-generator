@@ -81,6 +81,19 @@ def validate(data):
         for t in (pg.get("teachers") or []):
             if t not in codes:
                 issues.append("parallelGroup %s: unknown teacher %s" % (pg.get("id"), t))
+    # day-exclusive pairs: each course must exist in at least one section
+    for dx in (data.get("dayExclusivePairs") or []):
+        for course in (dx.get("courses") or []):
+            found = False
+            for pid in (data.get("populations") or {}):
+                for sec in (data["populations"][pid].get("sections") or []):
+                    if any(e.get("course") == course for e in sec.get("entries") or []):
+                        found = True
+                        break
+                if found:
+                    break
+            if not found:
+                issues.append("dayExclusivePair %s: course not found %s" % (dx.get("id"), course))
     for cc in (data.get("combinedClasses") or []):
         for side in ("a", "b"):
             ref = cc[side]

@@ -86,6 +86,20 @@
       for (const t of (pg.teachers || []))
         if (!codes.has(t)) issues.push("parallelGroup " + pg.id + ": unknown teacher " + t);
     }
+    // day-exclusive pairs: each course must exist in at least one section of
+    // its population; wherever both co-exist the rule applies
+    for (const dx of (data.dayExclusivePairs || [])) {
+      for (const course of (dx.courses || [])) {
+        let found = false;
+        for (const pid in (data.populations || {})) {
+          for (const sec of ((data.populations[pid] || {}).sections || [])) {
+            if ((sec.entries || []).some(e => e.course === course)) { found = true; break; }
+          }
+          if (found) break;
+        }
+        if (!found) issues.push("dayExclusivePair " + dx.id + ": course not found " + course);
+      }
+    }
     for (const cc of (data.combinedClasses || [])) {
       for (const side of ["a", "b"]) {
         const ref = cc[side];

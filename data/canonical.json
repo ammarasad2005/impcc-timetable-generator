@@ -940,16 +940,14 @@
        "periods": 2,
        "category": "General",
        "subcat": "COC",
-       "ch": 3,
-       "parallelGroup": "qr1-bsaf"
+       "ch": 3
       },
       {
        "course": "Quantitative Reasoning-I (Stat)",
        "courseCode": "EC-103",
        "subject": "Statistics",
        "teacher": "Tanveer",
-       "periods": 2,
-       "parallelGroup": "qr1-bsaf"
+       "periods": 2
       },
       {
        "course": "Functional English",
@@ -1215,16 +1213,14 @@
        "periods": 2,
        "category": "General",
        "subcat": "COC",
-       "ch": 3,
-       "parallelGroup": "qr1-bscm"
+       "ch": 3
       },
       {
        "course": "Quantitative Reasoning-I (Stat)",
        "courseCode": "EC-103",
        "subject": "Statistics",
        "teacher": "Tanveer",
-       "periods": 2,
-       "parallelGroup": "qr1-bscm"
+       "periods": 2
       },
       {
        "course": "Functional English",
@@ -1498,16 +1494,14 @@
        "periods": 2,
        "category": "General",
        "subcat": "COC",
-       "ch": 3,
-       "parallelGroup": "qr1-bba"
+       "ch": 3
       },
       {
        "course": "Quantitative Reasoning-I (Stat)",
        "courseCode": "EC-103",
        "subject": "Statistics",
        "teacher": "Tanveer",
-       "periods": 2,
-       "parallelGroup": "qr1-bba"
+       "periods": 2
       },
       {
        "course": "Functional English",
@@ -1732,45 +1726,17 @@
     "Ishfaq"
    ],
    "note": "ICS-II-B: students take EITHER Economics (Haroon) OR Statistics (Ishfaq), in parallel rooms."
-  },
+  }
+ ],
+ "dayExclusivePairs": [
   {
-   "id": "qr1-bsaf",
-   "course": "Quantitative Reasoning-I",
-   "periods": 2,
-   "sections": [
-    "BSAF-SEM-I"
+   "id": "qr1-math-stat",
+   "courses": [
+    "Quantitative Reasoning-I (Math)",
+    "Quantitative Reasoning-I (Stat)"
    ],
-   "teachers": [
-    "Najam",
-    "Tanveer"
-   ],
-   "note": "BSAF SEM-I: Math stream (Najam) or Stat stream (Tanveer) — either/or, EC-103."
-  },
-  {
-   "id": "qr1-bscm",
-   "course": "Quantitative Reasoning-I",
-   "periods": 2,
-   "sections": [
-    "BSCM-SEM-I"
-   ],
-   "teachers": [
-    "Najam",
-    "Tanveer"
-   ],
-   "note": "BSCM SEM-I: Math stream (Najam) or Stat stream (Tanveer) — either/or, EC-103."
-  },
-  {
-   "id": "qr1-bba",
-   "course": "Quantitative Reasoning-I",
-   "periods": 2,
-   "sections": [
-    "BBA-SEM-I"
-   ],
-   "teachers": [
-    "Najam",
-    "Tanveer"
-   ],
-   "note": "BBA SEM-I: Math stream (Najam) or Stat stream (Tanveer) — either/or, EC-103."
+   "softConsecutiveDays": true,
+   "note": "Both courses are compulsory (no either/or): Math on 2 days (Najam), Stat on 2 days (Tanveer); the pair never shares a day (hard). Each course preferably on two consecutive days (soft). Applies to every BS SEM-I class offering both."
   }
  ],
  "combinedClasses": [

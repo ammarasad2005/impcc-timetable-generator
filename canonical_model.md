@@ -76,9 +76,15 @@ faculty member in a section:
   `category` (Major/General/ID/CP), `subcat`, `ch` (credit hours).
 - **Partial fill**: BS classes occupy 18–24 of the 25 active cells (free cells
   become "Library Work" per the BS rules; first/last active periods must stay
-  occupied). Inter sections fill all 25.
+  occupied). BS SEM-I classes fill all 25 (QR Math + Stat both count).
+  Inter sections fill all 25.
 
-## 4. Parallel groups (either/or blocks)
+## 4. Course relationships
+
+Two structural relationships link courses (both are data; solvers enforce them
+from PR-3 on):
+
+### 4.1 Parallel groups — either/or blocks
 
 ```json
 { "id": "ics2b-econ-stat", "course": "Economics/Statistics", "periods": 4,
@@ -86,12 +92,26 @@ faculty member in a section:
 ```
 
 Students choose ONE stream; both teachers are occupied simultaneously (two
-rooms); the section grid uses `periods` cells **once**. Four groups exist:
-ICS-II-B Economics/Statistics (Haroon|Ishfaq, 4/wk) and one per BS SEM-I class
-for Quantitative Reasoning-I Math|Stat (Najam|Tanveer, 2/wk, EC-103 4a/4b).
-> Interpretation flag: the BS QR 4a/4b pair is read as either/or (same course
-> code, alternative streams) — so SEM-I classes fill 23 of 25 cells. Flipping
-> the reading is a data change (drop the `parallelGroup` refs), not a code change.
+rooms); the section grid uses `periods` cells **once**. Exactly one group
+exists: ICS-II-B Economics/Statistics (Haroon | Ishfaq, 4/wk).
+
+> Resolved interpretation: the BS **Quantitative Reasoning-I** 4a/4b pair is
+> **NOT** a parallel group — both courses are compulsory (see 4.2).
+
+### 4.2 Day-exclusive pairs — compulsory courses that never share a day
+
+```json
+{ "id": "qr1-math-stat",
+  "courses": ["Quantitative Reasoning-I (Math)", "Quantitative Reasoning-I (Stat)"],
+  "softConsecutiveDays": true }
+```
+
+QR-I Math (Najam, 2/wk) and QR-I Stat (Tanveer, 2/wk) are **both compulsory**
+for every BS SEM-I class: Math runs on 2 days, Stat on 2 days, and the pair
+**never shares a day** (hard rule — a day with one contains none of the other).
+Each course preferably sits on two **consecutive** days (soft preference).
+Both courses count toward the section grid normally, so SEM-I classes fill
+all 25 cells. The rule applies to every section offering both courses.
 
 ## 5. Combined classes
 
@@ -139,7 +159,8 @@ page; the data shape is final.
   (after `extendTeachers`/`extend_teachers` registered the directory).
 - `solverConstraints()` — the constraints edits-model form.
 - `sectionFill`, `teacherLoad(code, populations)` — grid-fill and load analysis
-  (either/or groups count for every member teacher).
+  (either/or groups count for every member teacher; combined classes count
+  once per group; day-exclusive pairs count normally for both courses).
 
 Solving the **new** dataset (partial fill, new rules, generalized parallel
 groups) is the solver-extension PR; until then the solvers' built-in defaults
