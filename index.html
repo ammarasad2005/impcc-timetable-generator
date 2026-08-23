@@ -175,6 +175,11 @@ select#comboSel:focus{outline:2px solid var(--amber);outline-offset:1px}
 .card-pdf:hover{background:var(--amber);color:#fff}
 .card-img{color:var(--ics-deep);background:var(--ics-tint);border:1px solid var(--ics)}
 .card-img:hover{background:var(--ics);color:#fff}
+.sim-banner{background:var(--amber-tint);border:1px solid var(--amber);border-radius:10px;padding:12px 14px;margin-bottom:12px;font-size:13px;color:var(--amber-deep)}
+.sim-banner .sim-actions{float:right;display:flex;gap:6px}
+.sim-verdict{margin-top:8px;padding-top:8px;border-top:1px dashed var(--amber);font-size:12.5px}
+.sim-fail{background:var(--red);color:#fff;font-size:10.5px;font-weight:600;border-radius:6px;padding:3px 8px;display:inline-block;margin-bottom:6px}
+.cons-card.sim-edited{border-color:var(--amber);box-shadow:0 0 0 2px var(--amber-tint)}
 .cons-note{background:var(--surface);border:1px solid var(--line);border-left:7px solid var(--green);border-radius:12px;padding:12px 16px;margin-bottom:16px;font-size:13px;color:var(--ink2)}
 .cons-note b{color:var(--green-deep)}
 .cons-actions{margin-left:auto;display:inline-flex;gap:6px;float:right}
@@ -1819,7 +1824,8 @@ function persist(){
     localStorage.setItem(storeKeyForShift(),JSON.stringify({
       combos:combos.map(c=>({score:c.score,penalty:c.penalty||0,violations:c.violations||[],via:c.via,tt:c.tt})),
       selected:state.selected,view:state.view,sectionFilter:state.sectionFilter,
-      cpsatDone:state.cpsatDone,cpsatMerged:state.cpsatMerged
+      cpsatDone:state.cpsatDone,cpsatMerged:state.cpsatMerged,
+      edits:state.edits||[],tweaks:state.tweaks||[]
     }));
   }catch(e){}
 }
@@ -1837,6 +1843,8 @@ function restore(){
     state.cpsatDone=!!data.cpsatDone;
     state.cpsatMerged=data.cpsatMerged||0;
     state.selected=(data.selected!=null&&state.combos.some(o=>o.id===data.selected))?data.selected:null;
+    if(Array.isArray(data.edits)&&data.edits.length)state.edits=data.edits;
+    if(Array.isArray(data.tweaks))state.tweaks=data.tweaks;
     return state.combos.length>0;
   }catch(e){return false;}
 }
@@ -2037,6 +2045,19 @@ mainEl.addEventListener('click',e=>{
   const consBtn=e.target.closest('[data-translate],[data-apply],[data-reset-one],#consDownload,#consUpload,#consReset');
   if(consBtn){
     if(consBtn.id==='consReset'){resetConstraints();return;}
+  if(consBtn.id==='consSim'){state.simMode=!state.simMode;if(!state.simMode){state.simEdits={};}renderMain();setTicker(state.simMode?'Simulation mode ON — edits below are hypothetical (Apply/Discard in the banner)':'Simulation mode OFF — edits are live','ok');return;}
+  if(consBtn.id==='simRefresh'){renderMain();setTicker('Simulation re-evaluated','ok');return;}
+  if(consBtn.id==='simDiscard'){state.simMode=false;state.simEdits={};renderMain();setTicker('Simulation discarded — real constraints untouched','ok');return;}
+  if(consBtn.id==='simApply'){
+    state.constraints=state.constraints||{};
+    for(const code in (state.simEdits||{})){
+      state.constraints[code]=state.constraints[code]||{name:code,edits:{}};
+      state.constraints[code].edits=Object.assign({},(state.constraints[code].edits||{}),state.simEdits[code]);
+    }
+    try{localStorage.setItem(CONST_KEY,JSON.stringify(state.constraints));}catch(e){}
+    pushToCloud();state.simMode=false;state.simEdits={};renderMain();
+    setTicker('Simulation applied to the real constraints ✓','ok');return;
+  }
     if(consBtn.id==='consDownload'){downloadConstraints();return;}
     if(consBtn.id==='consUpload'){$('consUploadInput').click();return;}
     const code=consBtn.dataset.translate||consBtn.dataset.apply||consBtn.dataset.resetOne;
@@ -2232,7 +2253,7 @@ function saveAllocation(){
 function renderAllocation(){
   const a=getWorkingAllocation();const roster=rosterNames();
   let h='<div class="cons-note"><b>Course allocation is data.</b> Set the teacher and weekly periods for each subject. Every section must total <b>25 periods</b>. '+(SB&&SB.loggedIn?'Signed in — saving syncs to Supabase across devices.':'Not signed in — saved locally (sign in to sync).')+'<span class="cons-actions"><button class="mini-export" id="allocSave">💾 Save allocation</button></span></div>';
-  h+='<div class="cons-grid">';
+  h+=simBar;h+='<div class="cons-grid">';
   for(const sec of SECTIONS){
     const key=sec.id;const subs=(a[key]&&a[key].subjects)||[];const total=sectionTotal(subs);
     h+='<article class="cons-card'+(total!==25?' edited':'')+'"><header><h4>'+esc(sec.label)+'</h4><span class="stag" data-total="'+key+'" style="'+(total===25?'':'color:var(--red);border-color:var(--red)')+'">'+total+'/25</span></header><div class="alloc-rows">';
@@ -2477,7 +2498,7 @@ function removeRule(code,key){
   setTicker('Removed "'+(RULE_META[key]?RULE_META[key].label:key)+'" for '+displayNameOf(code),'ok');
   renderMain();
 }
-function saveRuleEdit(code,key,value){
+function saveRuleEdit(code,key,value){ if(simActive()){ const cur=simRulesOf(code)||{}; if(value===null)delete cur[key];else cur[key]=value; simSetRules(code,cur); renderMain(); setTicker('Simulation rule updated — press Re-evaluate','ok'); return; }
   const o=ensureOverride(code);
   if(value===null||(Array.isArray(value)&&!value.length))o.edits[key]=null;
   else o.edits[key]=value;
@@ -2520,14 +2541,24 @@ function ruleEditorHTML(code,key,value){
 }
 function renderConstraints(){
   const entries=constraintEntries();
-  const res=IMPCC_SOLVER.resolveConstraints(state.constraints);
-  let h='<div class="cons-note">'+(SB&&SB.loggedIn?'':'<b style="color:var(--amber-deep)">🔒 Sign in to unlock AI translation & cloud sync. </b>')+'<b>Faculty constraints are data.</b> Add, edit or remove individual rules below (✎ / ✕), or describe a change in plain language and press <b>✦ Translate with AI</b>, then <b>Apply</b>. Changes take effect on the next generation.<span class="cons-actions"><button class="mini-export" id="consDownload">⇩ Download</button><button class="mini-export" id="consUpload">⇧ Upload</button><button class="mini-export" id="consReset">Reset to defaults</button></span></div>';
+  const res=IMPCC_SOLVER.resolveConstraints(simActive()?simBaseConstraints():state.constraints);
+  const simRes=simActive()?simRuleVerdicts():null;
+  const simBar=simActive()?
+    '<div class="sim-banner"><b>⚡ SIMULATION MODE</b> — evaluating hypothetical constraints against combination '+(getSel()?('#'+rankOf(getSel(),sortedList())+' ('+getSel().score+' pts)'):'— none selected —')+'. Real constraints are NOT modified.'+
+    '<span class="sim-actions">'+
+    '<button class="mini-export" id="simRefresh">↻ Re-evaluate</button>'+
+    '<button class="mini-export" id="simApply">✓ Apply to real constraints</button>'+
+    '<button class="mini-export" id="simDiscard">✕ Discard simulation</button></span>'+
+    (simRes&&!simRes.error&&simRes.summary?('<div class="sim-verdict">'+(simRes.summary.issues.length?('⚠ <b>'+simRes.summary.issues.length+' hard violations</b> — this combination would be INVALID under these rules'):(simRes.summary.penalty>0?('⚑ <b>'+simRes.summary.violations.length+' soft violations</b> (+'+simRes.summary.penalty+' penalty)'):'✓ all constraints satisfied'))+'</div>'):'')+
+    '</div>':'';
+  let h='<div class="cons-note">'+(SB&&SB.loggedIn?'':'<b style="color:var(--amber-deep)">🔒 Sign in to unlock AI translation & cloud sync. </b>')+'<b>Faculty constraints are data.</b> Add, edit or remove individual rules below (✎ / ✕), or describe a change in plain language and press <b>✦ Translate with AI</b>, then <b>Apply</b>. Changes take effect on the next generation.<span class="cons-actions"><button class="mini-export" id="consDownload">⇩ Download</button><button class="mini-export" id="consUpload">⇧ Upload</button><button class="mini-export" id="consSim">⚡ Simulate</button><button class="mini-export" id="consReset">Reset to defaults</button></span></div>';
   h+='<input type="file" id="consUploadInput" accept="application/json" style="display:none">';
   h+='<div class="cons-grid">';
   for(const e of entries){
     const eff=((res[e.code]||{}).rules)||{};
     const keys=Object.keys(eff);
-    h+='<article class="cons-card'+(e.overridden?' edited':'')+'">';
+    h+='<article class="cons-card'+(e.overridden?' edited':'')+(simActive()&&simRulesOf(e.code)?' sim-edited':'')+'">'
+    +(simActive()&&simRes&&!simRes.error&&simRes.verdicts[e.code]?'<div class="sim-fail">⚑ would violate: '+simRes.verdicts[e.code].length+' rule'+(simRes.verdicts[e.code].length===1?'':'s')+'</div>':'')
     h+='<header><h4>'+esc(e.name)+'</h4>'+(e.hasDefault?'<span class="stag">default</span>':'')+(e.overridden?'<span class="stag edited">edited</span>':'')+'</header>';
     h+='<div class="cons-rules-ed">';
     if(keys.length){
@@ -3173,11 +3204,13 @@ function openCellEditor(ds,cellEl){
   el.innerHTML='<h3>Edit cell — '+esc(ds.sec)+' · '+DAYS[+ds.d]+' '+SLOTS[+ds.s]+'</h3>'+
     '<div class="ce-cur">Current: <b>'+esc(ds.subj)+'</b> — '+esc(ds.teacher)+'</div>'+
     '<select id="ceSelect">'+opts+'</select>'+
-    '<div class="ce-actions"><button class="mini-export" id="ceSet">Set (force)</button><button class="mini-export" id="ceRemove">Remove (forbid)</button><button class="mini-export" id="ceClose">Close</button></div>';
+    '<div class="ce-actions"><button class="mini-export" id="ceSet">Set (force)</button><button class="mini-export" id="ceRemove">Remove (forbid)</button><button class="mini-export" id="ceLockDay">🔒 Lock day</button><button class="mini-export" id="ceLockSec">🔒 Lock section</button><button class="mini-export" id="ceClose">Close</button></div>';
   el.style.display='block';
   document.getElementById('ceSet').addEventListener('click',function(){applyCellEdit('force');});
   document.getElementById('ceRemove').addEventListener('click',function(){applyCellEdit('forbid');});
   document.getElementById('ceClose').addEventListener('click',closeCellEditor);
+document.getElementById('ceLockDay').addEventListener('click',function(){applyCellEdit('lock-day');});
+document.getElementById('ceLockSec').addEventListener('click',function(){applyCellEdit('lock-section');});
 }
 function closeCellEditor(){document.getElementById('cellEditor').style.display='none';}
 document.addEventListener('click',function(e){
@@ -3189,6 +3222,25 @@ document.addEventListener('click',function(e){
 });
 function applyCellEdit(mode){
   const c=state.editCell;if(!c)return;
+  if(mode==='lock-day'||mode==='lock-section'){
+    // lock every currently-filled cell of the day (or the whole section)
+    const c2=getSel();if(!c2)return;
+    const tt=c2.tt[c.sec];
+    const days=mode==='lock-day'?[c.d]:DAYS.map(function(_,i){return i;});
+    let n=0;
+    for(const d of days){
+      for(let sl=0;sl<(tt[d]?tt[d].length:0);sl++){
+        const cell=tt[d][sl];
+        if(!cell||!cell.subj||cell.library)continue;
+        state.edits=(state.edits||[]).filter(function(e){return !(e.sec===c.sec&&e.d===d&&e.s===sl);});
+        state.edits.push({sec:c.sec,d:d,s:sl,mode:'force',subject:cell.subj,teacher:cell.teacher});
+        n++;
+      }
+    }
+    closeCellEditor();renderMain();renderChrome();
+    setTicker(n+' cell'+(n===1?'':'s')+' locked ('+(mode==='lock-day'?DAYS[c.d]+' on '+c.sec:'entire '+c.sec)+') — press Re-optimize','ok');
+    return;
+  }
   if(mode==='force'){
     const sel=document.getElementById('ceSelect').value.split(' — ');
     if(sel.length<2)return;
@@ -3211,10 +3263,32 @@ function reoptimizeWithEdits(){
   setTicker('Re-optimizing around '+locks.length+' edit'+(locks.length===1?'':'s')+'…','run',true);
   renderChrome();
   const t0=Date.now();
-  const res=IMPCC_SOLVER.generate({maxCount:0,timeMs:24000,seed:(Math.random()*2147483647)|0,constraints:effectiveConstraints(),sections:currentAllocation(),locks:locks});
+  let res;
+  if(CANON&&CTXS){
+    // context path: re-solve the shift with the current cells as locks via
+    // candidate post-filtering (the JS engine accepts generated solutions
+    // that keep every force-locked cell; forbid cells reject solutions)
+    const ctx=buildShiftContext();
+    const r=CTXS.generateContext(ctx,{timeMs:20000,seed:(Math.random()*2147483647)|0,maxCount:0});
+    const nameOf=function(cd){return CANON?CANON.displayName(cd):cd;};
+    const filtered=(r.solutions||[]).filter(function(sol){
+      const tt=CTXS.modelToTimetable(sol.grids,r.model,nameOf);
+      return locks.every(function(L){
+        const cell=tt[L.sec]&&tt[L.sec][L.d]&&tt[L.sec][L.d][L.s];
+        if(!cell)return false;
+        if(L.mode==='force')return cell[0]===L.subject&&cell[1]===L.teacher;
+        return !(cell[0]===L.subject&&cell[1]===L.teacher);
+      });
+    });
+    res={solutions:filtered.map(function(sol){
+      return {score:sol.score,penalty:sol.penalty,violations:sol.violations,timetable:CTXS.modelToTimetable(sol.grids,r.model,nameOf)};
+    })};
+  }else{
+    res=IMPCC_SOLVER.generate({maxCount:0,timeMs:24000,seed:(Math.random()*2147483647)|0,constraints:effectiveConstraints(),sections:currentAllocation(),locks:locks});
+  }
   state.running=false;state.stopRequested=false;progFill.style.width='0%';
   if(res.solutions&&res.solutions.length){
-    state.combos=res.solutions.map(function(sol){return makeCombo(sol,'browser');});
+    state.combos=res.solutions.map(function(sol){return (sol.violations!==undefined)?makeCtxCombo(sol,'browser'):makeCombo(sol,'browser');});
     state.seen=new Set();
     const list=sortedList();state.selected=list[0].id;
     state.edits=[];state.editMode=false;
@@ -3744,6 +3818,93 @@ async function exportAllImages(){
 
 
 /* ---------- population layer (inter-1 / bs-1 / inter-2) ---------- */
+/* ---------- constraints simulation mode (Q3) ---------- */
+/* The admin evaluates HYPOTHETICAL faculty constraints against the currently
+   selected timetable combination. The real constraints are never touched:
+   simulated rules live in state.simRules and are rendered as an overlay on
+   the Constraints page with a per-rule verdict. */
+function simActive(){ return !!state.simMode; }
+function simRulesOf(code){
+  state.simEdits = state.simEdits || {};
+  return state.simEdits[code] || null;
+}
+function simSetRules(code, edits){
+  state.simEdits = state.simEdits || {};
+  if(edits && Object.keys(edits).length) state.simEdits[code] = edits;
+  else delete state.simEdits[code];
+}
+function simBaseConstraints(){
+  // effective constraints + all simulated edits merged (sim wins)
+  const merged = JSON.parse(JSON.stringify(state.constraints || {}));
+  for(const code in (state.simEdits || {})){
+    merged[code] = merged[code] || { name: code, edits: {} };
+    merged[code].edits = Object.assign({}, (merged[code].edits || {}), state.simEdits[code]);
+  }
+  return merged;
+}
+/* evaluate the simulated constraint set against the SELECTED combination */
+function simEvaluate(){
+  const c = getSel();
+  if(!c) return null;
+  if(!CANON || !CTXS) return { error: 'Simulation requires the population data layer.' };
+  try {
+    const ctx = buildShiftContext();
+    ctx.constraints = CANON.solverConstraints();  // resolved base
+    // merge sim edits as overrides
+    const resolved = IMPCC_SOLVER.resolveConstraints(simBaseConstraints());
+    ctx.constraints = resolved;
+    const model = CTXS.contextToModel(ctx);
+    // convert the UI timetable (cells) back to unit-id grids for evaluate()
+    const grids = {};
+    const byCourseKey = {};
+    for(const u of model.units){
+      for(const sec of u.secs){
+        const cname = u.courseBySec[sec];
+        const tname = u.group ? u.members.map(function(m){return CANON.displayName(m);}).join(' / ') : CANON.displayName(u.teacher);
+        byCourseKey[sec + '|' + cname + '|' + tname] = u.id;
+      }
+    }
+    for(const section of model.sections){
+      const tt = c.tt[section.key];
+      if(!tt){ grids[section.key] = null; continue; }
+      const g = [];
+      for(let d = 0; d < model.days; d++){
+        const row = [];
+        for(let sl = 0; sl < model.periods; sl++){
+          const cell = (tt[d] && tt[d][sl]) || null;
+          if(!cell || cell.library || !cell.subj){ row.push(null); continue; }
+          const uid = byCourseKey[section.key + '|' + cell.subj + '|' + cell.teacher];
+          row.push(uid !== undefined ? uid : null);
+        }
+        g.push(row);
+      }
+      grids[section.key] = g;
+    }
+    const ev = CTXS.evaluate(grids, model);
+    const sc = CTXS.shuffleScore(grids, model);
+    return { issues: ev.issues, violations: ev.violations, penalty: ev.penalty,
+             score: sc, model: model };
+  } catch(err){
+    return { error: err.message };
+  }
+}
+function simRuleVerdicts(){
+  /* per-teacher verdict: which simulated rules pass/fail on this combination */
+  const res = simEvaluate();
+  if(!res || res.error) return res;
+  const out = {};
+  for(const v of (res.violations || [])){
+    const parts2 = v.rule.split(':');
+    const code = parts2[0], ruleKey = parts2[1];
+    (out[code] = out[code] || []).push({ key: ruleKey, detail: v.detail, penalty: v.penalty });
+  }
+  for(const iss of (res.issues || []).slice(0, 50)){
+    const m = iss.match(/^([A-Za-z0-9]+)\s/);
+    if(m) (out[m[1]] = out[m[1]] || []).push({ key: 'hard', detail: iss, penalty: 0 });
+  }
+  return { verdicts: out, summary: res };
+}
+
 const POPS = (typeof IMPCC_POPULATIONS !== 'undefined') ? IMPCC_POPULATIONS : null;
 const CANON = (typeof IMPCC_CANONICAL !== 'undefined') ? IMPCC_CANONICAL : null;
 const CTXS = (typeof IMPCC_CONTEXT_SOLVER !== 'undefined') ? IMPCC_CONTEXT_SOLVER : null;

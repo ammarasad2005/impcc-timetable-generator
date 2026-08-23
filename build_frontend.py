@@ -4167,5 +4167,155 @@ loadFaculty();
 loadTweaks();
 renderAuth();""")
 
+
+# =====================================================================
+# ---- 43) ADJUSTMENTS (PR-8): simulation mode, day/section locks, ----
+# ---- edits persistence, population-aware re-optimize -----------------
+# =====================================================================
+
+# (a1) simulation state + engine — injected before boot
+SIM_MODULE = '''
+/* ---------- constraints simulation mode (Q3) ---------- */
+/* The admin evaluates HYPOTHETICAL faculty constraints against the currently
+   selected timetable combination. The real constraints are never touched:
+   simulated rules live in state.simRules and are rendered as an overlay on
+   the Constraints page with a per-rule verdict. */
+function simActive(){ return !!state.simMode; }
+function simRulesOf(code){
+  state.simEdits = state.simEdits || {};
+  return state.simEdits[code] || null;
+}
+function simSetRules(code, edits){
+  state.simEdits = state.simEdits || {};
+  if(edits && Object.keys(edits).length) state.simEdits[code] = edits;
+  else delete state.simEdits[code];
+}
+function simBaseConstraints(){
+  // effective constraints + all simulated edits merged (sim wins)
+  const merged = JSON.parse(JSON.stringify(state.constraints || {}));
+  for(const code in (state.simEdits || {})){
+    merged[code] = merged[code] || { name: code, edits: {} };
+    merged[code].edits = Object.assign({}, (merged[code].edits || {}), state.simEdits[code]);
+  }
+  return merged;
+}
+/* evaluate the simulated constraint set against the SELECTED combination */
+function simEvaluate(){
+  const c = getSel();
+  if(!c) return null;
+  if(!CANON || !CTXS) return { error: 'Simulation requires the population data layer.' };
+  try {
+    const ctx = buildShiftContext();
+    ctx.constraints = CANON.solverConstraints();  // resolved base
+    // merge sim edits as overrides
+    const resolved = IMPCC_SOLVER.resolveConstraints(simBaseConstraints());
+    ctx.constraints = resolved;
+    const model = CTXS.contextToModel(ctx);
+    // convert the UI timetable (cells) back to unit-id grids for evaluate()
+    const grids = {};
+    const byCourseKey = {};
+    for(const u of model.units){
+      for(const sec of u.secs){
+        const cname = u.courseBySec[sec];
+        const tname = u.group ? u.members.map(function(m){return CANON.displayName(m);}).join(' / ') : CANON.displayName(u.teacher);
+        byCourseKey[sec + '|' + cname + '|' + tname] = u.id;
+      }
+    }
+    for(const section of model.sections){
+      const tt = c.tt[section.key];
+      if(!tt){ grids[section.key] = null; continue; }
+      const g = [];
+      for(let d = 0; d < model.days; d++){
+        const row = [];
+        for(let sl = 0; sl < model.periods; sl++){
+          const cell = (tt[d] && tt[d][sl]) || null;
+          if(!cell || cell.library || !cell.subj){ row.push(null); continue; }
+          const uid = byCourseKey[section.key + '|' + cell.subj + '|' + cell.teacher];
+          row.push(uid !== undefined ? uid : null);
+        }
+        g.push(row);
+      }
+      grids[section.key] = g;
+    }
+    const ev = CTXS.evaluate(grids, model);
+    const sc = CTXS.shuffleScore(grids, model);
+    return { issues: ev.issues, violations: ev.violations, penalty: ev.penalty,
+             score: sc, model: model };
+  } catch(err){
+    return { error: err.message };
+  }
+}
+function simRuleVerdicts(){
+  /* per-teacher verdict: which simulated rules pass/fail on this combination */
+  const res = simEvaluate();
+  if(!res || res.error) return res;
+  const out = {};
+  for(const v of (res.violations || [])){
+    const parts2 = v.rule.split(':');
+    const code = parts2[0], ruleKey = parts2[1];
+    (out[code] = out[code] || []).push({ key: ruleKey, detail: v.detail, penalty: v.penalty });
+  }
+  for(const iss of (res.issues || []).slice(0, 50)){
+    const m = iss.match(/^([A-Za-z0-9]+)\\s/);
+    if(m) (out[m[1]] = out[m[1]] || []).push({ key: 'hard', detail: iss, penalty: 0 });
+  }
+  return { verdicts: out, summary: res };
+}
+'''
+rep('/* ---------- population layer (inter-1 / bs-1 / inter-2) ---------- */',
+    '/* ---------- population layer (inter-1 / bs-1 / inter-2) ---------- */' + SIM_MODULE)
+
+# (a2) simulation banner + per-card verdicts in renderConstraints
+rep('function renderConstraints(){\n  const entries=constraintEntries();\n  const res=IMPCC_SOLVER.resolveConstraints(state.constraints);',
+    'function renderConstraints(){\n  const entries=constraintEntries();\n  const res=IMPCC_SOLVER.resolveConstraints(simActive()?simBaseConstraints():state.constraints);\n  const simRes=simActive()?simRuleVerdicts():null;\n  const simBar=simActive()?\n    \'<div class="sim-banner"><b>⚡ SIMULATION MODE</b> — evaluating hypothetical constraints against combination \'+(getSel()?(\'#\'+rankOf(getSel(),sortedList())+\' (\'+getSel().score+\' pts)\'):\'— none selected —\')+\'. Real constraints are NOT modified.\'+\n    \'<span class="sim-actions">\'+\n    \'<button class="mini-export" id="simRefresh">↻ Re-evaluate</button>\'+\n    \'<button class="mini-export" id="simApply">✓ Apply to real constraints</button>\'+\n    \'<button class="mini-export" id="simDiscard">✕ Discard simulation</button></span>\'+\n    (simRes&&!simRes.error&&simRes.summary?(\'<div class="sim-verdict">\'+(simRes.summary.issues.length?(\'⚠ <b>\'+simRes.summary.issues.length+\' hard violations</b> — this combination would be INVALID under these rules\'):(simRes.summary.penalty>0?(\'⚑ <b>\'+simRes.summary.violations.length+\' soft violations</b> (+\'+simRes.summary.penalty+\' penalty)\'):\'✓ all constraints satisfied\'))+\'</div>\'):\'\')+\n    \'</div>\':\'\';')
+
+rep('h+=\'<div class="cons-grid">\';',
+    'h+=simBar;h+=\'<div class="cons-grid">\';')
+
+rep('h+=\'<article class="cons-card\'+(e.overridden?\' edited\':\'\')+\'">\';',
+    'h+=\'<article class="cons-card\'+(e.overridden?\' edited\':\'\')+(simActive()&&simRulesOf(e.code)?\' sim-edited\':\'\')+\'">\'\n    +(simActive()&&simRes&&!simRes.error&&simRes.verdicts[e.code]?\'<div class="sim-fail">⚑ would violate: \'+simRes.verdicts[e.code].length+\' rule\'+(simRes.verdicts[e.code].length===1?\'\':\'s\')+\'</div>\':\'\')')
+
+# (a3) simulation CSS
+rep('.cons-note{',
+    '.sim-banner{background:var(--amber-tint);border:1px solid var(--amber);border-radius:10px;padding:12px 14px;margin-bottom:12px;font-size:13px;color:var(--amber-deep)}\n.sim-banner .sim-actions{float:right;display:flex;gap:6px}\n.sim-verdict{margin-top:8px;padding-top:8px;border-top:1px dashed var(--amber);font-size:12.5px}\n.sim-fail{background:var(--red);color:#fff;font-size:10.5px;font-weight:600;border-radius:6px;padding:3px 8px;display:inline-block;margin-bottom:6px}\n.cons-card.sim-edited{border-color:var(--amber);box-shadow:0 0 0 2px var(--amber-tint)}\n.cons-note{')
+
+# (a4) rule edits route to simulation when active
+rep('function ensureOverride(code){',
+    'function ensureOverride(code){')
+rep('function saveRuleEdit(code,key,value){',
+    "function saveRuleEdit(code,key,value){ if(simActive()){ const cur=simRulesOf(code)||{}; if(value===null)delete cur[key];else cur[key]=value; simSetRules(code,cur); renderMain(); setTicker('Simulation rule updated — press Re-evaluate','ok'); return; }")
+
+rep('<button class="mini-export" id="consReset">Reset to defaults</button>',
+    '<button class="mini-export" id="consSim">⚡ Simulate</button><button class="mini-export" id="consReset">Reset to defaults</button>')
+
+rep("if(consBtn.id==='consReset'){resetConstraints();return;}",
+    "if(consBtn.id==='consReset'){resetConstraints();return;}\n  if(consBtn.id==='consSim'){state.simMode=!state.simMode;if(!state.simMode){state.simEdits={};}renderMain();setTicker(state.simMode?'Simulation mode ON — edits below are hypothetical (Apply/Discard in the banner)':'Simulation mode OFF — edits are live','ok');return;}\n  if(consBtn.id==='simRefresh'){renderMain();setTicker('Simulation re-evaluated','ok');return;}\n  if(consBtn.id==='simDiscard'){state.simMode=false;state.simEdits={};renderMain();setTicker('Simulation discarded — real constraints untouched','ok');return;}\n  if(consBtn.id==='simApply'){\n    state.constraints=state.constraints||{};\n    for(const code in (state.simEdits||{})){\n      state.constraints[code]=state.constraints[code]||{name:code,edits:{}};\n      state.constraints[code].edits=Object.assign({},(state.constraints[code].edits||{}),state.simEdits[code]);\n    }\n    try{localStorage.setItem(CONST_KEY,JSON.stringify(state.constraints));}catch(e){}\n    pushToCloud();state.simMode=false;state.simEdits={};renderMain();\n    setTicker('Simulation applied to the real constraints ✓','ok');return;\n  }")
+
+# (b) day/section lock options in the cell editor
+rep('\'<div class="ce-actions"><button class="mini-export" id="ceSet">Set (force)</button><button class="mini-export" id="ceRemove">Remove (forbid)</button><button class="mini-export" id="ceClose">Close</button></div>\'',
+    '\'<div class="ce-actions"><button class="mini-export" id="ceSet">Set (force)</button><button class="mini-export" id="ceRemove">Remove (forbid)</button><button class="mini-export" id="ceLockDay">🔒 Lock day</button><button class="mini-export" id="ceLockSec">🔒 Lock section</button><button class="mini-export" id="ceClose">Close</button></div>\'')
+
+rep("document.getElementById('ceClose').addEventListener('click',closeCellEditor);",
+    "document.getElementById('ceClose').addEventListener('click',closeCellEditor);\ndocument.getElementById('ceLockDay').addEventListener('click',function(){applyCellEdit('lock-day');});\ndocument.getElementById('ceLockSec').addEventListener('click',function(){applyCellEdit('lock-section');});")
+
+# (b2) applyCellEdit handles the lock modes
+rep("function applyCellEdit(mode){\n  const c=state.editCell;if(!c)return;\n  if(mode==='force'){",
+    "function applyCellEdit(mode){\n  const c=state.editCell;if(!c)return;\n  if(mode==='lock-day'||mode==='lock-section'){\n    // lock every currently-filled cell of the day (or the whole section)\n    const c2=getSel();if(!c2)return;\n    const tt=c2.tt[c.sec];\n    const days=mode==='lock-day'?[c.d]:DAYS.map(function(_,i){return i;});\n    let n=0;\n    for(const d of days){\n      for(let sl=0;sl<(tt[d]?tt[d].length:0);sl++){\n        const cell=tt[d][sl];\n        if(!cell||!cell.subj||cell.library)continue;\n        state.edits=(state.edits||[]).filter(function(e){return !(e.sec===c.sec&&e.d===d&&e.s===sl);});\n        state.edits.push({sec:c.sec,d:d,s:sl,mode:'force',subject:cell.subj,teacher:cell.teacher});\n        n++;\n      }\n    }\n    closeCellEditor();renderMain();renderChrome();\n    setTicker(n+' cell'+(n===1?'':'s')+' locked ('+(mode==='lock-day'?DAYS[c.d]+' on '+c.sec:'entire '+c.sec)+') — press Re-optimize','ok');\n    return;\n  }\n  if(mode==='force'){")
+
+# (c) edits + tweaks persist to localStorage (survive refresh)
+rep('      cpsatDone:state.cpsatDone,cpsatMerged:state.cpsatMerged\n    }));',
+    '      cpsatDone:state.cpsatDone,cpsatMerged:state.cpsatMerged,\n      edits:state.edits||[],tweaks:state.tweaks||[]\n    }));')
+
+rep('    state.selected=(data.selected!=null&&state.combos.some(o=>o.id===data.selected))?data.selected:null;\n    return state.combos.length>0;',
+    '    state.selected=(data.selected!=null&&state.combos.some(o=>o.id===data.selected))?data.selected:null;\n    if(Array.isArray(data.edits)&&data.edits.length)state.edits=data.edits;\n    if(Array.isArray(data.tweaks))state.tweaks=data.tweaks;\n    return state.combos.length>0;')
+
+# (d) re-optimize uses the context path when available
+rep('  const res=IMPCC_SOLVER.generate({maxCount:0,timeMs:24000,seed:(Math.random()*2147483647)|0,constraints:effectiveConstraints(),sections:currentAllocation(),locks:locks});',
+    "  let res;\n  if(CANON&&CTXS){\n    // context path: re-solve the shift with the current cells as locks via\n    // candidate post-filtering (the JS engine accepts generated solutions\n    // that keep every force-locked cell; forbid cells reject solutions)\n    const ctx=buildShiftContext();\n    const r=CTXS.generateContext(ctx,{timeMs:20000,seed:(Math.random()*2147483647)|0,maxCount:0});\n    const nameOf=function(cd){return CANON?CANON.displayName(cd):cd;};\n    const filtered=(r.solutions||[]).filter(function(sol){\n      const tt=CTXS.modelToTimetable(sol.grids,r.model,nameOf);\n      return locks.every(function(L){\n        const cell=tt[L.sec]&&tt[L.sec][L.d]&&tt[L.sec][L.d][L.s];\n        if(!cell)return false;\n        if(L.mode==='force')return cell[0]===L.subject&&cell[1]===L.teacher;\n        return !(cell[0]===L.subject&&cell[1]===L.teacher);\n      });\n    });\n    res={solutions:filtered.map(function(sol){\n      return {score:sol.score,penalty:sol.penalty,violations:sol.violations,timetable:CTXS.modelToTimetable(sol.grids,r.model,nameOf)};\n    })};\n  }else{\n    res=IMPCC_SOLVER.generate({maxCount:0,timeMs:24000,seed:(Math.random()*2147483647)|0,constraints:effectiveConstraints(),sections:currentAllocation(),locks:locks});\n  }")
+
+rep("    state.combos=res.solutions.map(function(sol){return makeCombo(sol,'browser');});\n    state.seen=new Set();",
+    "    state.combos=res.solutions.map(function(sol){return (sol.violations!==undefined)?makeCtxCombo(sol,'browser'):makeCombo(sol,'browser');});\n    state.seen=new Set();")
+
+
 io.open(DST, "w", encoding="utf-8").write(src)
 print("OK → wrote", DST, "(", len(src), "bytes )")
