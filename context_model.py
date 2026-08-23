@@ -448,6 +448,10 @@ def evaluate(grids, model):
                 flag(f"engaged only {len(per_day)} days (<{rules['min_days_engaged']})",
                      "min_days_engaged", "min_days_engaged" in soft)
         for e in (rules.get("stream_slots_required") or []):
+            # the stream must exist in this context — otherwise vacuous
+            if not any(_sec_stream(sec) == e["stream"]
+                       for u in my_units for sec in u["secs"]):
+                continue
             for sl in e["slots"]:
                 si = SLOT_OF[sl]
                 days = {d for (d, s, sec, u) in cells

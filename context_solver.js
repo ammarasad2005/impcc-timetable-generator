@@ -638,6 +638,11 @@
         }
       }
       for (const e of (rules.stream_slots_required || [])) {
+        // stream must EXIST in this context — otherwise the requirement is vacuous
+        const hasStream = myUnits.some(function(u2) {
+          return u2.secs.some(function(sec2) { return secStream(sec2) === e.stream; });
+        });
+        if (!hasStream) continue;
         for (const sl of e.slots) {
           const si = SLOT_OF[sl];
           const days = new Set();
