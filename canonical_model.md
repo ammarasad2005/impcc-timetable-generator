@@ -166,3 +166,54 @@ Solving the **new** dataset (partial fill, new rules, generalized parallel
 groups) is the solver-extension PR; until then the solvers' built-in defaults
 (the previous dataset) remain the live path and the regression fixture
 (proven optimum 560).
+
+## 9. Solving the canonical model (PR-3)
+
+`canonical.solver_context(populations)` builds a **solve context** for one shift
+(shift 1 = `["inter-1", "bs-1"]` solved jointly — one solver domain, cross-level
+teachers cannot clash; shift 2 = `["inter-2"]`, operationally independent).
+`context_model.context_to_model(ctx)` transforms it into the unit model:
+combined pairs become **dual-section units** (one teacher, one room, both
+sections, identical cells), parallel groups become group units (all member
+teachers occupied), day-exclusive pairs link per section.
+
+`cp_solver.generate_context(ctx)` solves with CP-SAT:
+
+- **General piece encoding** — every piece has an independent slot var; days
+  stay distinct per unit. Splitting a 5/wk or 4/wk course across slots is
+  structurally allowed (BS sections can hold more 4/wk courses than period
+  columns; day+slot bans can make full-column monopolies infeasible) — the
+  shuffle tiers in the objective (100000/10000/100/10) keep single-slot forms
+  strongly preferred whenever feasible. Parallel groups are pinned to ONE slot.
+- **Hard rules** encoded: off-days, teacher availability (slots/days/day+slot
+  bans), stream-scoped availability (Tanveer's I.Com Thu/Fri P1–P3),
+  subject placement (`subject_slots`, `subject_forbidden_days`,
+  `subject_slot_days`), engagement minimums (distinct-day semantics),
+  `stream_slots_required` (≥4 distinct days per slot), inter 2/wk consecutive
+  days, day-exclusive pairs, BS first/last period occupied, section loads,
+  teacher non-overlap across ALL sections of the shift, non-overriding,
+  same-subject-same-day (inter only).
+- **Soft rules** (the `soft` list per constraint entry) are excluded from hard
+  domains and become objective penalties; Babar's P5-free and Millat's P1-free
+  are soft-marked (physically infeasible as hard with the current loads) —
+  every solution documents these violations. Soft preferences
+  (`soft_prefer_free_slots`, `soft_even_distribution`, individual spread,
+  QR consecutive days) are penalized in the objective too.
+- Every solution is re-checked by `context_model.evaluate` — hard `issues`
+  reject; soft `violations` are **documented per combination** (rule, detail,
+  penalty) and summed into `total = shuffle + penalty`. Ranking: fully-valid
+  first, then by total.
+- `context_model.pool_selection(solutions)` implements the pool rule:
+  ≥25 valid → top 25 · 10–24 valid → all valid · <10 valid → pad to 10 with
+  the best documented violators.
+
+The old single-population path (`generate_ranked` / `POST /generate`) is
+untouched and still proves the old dataset's optimum of 560. The new dataset's
+optimum is inherently larger (some 5/wk splitting is structurally forced by
+Naeem's Monday P1/P2 ban interacting with the I.COM-II column space) — the
+score compares solutions within the dataset, not against 560.
+
+New endpoint: `POST /generate-context` (auth-gated) —
+`{populations, time_limit, n_seeds, max_solutions}` → ranked solutions with
+`score`, `penalty`, `violations`, `total`, and per-section timetables ("Library
+Work" fills free BS cells).

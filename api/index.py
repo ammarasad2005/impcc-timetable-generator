@@ -233,3 +233,79 @@ def populations():
             for pid, p in TC.POPULATIONS.items()
         },
     }
+
+
+class GenerateContextRequest(BaseModel):
+    """Solve a full shift context (multi-population) from the canonical dataset."""
+    populations: list = Field(default=["inter-1", "bs-1"],
+                              description="populations to solve jointly — shift 1: ['inter-1','bs-1']; shift 2: ['inter-2']")
+    time_limit: int = Field(default=45, ge=1, le=300, description="seconds per CP-SAT seed")
+    n_seeds: int = Field(default=1, ge=1, le=4, description="randomized seeds")
+    max_solutions: int = Field(default=0, ge=0, description="cap on returned solutions (0 = no cap)")
+
+
+def _grids_to_dict_ctx(grids, model):
+    """Context grids -> per-section [subject, teacher] cells (course names per
+    section; parallel groups render 'A / B')."""
+    import canonical as _canon
+    units = {u["id"]: u for u in model["units"]}
+    out = {}
+    for section in model["sections"]:
+        key = section["key"]
+        g = grids.get(key)
+        rows = []
+        for d in range(len(g)):
+            row = []
+            for s in range(len(g[d])):
+                uid = g[d][s]
+                if uid is None:
+                    row.append(["Library Work", ""])
+                    continue
+                u = units[uid]
+                cname = u["courseBySec"].get(key) or list(u["courseBySec"].values())[0]
+                if u["group"]:
+                    tnames = " / ".join(_canon.display_name(t) for t in u["members"])
+                else:
+                    tnames = _canon.display_name(u["teacher"])
+                row.append([cname, tnames])
+            rows.append(row)
+        out[key] = rows
+    return out
+
+
+@app.post("/generate-context")
+def generate_context(req: GenerateContextRequest, user: dict = Depends(require_user)):
+    """Solve a shift context (Inter-1st + BS jointly, or Inter-2nd) from the
+    canonical dataset. Solutions carry documented soft-constraint violations."""
+    import time as _time
+    import canonical as _canon
+    import cp_solver as _cs
+    import context_model as _cm
+    t0 = _time.time()
+    try:
+        ctx = _canon.solver_context(req.populations)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    ranked, any_optimal = _cs.generate_context(
+        ctx, n_seeds=req.n_seeds, time_per_seed=req.time_limit,
+        max_solutions=req.max_solutions)
+    model = _cm.context_to_model(ctx)
+    solutions = [{
+        "score": r["score"], "penalty": r["penalty"], "total": r["total"],
+        "violations": r["violations"],
+        "timetable": _grids_to_dict_ctx(r["grids"], model),
+    } for r in ranked]
+    return {
+        "solver": "cp-sat-context",
+        "populations": req.populations,
+        "solutions": solutions,
+        "total_found": len(solutions),
+        "optimal": any_optimal,
+        "best_score": solutions[0]["score"] if solutions else None,
+        "best_total": solutions[0]["total"] if solutions else None,
+        "elapsed_seconds": round(_time.time() - t0, 2),
+        "meta": {
+            "days": _solver_mod.DAYS, "slots": _solver_mod.SLOTS,
+            "section_order": [s["key"] for s in model["sections"]],
+        },
+    }

@@ -22,6 +22,7 @@ import solver as _solver
 from solver import UNITS, SECTIONS, TEACHER_FULL, DAYS, SLOTS
 from solver import SLOT_OF, DAY_OF, resolve_constraints
 from solver import validate, score, canonical
+from context_model import _sec_stream
 
 # which teachers' units are "big" (single slot, no split)
 def slot_domain(u, R=None):
@@ -345,3 +346,463 @@ def generate_ranked(n_seeds=2, time_per_seed=45, max_solutions=0, constraints=No
     if max_solutions and max_solutions > 0:
         ranked = ranked[:max_solutions]
     return ranked, any_optimal
+
+
+# =====================================================================
+# CONTEXT PATH (multi-population solving; see context_model.py)
+# =====================================================================
+def _teacher_slot_domain(teacher, R, default=None):
+    """Hard slot domain for a teacher code (soft rules EXCLUDED — they become
+    penalties). Returns None = unrestricted."""
+    r = ((R or {}).get(teacher) or {}).get("rules") or {}
+    soft = set(((R or {}).get(teacher) or {}).get("soft") or [])
+    dom = set(range(_solver.P)) if default is None else set(default)
+    if "allowed_slots" in r and "allowed_slots" not in soft:
+        dom &= {SLOT_OF[x] for x in r["allowed_slots"]}
+    if "forbidden_slots" in r and "forbidden_slots" not in soft:
+        dom -= {SLOT_OF[x] for x in r["forbidden_slots"]}
+    return sorted(dom)
+
+
+def _unit_slot_domain(u, R, model):
+    """Full hard slot domain for a unit (teacher rules + course placement +
+    stream scoping + parallel group + member availability)."""
+    P = _solver.P
+    dom = set(range(P))
+    rules = ((R.get(u["teacher"]) or {}).get("rules") or {}) if not u["group"] else {}
+    d = _teacher_slot_domain(u["teacher"], R)
+    if d is not None and not u["group"]:
+        dom &= set(d)
+    if u["group"]:
+        g = next((g for g in (model.get("_parallel") or []) if g["id"] == u["group"]), None)
+        if g:
+            gdom = {SLOT_OF[x] for x in (g.get("slots") or [])} or set(range(P))
+            for mem in u["members"]:
+                md = _teacher_slot_domain(mem, R)
+                if md is not None:
+                    gdom &= set(md)
+            dom &= gdom
+    else:
+        for e in (rules.get("subject_slots") or []):
+            for sec in u["secs"]:
+                if u["courseBySec"].get(sec) == e["subject"]:
+                    dom &= {SLOT_OF[x] for x in e["slots"]}
+        for e in (rules.get("subject_slot_days") or []):
+            for sec in u["secs"]:
+                if u["courseBySec"].get(sec) == e["subject"]:
+                    dom &= {SLOT_OF[e["slot"]]}
+        for e in (rules.get("allowed_slots_in_stream") or []):
+            for sec in u["secs"]:
+                if _sec_stream(sec) == e["stream"]:
+                    dom &= {SLOT_OF[x] for x in e["slots"]}
+    return sorted(dom)
+
+
+def _unit_day_domain(u, R, model):
+    """Full hard day domain for a unit (off-days + teacher day rules +
+    stream-scoped days + GI subject-forbidden days)."""
+    D = _solver.D
+    dom = set(range(D))
+    rules = ((R.get(u["teacher"]) or {}).get("rules") or {}) if not u["group"] else {}
+    soft = set(((R.get(u["teacher"]) or {}).get("soft") or [])) if not u["group"] else set()
+    for sec in u["secs"]:
+        m = (model.get("_meta") or {}).get(sec) or {}
+        dom -= set(m.get("offDays") or [])
+    if not u["group"]:
+        if "allowed_days" in rules and "allowed_days" not in soft:
+            dom &= {DAY_OF[x] for x in rules["allowed_days"]}
+        if "forbidden_days" in rules and "forbidden_days" not in soft:
+            dom -= {DAY_OF[x] for x in rules["forbidden_days"]}
+        for e in (rules.get("allowed_days_in_stream") or []):
+            for sec in u["secs"]:
+                if _sec_stream(sec) == e["stream"]:
+                    dom &= {DAY_OF[x] for x in e["days"]}
+        for e in (rules.get("subject_forbidden_days") or []):
+            for sec in u["secs"]:
+                if u["courseBySec"].get(sec) == e["subject"]:
+                    dom -= {DAY_OF[x] for x in e["days"]}
+    else:
+        for mem in u["members"]:
+            mr = ((R.get(mem) or {}).get("rules") or {})
+            msoft = set(((R.get(mem) or {}).get("soft") or []))
+            if "allowed_days" in mr and "allowed_days" not in msoft:
+                dom &= {DAY_OF[x] for x in mr["allowed_days"]}
+            if "forbidden_days" in mr and "forbidden_days" not in msoft:
+                dom -= {DAY_OF[x] for x in mr["forbidden_days"]}
+    for e in ((model.get("instructions") or {}).get("subjectForbiddenDays") or []):
+        for sec in u["secs"]:
+            if (u["courseBySec"].get(sec) == e.get("subject")
+                    and (not e.get("scope") or _sec_stream(sec) == e["scope"])):
+                dom -= {DAY_OF[x] for x in e["days"]}
+    return sorted(dom)
+
+
+def build_from_context(model):
+    """CP-SAT model for a context model (context_model.context_to_model output)."""
+    Dg, Pg = _solver.D, _solver.P
+    R = model["constraints"]
+    pen = model["penalties"]
+    m = cp_model.CpModel()
+
+    model["_meta"] = {s["key"]: s for s in model["sections"]}
+    model["_parallel"] = model.get("_parallel") or []
+
+    piece_slots, piece_days, piece_keys = {}, {}, {}
+    section_keys = defaultdict(list)
+    teacher_keys = defaultdict(list)
+    soft_terms = []
+
+    for u in model["units"]:
+        i = u["id"]
+        c = u["count"]
+        sd = _unit_slot_domain(u, R, model)
+        dd = _unit_day_domain(u, R, model)
+        if not sd or not dd:
+            return None
+        allow_double_days = (u["level"] == "bs")
+
+        # General piece encoding: every piece gets an independent slot var;
+        # days stay distinct per unit. Splitting a 5/wk or 4/wk course across
+        # slots is structurally allowed (BS sections can hold more 4/wk
+        # courses than period columns; day+slot bans can make full-column
+        # monopolies infeasible) — the shuffle tiers in the objective
+        # (100000/10000 per extra slot) keep single-slot forms strongly
+        # preferred whenever feasible.
+        slots = [m.NewIntVarFromDomain(cp_model.Domain.FromValues(sd), f"cs_{i}_{p}")
+                 for p in range(c)]
+        days = [m.NewIntVarFromDomain(cp_model.Domain.FromValues(dd), f"cd_{i}_{p}")
+                for p in range(c)]
+        if c == 2 and allow_double_days:
+            same_slot = m.NewBoolVar(f"ss_{i}")
+            m.Add(slots[0] == slots[1]).OnlyEnforceIf(same_slot)
+            m.Add(slots[0] != slots[1]).OnlyEnforceIf(same_slot.Not())
+            m.Add(days[0] != days[1]).OnlyEnforceIf(same_slot)
+        elif c == 3 and allow_double_days:
+            pass   # BS 3/wk may double in a day (section cells stay distinct)
+        else:
+            m.AddAllDifferent(days)
+        if c == 2 and not allow_double_days and u["level"] == "inter" \
+                and (model["instructions"].get("consecutiveFor2pw") or {}).get("inter"):
+            diff = m.NewIntVar(-Dg, Dg, f"cons_{i}")
+            m.Add(diff == days[1] - days[0])
+            ab = m.NewIntVar(0, Dg, f"consab_{i}")
+            m.AddAbsEquality(ab, diff)
+            m.Add(ab == 1)
+
+        if u["group"]:
+            for p in range(1, c):
+                m.Add(slots[p] == slots[0])   # an either/or block occupies ONE slot
+        piece_slots[i] = slots
+        piece_days[i] = days
+        piece_keys[i] = []
+        for p in range(c):
+            k = m.NewIntVar(0, Dg * Pg - 1, f"ck_{i}_{p}")
+            m.Add(k == slots[p] * Dg + days[p])
+            piece_keys[i].append(k)
+
+        for sec in u["secs"]:
+            section_keys[sec].extend(piece_keys[i])
+        teachers = [u["teacher"]] + (u["members"] if u["group"] else [])
+        for t in teachers:
+            teacher_keys[t].extend(piece_keys[i])
+
+        # ---- day+slot combination bans and pinned subject-days (model-level)
+        for t in teachers:
+            entry = R.get(t) or {}
+            tsoft = set(entry.get("soft") or [])
+            trules = entry.get("rules") or {}
+            for e in (trules.get("forbidden_slots_on_days") or []):
+                if "forbidden_slots_on_days" in tsoft:
+                    continue
+                dset = {DAY_OF[x] for x in e["days"]}
+                sset = {SLOT_OF[x] for x in e["slots"]}
+                for p in range(c):
+                    for d in sorted(dset):
+                        for s_ in sorted(sset):
+                            m.Add(piece_keys[i][p] != s_ * Dg + d)
+            if t == u["teacher"] and not u["group"]:
+                for e in (trules.get("subject_slot_days") or []):
+                    if "subject_slot_days" in tsoft:
+                        continue
+                    if any(u["courseBySec"].get(sec) == e["subject"] for sec in u["secs"]):
+                        dset = {DAY_OF[x] for x in e["days"]}
+                        for p in range(c):
+                            for d in range(Dg):
+                                if d not in dset:
+                                    m.Add(piece_days[i][p] != d)
+
+        # ---- soft slot rules (excluded from domains; penalized here)
+        if not u["group"]:
+            entry = R.get(u["teacher"]) or {}
+            soft = set(entry.get("soft") or [])
+            rules = entry.get("rules") or {}
+            if "forbidden_slots" in soft and rules.get("forbidden_slots"):
+                fset = {SLOT_OF[x] for x in rules["forbidden_slots"]}
+                bools = [_eq_bool(m, slots[p], s_, f"sf_{i}_{p}_{s_}")
+                         for p in range(c) for s_ in sorted(fset)]
+                if bools:
+                    anyb = m.NewBoolVar(f"sfany_{i}")
+                    m.AddMaxEquality(anyb, bools)
+                    soft_terms.append((pen["rule"], anyb))
+            if rules.get("soft_prefer_free_slots"):
+                fset = {SLOT_OF[x] for x in rules["soft_prefer_free_slots"]}
+                for p in range(c):
+                    for s_ in sorted(fset):
+                        soft_terms.append((pen["preferFreeSlot"],
+                                           _eq_bool(m, slots[p], s_, f"spf_{i}_{p}_{s_}")))
+
+    for sec, keys in section_keys.items():
+        if len(keys) >= 2:
+            m.AddAllDifferent(keys)
+    for t, keys in teacher_keys.items():
+        if len(keys) >= 2:
+            m.AddAllDifferent(keys)
+
+    # ---- first/last period occupied (BS sections, non-off days)
+    for section in model["sections"]:
+        if not section["firstLast"] or section["level"] != "bs":
+            continue
+        keys = section_keys.get(section["key"]) or []
+        for d in section["effDays"]:
+            for sl in (0, Pg - 1):
+                target = sl * Dg + d
+                bools = [_eq_bool(m, k, target, f"fl_{section['key']}_{d}_{sl}_{j}")
+                         for j, k in enumerate(keys)]
+                if bools:
+                    m.Add(sum(bools) >= 1)
+
+    # ---- day-exclusive pairs (per section): pair day-vars all distinct
+    for p in model["dayExclusive"]:
+        dayvars = [dv for uid in p["units"] for dv in piece_days[uid]]
+        if len(dayvars) >= 2:
+            m.AddAllDifferent(dayvars)
+        if p["softConsecutiveDays"]:
+            for uid in p["units"]:
+                u = next(x for x in model["units"] if x["id"] == uid)
+                if u["count"] == 2:
+                    diff = m.NewIntVar(-Dg, Dg, f"dxc_{uid}")
+                    m.Add(diff == piece_days[uid][1] - piece_days[uid][0])
+                    ab = m.NewIntVar(0, Dg, f"dxcab_{uid}")
+                    m.AddAbsEquality(ab, diff)
+                    nb = m.NewBoolVar(f"dxnc_{uid}")
+                    m.Add(ab != 1).OnlyEnforceIf(nb)
+                    m.Add(ab == 1).OnlyEnforceIf(nb.Not())
+                    soft_terms.append((pen["nonConsecutive"], nb))
+
+    # ---- engagement requirements (distinct-DAY semantics via piece keys)
+    for code, entry in R.items():
+        rules = (entry or {}).get("rules") or {}
+        units_of = [u for u in model["units"] if u["teacher"] == code]
+        if not units_of and not any(u["group"] and code in u["members"] for u in model["units"]):
+            continue
+        for e in (rules.get("min_days_in_slot") or []):
+            si = SLOT_OF[e["slot"]]
+            need = int(e.get("min_days") or 1)
+            daybools = []
+            for d in range(Dg):
+                db = m.NewBoolVar(f"mds2_{code}_{si}_{d}")
+                terms = [_eq_bool(m, piece_keys[u["id"]][p], si * Dg + d,
+                                  f"mds2t_{code}_{si}_{d}_{u['id']}_{p}")
+                         for u in units_of for p in range(u["count"])]
+                if not terms:
+                    continue
+                m.Add(sum(terms) >= 1).OnlyEnforceIf(db)
+                m.Add(sum(terms) == 0).OnlyEnforceIf(db.Not())
+                daybools.append(db)
+            if daybools:
+                m.Add(sum(daybools) >= need)
+        for e in (rules.get("stream_slots_required") or []):
+            for sl in e["slots"]:
+                si = SLOT_OF[sl]
+                daybools = []
+                for d in range(Dg):
+                    db = m.NewBoolVar(f"ssr2_{code}_{si}_{d}")
+                    terms = [_eq_bool(m, piece_keys[u["id"]][p], si * Dg + d,
+                                      f"ssr2t_{code}_{si}_{d}_{u['id']}_{p}")
+                             for u in units_of
+                             if any(_sec_stream(s) == e["stream"] for s in u["secs"])
+                             for p in range(u["count"])]
+                    if not terms:
+                        continue
+                    m.Add(sum(terms) >= 1).OnlyEnforceIf(db)
+                    m.Add(sum(terms) == 0).OnlyEnforceIf(db.Not())
+                    daybools.append(db)
+                if daybools:
+                    m.Add(sum(daybools) >= 4)
+        if rules.get("min_days_engaged"):
+            need = rules["min_days_engaged"]
+            daybools = []
+            for d in range(Dg):
+                db = m.NewBoolVar(f"mde2_{code}_{d}")
+                terms = [_eq_bool(m, dv, d, f"mde2t_{code}_{d}_{u['id']}_{p}")
+                         for u in units_of for p, dv in enumerate(piece_days[u["id"]])]
+                if not terms:
+                    continue
+                m.Add(sum(terms) >= 1).OnlyEnforceIf(db)
+                m.Add(sum(terms) == 0).OnlyEnforceIf(db.Not())
+                daybools.append(db)
+            if daybools:
+                m.Add(sum(daybools) >= need)
+
+    # ---- non-overriding (institution rule, encoded: for each section X there
+    # is a cell where X has subject A while the paired sections do NOT have
+    # subject B at the same cell)
+    for e in ((model.get("instructions") or {}).get("nonOverriding") or []):
+        secs, subs = e["sections"], e["subjects"]
+        units_of = {}
+        for sec in secs:
+            for sub in subs:
+                units_of[(sec, sub)] = [u for u in model["units"]
+                                        if u["courseBySec"].get(sec) == sub]
+        for x_sec in secs:
+            cell_ok = []
+            for d in range(Dg):
+                for sl in range(Pg):
+                    target = sl * Dg + d
+                    has_a = [_eq_bool(m, piece_keys[u["id"]][p], target,
+                                      f"nov_{x_sec}_a_{d}_{sl}_{u['id']}_{p}")
+                             for u in units_of.get((x_sec, subs[0]), [])
+                             for p in range(u["count"])]
+                    if not has_a:
+                        continue
+                    ba = m.NewBoolVar(f"novb_{x_sec}_{d}_{sl}")
+                    m.AddMaxEquality(ba, has_a)
+                    nb = []
+                    for y_sec in secs:
+                        if y_sec == x_sec:
+                            continue
+                        for u in units_of.get((y_sec, subs[1]), []):
+                            for p in range(u["count"]):
+                                nb.append(_eq_bool(m, piece_keys[u["id"]][p], target,
+                                                   f"nov_{x_sec}_{y_sec}_{d}_{sl}_{u['id']}_{p}").Not())
+                    ok = m.NewBoolVar(f"novok_{x_sec}_{d}_{sl}")
+                    m.AddBoolAnd([ba] + nb).OnlyEnforceIf(ok)
+                    m.AddBoolOr([ba.Not()] + [b.Not() for b in nb]).OnlyEnforceIf(ok.Not())
+                    cell_ok.append(ok)
+            if cell_ok:
+                m.Add(sum(cell_ok) >= 1)
+
+    # ---- soft: individual spread + even distribution
+    if model["instructions"].get("softIndividualSpread"):
+        for t, keys in teacher_keys.items():
+            if t.startswith("PG:"):
+                continue
+            p1terms = [_eq_bool(m, k, d, f"sp1_{t}_{d}_{j}")
+                       for d in range(Dg) for j, k in enumerate(keys)]
+            plterms = [_eq_bool(m, k, (Pg - 1) * Dg + d, f"spl_{t}_{d}_{j}")
+                       for d in range(Dg) for j, k in enumerate(keys)]
+            if p1terms and plterms:
+                b1 = m.NewBoolVar(f"sp1b_{t}")
+                m.AddMaxEquality(b1, p1terms)
+                b2 = m.NewBoolVar(f"splb_{t}")
+                m.AddMaxEquality(b2, plterms)
+                both = m.NewBoolVar(f"spb_{t}")
+                m.AddBoolAnd([b1, b2]).OnlyEnforceIf(both)
+                m.AddBoolOr([b1.Not(), b2.Not()]).OnlyEnforceIf(both.Not())
+                soft_terms.append((pen["individualSpread"], both))
+    for code, entry in R.items():
+        rules = (entry or {}).get("rules") or {}
+        if not rules.get("soft_even_distribution"):
+            continue
+        units_of = [u for u in model["units"] if u["teacher"] == code]
+        if not units_of:
+            continue
+        total = sum(u["count"] for u in units_of)
+        cap = -(-total // max(1, Dg))
+        for d in range(Dg):
+            terms = [_eq_bool(m, dv, d, f"sed_{code}_{d}_{u['id']}_{p}")
+                     for u in units_of for p, dv in enumerate(piece_days[u["id"]])]
+            if not terms:
+                continue
+            ex = m.NewIntVar(0, total, f"sede_{code}_{d}")
+            m.Add(ex >= sum(terms) - cap)
+            soft_terms.append((pen["evenDistribution"], ex))
+
+    # ---- objective: shuffle + soft penalties
+    obj = []
+    for u in model["units"]:
+        i, c = u["id"], u["count"]
+        if c >= 3:
+            for p in range(c):
+                for q in range(p + 1, c):
+                    w = 100000 if c == 5 else (10000 if c == 4 else 100)
+                    obj.append(_neq_bool(m, piece_slots[i][p], piece_slots[i][q],
+                                         f"cne_{i}_{p}_{q}") * w)
+        elif c == 2:
+            obj.append(_neq_bool(m, piece_slots[i][0], piece_slots[i][1], f"cne2_{i}") * 10)
+    for weight, var in soft_terms:
+        obj.append(var * weight)
+    m.Minimize(sum(obj))
+    return m, piece_slots, piece_days, piece_keys
+
+
+def decode_context(solver, model, piece_slots, piece_days):
+    grids = {s["key"]: [[None] * _solver.P for _ in range(_solver.D)] for s in model["sections"]}
+    for u in model["units"]:
+        i = u["id"]
+        for p in range(u["count"]):
+            s_ = solver.Value(piece_slots[i][p])
+            d_ = solver.Value(piece_days[i][p])
+            for sec in u["secs"]:
+                grids[sec][d_][s_] = i
+    return grids
+
+
+def generate_context(context, n_seeds=2, time_per_seed=45, max_solutions=0):
+    """Solve a context (canonical.solver_context output). Returns (ranked, any_optimal):
+    ranked = list of {grids, score, penalty, violations, total}, best first.
+    Each solution is validated by context_model.evaluate — issues reject,
+    violations are documented + penalized into the total."""
+    import context_model as CM
+    model = CM.context_to_model(context)
+    if not model["sections"]:
+        return [], False   # nothing to solve (e.g. inter-2 before data entry)
+    results = {}
+    any_optimal = False
+    for seed in range(n_seeds):
+        built = build_from_context(model)
+        if built is None:
+            return [], False
+        m, piece_slots, piece_days, piece_keys = built
+
+        class Collect(cp_model.CpSolverSolutionCallback):
+            def __init__(self):
+                super().__init__()
+                self.found = []
+            def on_solution_callback(self):
+                try:
+                    g = decode_context(self, model, piece_slots, piece_days)
+                    ev = CM.evaluate(g, model)
+                    if ev["issues"]:
+                        return
+                    key = _json_key(g)
+                    if key in results:
+                        return
+                    sc = CM.shuffle_score(g, model)
+                    results[key] = {
+                        "grids": g, "score": sc,
+                        "penalty": ev["penalty"], "violations": ev["violations"],
+                        "total": sc + ev["penalty"],
+                    }
+                except Exception:
+                    pass
+
+        cb = Collect()
+        solver = cp_model.CpSolver()
+        solver.parameters.random_seed = 1000 + seed
+        solver.parameters.max_time_in_seconds = time_per_seed
+        solver.parameters.num_search_workers = int(os.environ.get("CP_SAT_WORKERS", "8"))
+        status = solver.Solve(m, cb)
+        if status == cp_model.OPTIMAL:
+            any_optimal = True
+
+    ranked = sorted(results.values(), key=lambda x: (x["penalty"] > 0, x["total"]))
+    if max_solutions and max_solutions > 0:
+        ranked = ranked[:max_solutions]
+    return ranked, any_optimal
+
+
+def _json_key(grids):
+    import json as _j
+    return _j.dumps({k: [x for row in v for x in row] for k, v in grids.items()},
+                    sort_keys=True)

@@ -152,8 +152,10 @@ def solver_allocation(population_id):
 
 
 def solver_constraints():
-    """Faculty constraints -> the solver's edits-model form (person-level)."""
-    return {code: {"name": c["name"], "rules": c["rules"]}
+    """Faculty constraints -> the solver's edits-model form (person-level).
+    Carries the `soft` list (rule keys enforced as soft preferences)."""
+    return {code: {"name": c["name"], "rules": c["rules"],
+                   "soft": c.get("soft") or []}
             for code, c in (get().get("constraints") or {}).items()}
 
 
@@ -200,3 +202,105 @@ def teacher_load(teacher_code, population_ids=None):
                         counted_combined.add(e["combinedWith"])
                     load += e["periods"]
     return load
+
+
+# ---------------------------------------------------------------- solve context
+def _gi_rules(populations):
+    """Collect enabled general instructions from the given populations,
+    keyed by rule type."""
+    data = get()
+    out = {}
+    for pid in populations:
+        for gi in ((data["populations"].get(pid) or {}).get("generalInstructions")
+                   or data.get("generalInstructions", {}).get(pid) or []):
+            if not gi.get("enabled", True):
+                continue
+            out.setdefault(gi["type"], []).append(gi)
+    return out
+
+
+def _population_level(pid):
+    lvl = (get()["populations"].get(pid) or {}).get("level")
+    if lvl:
+        return lvl
+    return "bs" if pid == "bs-1" else "inter"
+
+
+def solver_context(population_ids, overrides=None):
+    """Build a solve context for one SHIFT's populations (shift 1: ["inter-1",
+    "bs-1"] solved jointly; shift 2: ["inter-2"]). Schedule configs come from
+    timetable_config.POPULATIONS; behavioural rules are derived from the
+    structured general instructions; relationships + constraints come from the
+    canonical dataset.
+
+    Returns the context dict consumed by context_model.context_to_model().
+    """
+    import timetable_config as TC
+    data = get()
+    pids = list(population_ids or [])
+    shifts = {TC.POPULATIONS[p]["shift"] for p in pids if p in TC.POPULATIONS}
+    if len(shifts) != 1:
+        raise ValueError("a solve context spans exactly ONE shift "
+                         "(shift 1 = inter-1 + bs-1; shift 2 = inter-2)")
+
+    # grid: both shift-1 populations share one time grid
+    cfg = TC.POPULATIONS[pids[0]]["config"]
+    grid = {"days": cfg["days"], "periods": cfg["periods"]}
+
+    gi = _gi_rules(pids)
+
+    sections = {}
+    section_meta = {}
+    for pid in pids:
+        alloc = solver_allocation(pid)
+        sections.update(alloc)
+        level = _population_level(pid)
+        for key in alloc:
+            section_meta[key] = {"level": level, "offDays": [], "firstLast": False}
+
+    # instructions -> section meta + behavioural flags
+    no_same = {"inter": bool(gi.get("no_same_subject_same_day")),
+               "bs": not bool(gi.get("same_subject_same_day_allowed"))}
+    consec = {"inter": bool(gi.get("consecutive_days_for_2pw")),
+              "bs": bool(gi.get("consecutive_days_for_2pw")) and False}
+    for e in gi.get("section_off_days", []):
+        for key in (e["params"] or {}).get("sections", []):
+            if key in section_meta:
+                section_meta[key]["offDays"] = (section_meta[key]["offDays"] or []) + \
+                    list((e["params"] or {}).get("days", []))
+    if gi.get("first_last_period_occupied"):
+        for key, m in section_meta.items():
+            if m["level"] == "bs":
+                m["firstLast"] = True
+
+    instructions = {
+        "noSameSubjectSameDay": no_same,
+        "consecutiveFor2pw": consec,
+        "nonOverriding": [
+            {"sections": e["params"]["sections"], "subjects": e["params"]["subjects"]}
+            for e in gi.get("non_overriding", []) if e.get("params")
+        ],
+        "subjectForbiddenDays": [
+            {"subject": e["params"].get("subject"), "days": e["params"].get("days", []),
+             "scope": e["params"].get("scope")}
+            for e in gi.get("subject_forbidden_days", []) if e.get("params")
+        ],
+        "softIndividualSpread": bool(gi.get("soft_individual_spread")),
+    }
+
+    relationships = {
+        "parallelGroups": data.get("parallelGroups") or [],
+        "dayExclusivePairs": data.get("dayExclusivePairs") or [],
+        "combinedClasses": data.get("combinedClasses") or [],
+    }
+
+    return {
+        "grid": grid,
+        "sections": sections,
+        "sectionMeta": section_meta,
+        "relationships": relationships,
+        "instructions": instructions,
+        "constraints": solver_constraints(),
+        "teacherCodes": name_to_code(),
+        "softPenalties": dict(overrides or {}).get("softPenalties", {}),
+    }
