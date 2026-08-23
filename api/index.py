@@ -77,6 +77,26 @@ def solver_js():
     return JSONResponse({"detail": "solver.js not found"}, status_code=404)
 
 
+@app.get("/data.js", include_in_schema=False)
+def data_js():
+    """The canonical dataset (browser-loadable form of data/canonical.json)."""
+    root = _find_root()
+    f = root / "data.js"
+    if f.exists():
+        return FileResponse(f, media_type="application/javascript")
+    return JSONResponse({"detail": "data.js not found"}, status_code=404)
+
+
+@app.get("/canonical.js", include_in_schema=False)
+def canonical_js():
+    """The canonical model adapter (IMPCC_CANONICAL)."""
+    root = _find_root()
+    f = root / "canonical.js"
+    if f.exists():
+        return FileResponse(f, media_type="application/javascript")
+    return JSONResponse({"detail": "canonical.js not found"}, status_code=404)
+
+
 @app.get("/supabase.js", include_in_schema=False)
 def supabase_js():
     root = _find_root()
