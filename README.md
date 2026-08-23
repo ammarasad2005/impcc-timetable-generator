@@ -139,8 +139,9 @@ Exports carry **only college identity** — no scores, ranks, solver or site/dev
 
 ## 🚀 Deploy & backend
 
-- **Frontend + API on Vercel** — `api/index.py` (FastAPI) serves the site at `/` and `POST /generate`, `GET /health`, `GET /docs`; `vercel.json` bundles the solver modules (`includeFiles`) with a 300 s budget.
+- **Frontend + API on Vercel** — `api/index.py` (FastAPI) serves the site at `/` and `POST /generate`, `GET /health`, `GET /populations`, `GET /docs`; `vercel.json` bundles the solver modules (`includeFiles`) with a 300 s budget.
 - **In-browser solver** — `solver.js` is a faithful JS port of the same model; the site works fully offline-in-browser even without the backend.
+- **Timetable grid** — the model reserves a **6-day × 8-period maximum capacity**; the *active* grid (default Mon–Fri × 5) is data, selected via `generate({days, periods})` / `POST /generate {days, periods}` and per-population configs (`populations.js`, `timetable_config.py`). No code change is needed to activate Saturday or extra periods.
 
 ## 📁 Repository
 
@@ -149,8 +150,9 @@ Exports carry **only college identity** — no scores, ranks, solver or site/dev
 | `index.html` | The functional website (built) |
 | `build_frontend.py` | Build script — the single source of truth (`python3 build_frontend.py`) |
 | `timetable-generator-UI-prototype.html` | The original client-supplied design prototype |
-| `solver.js` / `solver.py` | JS + Python constraint models |
+| `solver.js` / `solver.py` | JS + Python constraint models (grid-parameterized: active days×periods, capacity 6×8) |
 | `cp_solver.py` | CP-SAT model (OR-Tools) + `generate_ranked()` API entry point |
+| `populations.js` / `timetable_config.py` | Domain model: the three timetable populations (Inter-1st, BS-1st, Inter-2nd) + schedule configs (active days/periods, start times, breaks, per-day overrides) |
 | `api/index.py` · `auth_check.py` · `llm_translate.py` | FastAPI backend, auth gate, AI translation |
 | `supabase.js` | Dependency-free Supabase client (GoTrue + PostgREST) |
 | `constraints_schema.md` · `tweaks_schema.md` · `engagement_schema.md` · `versioning_schema.md` · `swap_schema.md` | Feature specs |

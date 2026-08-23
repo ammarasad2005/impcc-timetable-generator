@@ -12,6 +12,24 @@ from collections import defaultdict
 DAYS = ["MON", "TUE", "WED", "THU", "FRI"]
 SLOTS = ["P1", "P2", "P3", "P4", "P5"]
 
+# ---- timetable grid: capacity vs active configuration (see timetable_config.py) ----
+# Capacity (reserved maximum) is 6 days x 8 periods. The ACTIVE grid is data:
+# set_grid(days, periods) selects it; the default remains the historical 5x5.
+DAY_NAMES = ["MON", "TUE", "WED", "THU", "FRI", "SAT"]
+PERIOD_LABELS = ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8"]
+D = 5   # active day count
+P = 5   # active period count
+
+
+def set_grid(days=5, periods=5):
+    """Select the ACTIVE timetable grid (<= capacity 6x8)."""
+    global D, P, DAYS, SLOTS
+    D = max(1, min(6, int(days)))
+    P = max(1, min(8, int(periods)))
+    DAYS = DAY_NAMES[:D]
+    SLOTS = PERIOD_LABELS[:P]
+    return D, P
+
 def S(key, subs):
     return {"key": key, "subs": subs}
 
@@ -350,11 +368,11 @@ def gen_candidates(ui, slot, days, locked, rng):
             return False
         return True
 
-    daylist = {s: [d for d in range(5) if d_ok(s, d)] for s in allow}
+    daylist = {s: [d for d in range(D) if d_ok(s, d)] for s in allow}
     cands = []
     if c == 5:
-        if len(daylist[p]) == 5:
-            cands.append(tuple((p, d) for d in range(5)))
+        if len(daylist[p]) == D:
+            cands.append(tuple((p, d) for d in range(D)))
     elif c == 4:
         for combo in itertools.combinations(daylist[p], 4):
             cands.append(tuple((p, d) for d in combo))
@@ -426,9 +444,9 @@ def unplace(ui, cells, grids, busy, sec_day_subj):
         sec_day_subj[sec][d].discard(UNITS[ui]["subject"])
 
 def solve_once(slot, days, locked, rng, node_budget=600000):
-    grids = {s["key"]: [[None] * 5 for _ in range(5)] for s in SECTIONS}
+    grids = {s["key"]: [[None] * P for _ in range(D)] for s in SECTIONS}
     busy = defaultdict(set)
-    sec_day_subj = defaultdict(lambda: [set() for _ in range(5)])
+    sec_day_subj = defaultdict(lambda: [set() for _ in range(D)])
 
     order = list(range(len(UNITS)))
     rng.shuffle(order)
@@ -465,12 +483,14 @@ def validate(grids, R=None):
     if R is None:
         R = resolve_constraints()
     issues = []
+    g0 = grids[SECTIONS[0]["key"]]
+    Dg, Pg = len(g0), len(g0[0])   # infer grid dims from the data
     for sec in SECTIONS:
         g = grids[sec["key"]]
         counts = defaultdict(int)
-        for d in range(5):
+        for d in range(Dg):
             seen = set()
-            for s in range(5):
+            for s in range(Pg):
                 uid = g[d][s]
                 if uid is None:
                     issues.append(f"{sec['key']}: empty day{d} slot{s}")
@@ -487,8 +507,8 @@ def validate(grids, R=None):
     occ = defaultdict(list)
     for sec in SECTIONS:
         g = grids[sec["key"]]
-        for d in range(5):
-            for s in range(5):
+        for d in range(Dg):
+            for s in range(Pg):
                 uid = g[d][s]
                 if uid is None:
                     continue
@@ -497,9 +517,9 @@ def validate(grids, R=None):
     for t, lst in occ.items():
         seen = set()
         for (d, s, k) in lst:
-            if (d, s) in seen:
+            if (d * Pg + s) in seen:
                 issues.append(f"teacher {t} double-booked {DAYS[d]} {SLOTS[s]}")
-            seen.add((d, s))
+            seen.add(d * Pg + s)
 
     # rule-driven checks (availability + engagement + placement), per current R
     for t, lst in occ.items():
@@ -539,8 +559,8 @@ def validate(grids, R=None):
     # subject placement rules
     for sec in SECTIONS:
         g = grids[sec["key"]]
-        for d in range(5):
-            for s in range(5):
+        for d in range(Dg):
+            for s in range(Pg):
                 uid = g[d][s]
                 if uid is None:
                     continue
@@ -573,8 +593,8 @@ def validate(grids, R=None):
     for x in com1:
         gx = grids[x]
         found = False
-        for d in range(5):
-            for s in range(5):
+        for d in range(Dg):
+            for s in range(Pg):
                 if UNITS[gx[d][s]]["subject"] == "Principles of Accounting":
                     if all(UNITS[grids[y][d][s]]["subject"] != "Principles of Economics"
                            for y in com1 if y != x):
@@ -591,9 +611,10 @@ def score(grids):
     pen = 0
     for sec in SECTIONS:
         g = grids[sec["key"]]
+        Dg, Pg = len(g), len(g[0])
         slots_by_subj = defaultdict(set)
-        for d in range(5):
-            for s in range(5):
+        for d in range(Dg):
+            for s in range(Pg):
                 uid = g[d][s]
                 if uid is not None:
                     slots_by_subj[UNITS[uid]["subject"]].add(s)
@@ -613,13 +634,15 @@ def canonical(grids):
     parts = []
     for sec in SECTIONS:
         g = grids[sec["key"]]
-        for d in range(5):
-            for s in range(5):
+        Dg, Pg = len(g), len(g[0])
+        for d in range(Dg):
+            for s in range(Pg):
                 u = UNITS[g[d][s]]
                 parts.append(f"{sec['key']}|{d}|{s}|{u['subject']}|{u['teacher']}")
     return "|".join(parts)
 
-def generate(n_attempts, seed=1, budget=600000):
+def generate(n_attempts, seed=1, budget=600000, days=5, periods=5):
+    set_grid(days, periods)
     rng = random.Random(seed)
     solutions = {}
     attempts = valid = fill_fail = no_slot = 0

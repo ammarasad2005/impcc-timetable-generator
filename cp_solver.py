@@ -1,13 +1,16 @@
 """
-IMPCC Inter timetable generator — CP-SAT model (OR-Tools).
+IMPCC timetable generator — CP-SAT model (OR-Tools).
 
 Variables: every subject "unit" (section, subject, teacher, count) is split into
 `count` pieces. Each piece has (slot, day). Constraints:
-  - section: AllDifferent(keys) over its 25 pieces  -> exact cover of the 5x5 grid
-  - unit:   AllDifferent(days)                       -> no subject twice in a day
-  - teacher:AllDifferent(keys) over all its pieces   -> no double-booking
+  - section: AllDifferent(keys) over its pieces        -> exact cover of the active grid
+  - unit:   AllDifferent(days)                          -> no subject twice in a day
+  - teacher:AllDifferent(keys) over all its pieces      -> no double-booking
   - slot/day domains per teacher rules + special structure
 Objective: minimize subject-slot shuffling (weighted by weekly credits).
+
+The ACTIVE timetable grid (days x periods, capacity 6x8 — see timetable_config.py)
+is selected via solver.set_grid(); the default is the historical 5x5.
 """
 import random
 import json
@@ -30,7 +33,7 @@ def slot_domain(u, R=None):
         for e in r["subject_slots"]:
             if e["subject"] == subj:
                 return [SLOT_OF[x] for x in e["slots"]]
-    dom = [0, 1, 2, 3, 4]
+    dom = list(range(_solver.P))
     if r.get("allowed_slots"):
         aset = {SLOT_OF[x] for x in r["allowed_slots"]}
         dom = [x for x in dom if x in aset]
@@ -42,7 +45,7 @@ def slot_domain(u, R=None):
 def day_domain(u, R=None):
     t = u["teacher"]; subj = u["subject"]
     r = ((R or {}).get(t) or {}).get("rules") or {}
-    dom = [0, 1, 2, 3, 4]
+    dom = list(range(_solver.D))
     if r.get("allowed_days"):
         aset = {DAY_OF[x] for x in r["allowed_days"]}
         dom = [d for d in dom if d in aset]
@@ -71,6 +74,7 @@ def _neq_bool(m, a, b, name):
 def build(R=None):
     if R is None:
         R = resolve_constraints()
+    Dg, Pg = _solver.D, _solver.P          # active grid (set via solver.set_grid)
     m = cp_model.CpModel()
     slot_of = {}     # unit -> (single slot var) for count>=4, else None
     piece_slots = {} # unit -> list of slot vars per piece
@@ -90,34 +94,45 @@ def build(R=None):
         if c == 5:
             s = m.NewIntVarFromDomain(cp_model.Domain.FromValues(sd), f"s_{i}")
             slot_of[i] = s
-            for d in range(5):
-                k = m.NewIntVar(0, 24, f"k_{i}_{d}")
-                m.Add(k == s * 5 + d)
-                pieces.append((s, d, k))
+            if Dg == 5:
+                # fast path: 5 pieces must cover all 5 days (current behaviour)
+                for d in range(5):
+                    k = m.NewIntVar(0, Dg * Pg - 1, f"k_{i}_{d}")
+                    m.Add(k == s * Dg + d)
+                    pieces.append((s, d, k))
+            else:
+                # general: 5 pieces on distinct days of the active grid
+                days = [m.NewIntVarFromDomain(cp_model.Domain.FromValues(dd), f"d_{i}_{p}")
+                        for p in range(5)]
+                m.AddAllDifferent(days)
+                for p in range(5):
+                    k = m.NewIntVar(0, Dg * Pg - 1, f"k_{i}_{p}")
+                    m.Add(k == s * Dg + days[p])
+                    pieces.append((s, days[p], k))
         elif c == 4:
             s = m.NewIntVarFromDomain(cp_model.Domain.FromValues(sd), f"s_{i}")
             slot_of[i] = s
             days = [m.NewIntVarFromDomain(cp_model.Domain.FromValues(dd), f"d_{i}_{p}") for p in range(4)]
             m.AddAllDifferent(days)
             for p in range(4):
-                k = m.NewIntVar(0, 24, f"k_{i}_{p}")
-                m.Add(k == s * 5 + days[p])
+                k = m.NewIntVar(0, Dg * Pg - 1, f"k_{i}_{p}")
+                m.Add(k == s * Dg + days[p])
                 pieces.append((s, days[p], k))
         elif c == 3:
             slots = [m.NewIntVarFromDomain(cp_model.Domain.FromValues(sd), f"s_{i}_{p}") for p in range(3)]
             days = [m.NewIntVarFromDomain(cp_model.Domain.FromValues(dd), f"d_{i}_{p}") for p in range(3)]
             m.AddAllDifferent(days)
             for p in range(3):
-                k = m.NewIntVar(0, 24, f"k_{i}_{p}")
-                m.Add(k == slots[p] * 5 + days[p])
+                k = m.NewIntVar(0, Dg * Pg - 1, f"k_{i}_{p}")
+                m.Add(k == slots[p] * Dg + days[p])
                 pieces.append((slots[p], days[p], k))
         else:  # c == 2
             slots = [m.NewIntVarFromDomain(cp_model.Domain.FromValues(sd), f"s_{i}_{p}") for p in range(2)]
             days = [m.NewIntVarFromDomain(cp_model.Domain.FromValues(dd), f"d_{i}_{p}") for p in range(2)]
             m.Add(days[0] != days[1])
             for p in range(2):
-                k = m.NewIntVar(0, 24, f"k_{i}_{p}")
-                m.Add(k == slots[p] * 5 + days[p])
+                k = m.NewIntVar(0, Dg * Pg - 1, f"k_{i}_{p}")
+                m.Add(k == slots[p] * Dg + days[p])
                 pieces.append((slots[p], days[p], k))
 
         piece_slots[i] = [p[0] for p in pieces]
@@ -142,6 +157,8 @@ def build(R=None):
     for code, entry in R.items():
         rules = entry.get("rules") or {}
         units = [i for i, u in enumerate(UNITS) if u["teacher"] == code]
+        if not units:
+            continue   # teacher has no teaching load in this allocation — nothing to enforce
         for e in (rules.get("min_days_in_slot") or []):
             si = SLOT_OF[e["slot"]]
             terms = [_eq_bool(m, piece_slots[i][p], si, f"mds_{code}_{si}_{i}_{p}")
@@ -160,7 +177,7 @@ def build(R=None):
         if rules.get("min_days_engaged"):
             need = rules["min_days_engaged"]
             day_bools = []
-            for d in range(5):
+            for d in range(_solver.D):
                 db = m.NewBoolVar(f"mde_{code}_{d}")
                 terms = [_eq_bool(m, day, d, f"mde_{code}_{d}_{i}_{p}")
                          for i in units for p, day in enumerate(piece_days[i])]
@@ -181,7 +198,7 @@ def build(R=None):
                 for p in range(u["count"]):
                     for d in dset:
                         for s_ in sset:
-                            m.Add(piece_keys[i][p] != s_ * 5 + d)
+                            m.Add(piece_keys[i][p] != s_ * _solver.D + d)
 
     # ---- objective: minimize shuffling ----
     obj = []
@@ -197,7 +214,7 @@ def build(R=None):
     return m, slot_of, piece_slots, piece_days, piece_keys
 
 def decode(solver, slot_of, piece_slots, piece_days, piece_keys):
-    grids = {s["key"]: [[None] * 5 for _ in range(5)] for s in SECTIONS}
+    grids = {s["key"]: [[None] * _solver.P for _ in range(_solver.D)] for s in SECTIONS}
     for i, u in enumerate(UNITS):
         for p in range(u["count"]):
             s = solver.Value(piece_slots[i][p])
@@ -278,12 +295,15 @@ def generate_many(n_seeds=12, time_per_seed=15, verbose=True):
     return ranked
 
 
-def generate_ranked(n_seeds=2, time_per_seed=45, max_solutions=0, constraints=None, sections=None):
+def generate_ranked(n_seeds=2, time_per_seed=45, max_solutions=0, constraints=None, sections=None,
+                    days=5, periods=5):
     """API entry point: run CP-SAT over several seeds, return
     (ranked list of (score, grids), any_optimal bool).
     `constraints` / `sections` (optional) override faculty constraints and the
-    course allocation (see constraints_schema.md)."""
+    course allocation (see constraints_schema.md). `days`/`periods` select the
+    ACTIVE grid (capacity 6x8; default 5x5)."""
     global UNITS, SECTIONS
+    _solver.set_grid(days, periods)
     from solver import score as _score, canonical as _canonical, validate as _validate
     R = resolve_constraints(constraints)
     _solver.set_active_sections(sections)
