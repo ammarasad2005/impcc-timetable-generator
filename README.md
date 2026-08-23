@@ -153,9 +153,10 @@ Exports carry **only college identity** — no scores, ranks, solver or site/dev
 | `solver.js` / `solver.py` | JS + Python constraint models (grid-parameterized: active days×periods, capacity 6×8) |
 | `cp_solver.py` | CP-SAT model (OR-Tools) + `generate_ranked()` API entry point |
 | `populations.js` / `timetable_config.py` | Domain model: the three timetable populations (Inter-1st, BS-1st, Inter-2nd) + schedule configs (active days/periods, start times, breaks, per-day overrides) |
+| `data/canonical.json` · `data.js` · `canonical.js` / `canonical.py` | **The canonical dataset + model adapters** — faculty directory (44, with aliases), subjects registry, per-population allocations, parallel groups, combined classes, constraints, structured general instructions (see `canonical_model.md`; regenerate `data.js` with `python3 tools/gen_data_js.py`) |
 | `api/index.py` · `auth_check.py` · `llm_translate.py` | FastAPI backend, auth gate, AI translation |
 | `supabase.js` | Dependency-free Supabase client (GoTrue + PostgREST) |
-| `constraints_schema.md` · `tweaks_schema.md` · `engagement_schema.md` · `versioning_schema.md` · `swap_schema.md` | Feature specs |
+| `constraints_schema.md` · `tweaks_schema.md` · `engagement_schema.md` · `versioning_schema.md` · `swap_schema.md` · `canonical_model.md` | Feature specs |
 | `gen_all.py` · `export_xlsx.py` · `metrics.py` · `make_report.py` | Offline pipeline (batch solve → XLSX → report) |
 | `assets/` | README screenshots |
 

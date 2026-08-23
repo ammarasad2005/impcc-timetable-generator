@@ -174,6 +174,17 @@ for _code, _full in TEACHER_FULL.items():
     if _code != "PARALLEL":
         NAME_TO_CODE[_full] = _code
 
+
+def extend_teachers(mapping):
+    """Register additional faculty (e.g. the canonical directory's new members)
+    so full display names resolve to their codes. Teaching roster as DATA."""
+    for code, full in (mapping or {}).items():
+        if code == "PARALLEL" or code in TEACHER_FULL:
+            continue
+        TEACHER_FULL[code] = full
+        NAME_TO_CODE[full] = code
+    return TEACHER_FULL
+
 def resolve_constraints(C=None):
     """Merge per-teacher overrides onto the defaults.
 

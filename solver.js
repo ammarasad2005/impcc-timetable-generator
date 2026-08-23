@@ -190,6 +190,17 @@
   const NAME_TO_CODE = {};
   for (const code in TEACHER_FULL) if (code !== "PARALLEL") NAME_TO_CODE[TEACHER_FULL[code]] = code;
 
+  // Register additional faculty (e.g. the canonical directory's new members)
+  // so full display names resolve to their codes. Teaching roster as DATA.
+  function extendTeachers(map) {
+    for (const code in (map || {})) {
+      if (code === "PARALLEL" || TEACHER_FULL[code]) continue;
+      TEACHER_FULL[code] = map[code];
+      NAME_TO_CODE[map[code]] = code;
+    }
+    return TEACHER_FULL;
+  }
+
   const _slotSet = a => new Set((a||[]).map(x => SLOT_OF[x]));
   const _daySet  = a => new Set((a||[]).map(x => DAY_OF[x]));
 
@@ -1465,7 +1476,7 @@
   return {
     DAYS, SLOTS, SECTIONS, TEACHER_FULL, RULES, UNITS,
     CAPACITY: { days: 6, periods: 8 }, DAY_NAMES, PERIOD_LABELS,
-    SLOT_OF, DAY_OF, DEFAULT_CONSTRAINTS, NAME_TO_CODE, resolveConstraints,
+    SLOT_OF, DAY_OF, DEFAULT_CONSTRAINTS, NAME_TO_CODE, resolveConstraints, extendTeachers,
     DEFAULT_SECTIONS, normalizeSections, buildUnits,
     generate, validate, score, canonical, toTimetable, locksOk,
     engage, validateEngagement, codesOfFullName, substituteEligible,
