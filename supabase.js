@@ -1,5 +1,13 @@
 /* supabase.js — minimal Supabase client (Auth + PostgREST via fetch).
-   No CDN dependency. RLS on the workspace table keeps each user's data private. */
+   No CDN dependency. RLS keeps data private per policy.
+
+   POPULATION-SCOPED STATE (from migration 002_populations.sql):
+   the system runs three timetable populations — inter-1 (Intermediate, 1st
+   shift), bs-1 (BS, 1st shift), inter-2 (Intermediate, 2nd shift) — with one
+   published row, one pushed timetable and population-scoped saves/history
+   per population. Every population-scoped method takes an OPTIONAL trailing
+   `population` argument defaulting to 'inter-1', so the existing frontend
+   calls (no argument) keep working unchanged and stay scoped to inter-1. */
 (function (root) {
   "use strict";
 
@@ -7,9 +15,20 @@
   const ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhkY2t1YmhxaGdsbW9yd214dGZzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY2NDY5NTksImV4cCI6MjEwMjIyMjk1OX0.a8Apb7KaEumAxDEb0ojgGDjizGaVseK6O28DsSWRpys";
   const SESSION_KEY = "impcc-supabase-session-v1";
 
+  // timetable populations + their singleton row ids (published/pushed tables)
+  const POPULATIONS = ["inter-1", "bs-1", "inter-2"];
+  const POP_IDS = { "inter-1": 1, "bs-1": 2, "inter-2": 3 };
+  const pop = function (p) {
+    p = p || "inter-1";
+    if (POP_IDS[p] === undefined) throw new Error("unknown population: " + p);
+    return p;
+  };
+
   const client = {
     url: URL,
     session: null,   // { access_token, refresh_token, user }
+    POPULATIONS: POPULATIONS,
+    POP_IDS: POP_IDS,
 
     _load() {
       try { this.session = JSON.parse(localStorage.getItem(SESSION_KEY)); } catch (e) { this.session = null; }
@@ -111,32 +130,46 @@
       });
     },
 
-    // Global published state (allocation/constraints/faculty) — readable by EVERYONE,
-    // writable only by signed-in users (RLS). Generated timetable combos are NOT stored.
-    async loadPublished() {
+    // Global published state (allocation/constraints/faculty/tweaks + the
+    // population's general instructions & timetable config) — readable by
+    // EVERYONE, writable only by signed-in users (RLS). One row per population.
+    async loadPublished(population) {
+      population = pop(population);
       await this.ensureSession();
-      const rows = await this._req("/rest/v1/published?id=eq.1&select=allocation,constraints,faculty,tweaks,updated_at", {
+      const rows = await this._req("/rest/v1/published?population=eq." + population + "&select=allocation,constraints,faculty,tweaks,general_instructions,timetable_config,updated_at", {
         method: "GET", headers: this._headers()
       });
       return (Array.isArray(rows) && rows.length) ? rows[0] : null;
     },
 
-    async savePublished(allocation, constraints, faculty, tweaks) {
+    async savePublished(allocation, constraints, faculty, tweaks, population, generalInstructions, timetableConfig) {
+      population = pop(population);
       await this.ensureSession();
-      const body = { id: 1, allocation: allocation || {}, constraints: constraints || {}, faculty: faculty || [], tweaks: tweaks || [], updated_at: new Date().toISOString() };
-      return this._req("/rest/v1/published?on_conflict=id", {
+      const body = {
+        id: POP_IDS[population],
+        population: population,
+        allocation: allocation || {},
+        constraints: constraints || {},
+        faculty: faculty || [],
+        tweaks: tweaks || [],
+        general_instructions: generalInstructions || [],
+        timetable_config: timetableConfig || {},
+        updated_at: new Date().toISOString()
+      };
+      return this._req("/rest/v1/published?on_conflict=population", {
         method: "POST",
         headers: Object.assign({}, this._headers(), { "Prefer": "resolution=merge-duplicates,return=representation" }),
         body: JSON.stringify(body)
       });
     },
 
-    // ---- saved timetables (admin's private, cross-device) ----
-    async listSaved() {
+    // ---- saved timetables (admin's private, cross-device; population-scoped) ----
+    async listSaved(population) {
+      population = pop(population);
       await this.ensureSession();
       const uid = this.user && this.user.id;
       if (!uid) return [];
-      const rows = await this._req("/rest/v1/saved_timetables?user_id=eq." + uid + "&select=id,name,score,created_at,kind,parent_id,actions,archived&order=created_at.asc", {
+      const rows = await this._req("/rest/v1/saved_timetables?user_id=eq." + uid + "&population=eq." + population + "&select=id,name,score,created_at,kind,parent_id,actions,archived&order=created_at.asc", {
         method: "GET", headers: this._headers()
       });
       return Array.isArray(rows) ? rows : [];
@@ -154,6 +187,7 @@
       if (!uid) throw new Error("not signed in");
       const body = {
         user_id: uid,
+        population: pop(payload.population),
         name: payload.name || "",
         score: payload.score,
         timetable: payload.timetable,
@@ -179,13 +213,14 @@
       });
     },
 
-    // ---- action history (append-only audit trail; survives version deletion) ----
+    // ---- action history (append-only audit trail; population-scoped) ----
     async recordHistory(entry) {
       await this.ensureSession();
       const uid = this.user && this.user.id;
       if (!uid) return null;
       const body = {
         user_id: uid,
+        population: pop((entry || {}).population),
         action: entry.action || "event",
         timetable_id: entry.timetable_id || null,
         parent_id: entry.parent_id || null,
@@ -195,44 +230,56 @@
         method: "POST", headers: this._headers(), body: JSON.stringify(body)
       });
     },
-    async listHistory() {
+    async listHistory(population) {
+      population = pop(population);
       await this.ensureSession();
       const uid = this.user && this.user.id;
       if (!uid) return [];
-      const rows = await this._req("/rest/v1/timetable_history?user_id=eq." + uid + "&select=*&order=created_at.desc", {
+      const rows = await this._req("/rest/v1/timetable_history?user_id=eq." + uid + "&population=eq." + population + "&select=*&order=created_at.desc", {
         method: "GET", headers: this._headers()
       });
       return Array.isArray(rows) ? rows : [];
     },
-    async clearHistory() {
+    async clearHistory(population) {
+      population = pop(population);
       await this.ensureSession();
       const uid = this.user && this.user.id;
       if (!uid) throw new Error("not signed in");
-      return this._req("/rest/v1/timetable_history?user_id=eq." + uid, { method: "DELETE", headers: this._headers() });
+      return this._req("/rest/v1/timetable_history?user_id=eq." + uid + "&population=eq." + population, { method: "DELETE", headers: this._headers() });
     },
 
-    // ---- pushed timetable (one, public read) ----
-    async loadPushed() {
+    // ---- pushed timetable (one per population, public read) ----
+    async loadPushed(population) {
+      population = pop(population);
       await this.ensureSession();
-      const rows = await this._req("/rest/v1/pushed_timetable?id=eq.1&select=score,timetable,pushed_at", {
+      const rows = await this._req("/rest/v1/pushed_timetable?population=eq." + population + "&select=score,timetable,pushed_at", {
         method: "GET", headers: this._headers()
       });
       return (Array.isArray(rows) && rows.length) ? rows[0] : null;
     },
     async pushTimetable(payload) {
+      const population = pop(payload.population);
       await this.ensureSession();
       const uid = this.user && this.user.id;
-      const body = { id: 1, score: payload.score, timetable: payload.timetable, pushed_at: new Date().toISOString(), pushed_by: uid || null };
-      return this._req("/rest/v1/pushed_timetable?on_conflict=id", {
+      const body = {
+        id: POP_IDS[population],
+        population: population,
+        score: payload.score,
+        timetable: payload.timetable,
+        pushed_at: new Date().toISOString(),
+        pushed_by: uid || null
+      };
+      return this._req("/rest/v1/pushed_timetable?on_conflict=population", {
         method: "POST",
         headers: Object.assign({}, this._headers(), { "Prefer": "resolution=merge-duplicates,return=representation" }),
         body: JSON.stringify(body)
       });
     },
 
-    async unpushTimetable() {
+    async unpushTimetable(population) {
+      population = pop(population);
       await this.ensureSession();
-      return this._req("/rest/v1/pushed_timetable?id=eq.1", { method: "DELETE", headers: this._headers() });
+      return this._req("/rest/v1/pushed_timetable?population=eq." + population, { method: "DELETE", headers: this._headers() });
     }
   };
 
