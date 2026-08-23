@@ -35,6 +35,21 @@ import json as _json
 import solver as _solver
 from solver import SLOT_OF, DAY_OF, _slotset, _dayset
 
+_ALL_CODES = None
+
+
+def _resolve_teacher(x):
+    """Resolve a display name OR an already-canonical code to its code."""
+    global _ALL_CODES
+    if _ALL_CODES is None:
+        import canonical as _c
+        _ALL_CODES = {f["code"] for f in _c.get()["faculty"]}
+    if x in _ALL_CODES:
+        return x
+    import canonical as _c
+    return _c.name_to_code().get(x)
+
+
 # default soft-constraint penalty weights
 PENALTIES = {
     "rule": 5000,            # a soft faculty/GI rule is disobeyed (flat per rule)
@@ -124,7 +139,7 @@ def context_to_model(ctx):
                     "id": len(units), "secs": [cc["a"]["section"], cc["b"]["section"]],
                     "courseBySec": {cc["a"]["section"]: cc["a"]["course"],
                                     cc["b"]["section"]: cc["b"]["course"]},
-                    "teacher": code_of(cc.get("teacher") or e.get("teacher") or ""),
+                    "teacher": _resolve_teacher(cc.get("teacher") or e.get("teacher") or ""),
                     "group": None, "members": [], "count": periods,
                     "level": unit_level([cc["a"]["section"], cc["b"]["section"]]),
                 })
@@ -143,7 +158,7 @@ def context_to_model(ctx):
             units.append({
                 "id": len(units), "secs": [sec_key],
                 "courseBySec": {sec_key: course},
-                "teacher": code_of(e.get("teacher") or ""),
+                "teacher": _resolve_teacher(e.get("teacher") or ""),
                 "group": None, "members": [], "count": periods, "level": level,
             })
         sections.append({
@@ -256,6 +271,8 @@ def evaluate(grids, model):
     # ---- teacher occupancy (deduped for dual-section/parallel units)
     occ = {}   # code -> list of [d, s, sec, countOnce]
     for u in units:
+        if not u["group"] and not u["teacher"]:
+            issues.append(f"unit {u['id']} ({list(u['courseBySec'].values())}): unresolved teacher")
         cells = set()
         for sec in u["secs"]:
             g = grids.get(sec)

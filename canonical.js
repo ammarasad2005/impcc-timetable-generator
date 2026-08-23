@@ -224,10 +224,102 @@
     return load;
   }
 
+  // ------------------------------------------------- solve context builder
+  function _pops() {
+    if (typeof IMPCC_POPULATIONS !== "undefined") return IMPCC_POPULATIONS;
+    if (typeof require === "function") {
+      try { return require("./populations.js"); } catch (e) {}
+    }
+    throw new Error("populations registry not loaded - include populations.js before canonical.js");
+  }
+
+  function _populationLevel(pid) {
+    const lvl = ((get().populations[pid] || {}).level);
+    if (lvl) return lvl;
+    return pid === "bs-1" ? "bs" : "inter";
+  }
+
+  // Collect the enabled general instructions of the given populations, by rule type.
+  function _giRules(pids) {
+    const data = get();
+    const out = {};
+    for (const pid of pids) {
+      const list = (data.generalInstructions || {})[pid] || [];
+      for (const gi of list) {
+        if (gi.enabled === false) continue;
+        (out[gi.type] = out[gi.type] || []).push(gi);
+      }
+    }
+    return out;
+  }
+
+  // Build a solve context for ONE shift (shift 1: ["inter-1","bs-1"] jointly;
+  // shift 2: ["inter-2"]). Mirrors canonical.py solver_context() exactly.
+  function solverContext(populationIds) {
+    const POPS = _pops();
+    const pids = (populationIds || []).slice();
+    const shifts = {};
+    for (const p of pids) {
+      const entry = POPS.POPULATIONS[p];
+      if (entry) shifts[entry.shift] = true;
+    }
+    if (Object.keys(shifts).length !== 1) {
+      throw new Error("a solve context spans exactly ONE shift (shift 1 = inter-1 + bs-1; shift 2 = inter-2)");
+    }
+    const cfg = POPS.POPULATIONS[pids[0]].config;
+    const grid = { days: cfg.days, periods: cfg.periods };
+
+    const gi = _giRules(pids);
+    const data = get();
+
+    const sections = {};
+    const sectionMeta = {};
+    for (const pid of pids) {
+      const alloc = solverAllocation(pid);
+      Object.assign(sections, alloc);
+      const level = _populationLevel(pid);
+      for (const key in alloc) sectionMeta[key] = { level: level, offDays: [], firstLast: false };
+    }
+
+    const noSame = { inter: !!gi.no_same_subject_same_day, bs: !gi.same_subject_same_day_allowed };
+    const consec = { inter: !!gi.consecutive_days_for_2pw, bs: false };
+    for (const e of (gi.section_off_days || [])) {
+      for (const key of ((e.params || {}).sections || [])) {
+        if (sectionMeta[key]) sectionMeta[key].offDays = sectionMeta[key].offDays.concat((e.params || {}).days || []);
+      }
+    }
+    if (gi.first_last_period_occupied) {
+      for (const key in sectionMeta) if (sectionMeta[key].level === "bs") sectionMeta[key].firstLast = true;
+    }
+
+    return {
+      grid: grid,
+      sections: sections,
+      sectionMeta: sectionMeta,
+      relationships: {
+        parallelGroups: data.parallelGroups || [],
+        dayExclusivePairs: data.dayExclusivePairs || [],
+        combinedClasses: data.combinedClasses || []
+      },
+      instructions: {
+        noSameSubjectSameDay: noSame,
+        consecutiveFor2pw: consec,
+        nonOverriding: (gi.non_overriding || []).filter(e => e.params).map(e => ({
+          sections: e.params.sections, subjects: e.params.subjects })),
+        subjectForbiddenDays: (gi.subject_forbidden_days || []).filter(e => e.params).map(e => ({
+          subject: e.params.subject, days: e.params.days || [], scope: e.params.scope })),
+        softIndividualSpread: !!gi.soft_individual_spread
+      },
+      constraints: solverConstraints(),
+      teacherCodes: nameToCode()
+    };
+  }
+
   return {
     load: load, get: get, validate: validate,
     directory: directory, nameToCode: nameToCode, codeOf: codeOf, displayName: displayName,
     solverAllocation: solverAllocation, solverConstraints: solverConstraints,
+    solverContext: solverContext,
     extendSolver: extendSolver, sectionFill: sectionFill, teacherLoad: teacherLoad,
     POPULATIONS: ["inter-1", "bs-1", "inter-2"],
     SHIFT1: ["inter-1", "bs-1"], SHIFT2: ["inter-2"]

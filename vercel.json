@@ -2,7 +2,7 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
     "api/index.py": {
-      "includeFiles": "{api/**,cp_solver.py,solver.py,llm_translate.py,auth_check.py,canonical.py,timetable_config.py,index.html,solver.js,populations.js,canonical.js,data.js,data/canonical.json,supabase.js}",
+      "includeFiles": "{api/**,cp_solver.py,solver.py,llm_translate.py,auth_check.py,context_model.py,canonical.py,timetable_config.py,index.html,solver.js,populations.js,canonical.js,context_solver.js,data.js,data/canonical.json,supabase.js}",
       "maxDuration": 300
     }
   }
