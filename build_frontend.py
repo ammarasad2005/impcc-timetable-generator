@@ -4608,5 +4608,346 @@ rep("for(const code in R){out[code]={name:R[code].name,rules:JSON.parse(JSON.str
     "for(const code in R){out[code]={name:R[code].name,rules:JSON.parse(JSON.stringify(R[code].rules))};if(R[code].soft&&R[code].soft.length)out[code].soft=R[code].soft.slice();}")
 
 
+# ---- 46) MANUAL BUILD + INSIGHTS + TARGETED REPAIR (F15) --------------
+# Per-shift manual timetable entry: the whole shift (1st: Inter + BS; 2nd:
+# Inter) is entered into an empty template via per-cell pickers (each cell
+# offers only that section's allocated subject+teacher pairs). The backend
+# analyzes the entered grid (manual-analyze) and returns structured insight
+# cards (hard clashes + soft violations); every card offers CP-SAT targeted
+# repair (manual-repair) — cell-locked, minimal-diff, instance or whole
+# cause-type. Once issue-free, "Adopt" places the result in the pool as a
+# normal combination (via 'manual') so the existing save/push/export
+# machinery applies unchanged.
+
+rep('<button id="viewTweaks">🛠 Tweaks</button>',
+    '<button id="viewTweaks">🛠 Tweaks</button>\n      <button id="viewManual">✍ Manual</button>')
+
+rep("  $('viewTweaks').classList.toggle('on',v==='tweaks');",
+    "  $('viewTweaks').classList.toggle('on',v==='tweaks');\n  $('viewManual').classList.toggle('on',v==='manual');")
+
+rep("  if(state.view==='tweaks'){renderTweaks();return;}",
+    "  if(state.view==='manual'){renderManual();return;}\n  if(state.view==='tweaks'){renderTweaks();return;}")
+
+rep('.cons-note{',
+    '''.mb-note{max-width:880px;font-size:12.5px;line-height:1.55;color:#415246}
+.mb-toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:12px 0 16px}
+.mb-pill{font-family:var(--mono);font-size:10.5px;padding:4px 10px;border-radius:999px;border:1px solid #d7deda;background:#fff}
+.mb-pill.ok{background:var(--green-tint);border-color:#9bc4ab;color:var(--green-deep);font-weight:700}
+.mb-pill.bad{background:#fdeaea;border-color:#e3aeae;color:#8f1f1f;font-weight:700}
+.mb-pill.warn{background:var(--amber-tint);border-color:#e5c47c;color:var(--amber-deep);font-weight:700}
+.mb-secgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:14px}
+.mb-sec{background:#fff;border:1px solid #dde4df;border-radius:10px;padding:10px 12px;box-shadow:0 1px 3px rgba(20,40,30,.05)}
+.mb-sec h4{margin:0 0 8px;font-size:13px;display:flex;justify-content:space-between;align-items:center;gap:8px}
+.mb-sec .lv{font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:#5c6f63}
+.mb-table{border-collapse:collapse;width:100%}
+.mb-table th{font-family:var(--mono);font-size:9.5px;color:#5c6f63;text-align:left;padding:2px 4px;border-bottom:1px solid #e4eae6}
+.mb-table td{padding:2px 3px;vertical-align:middle}
+.mb-table td.dy{font-family:var(--mono);font-size:10px;font-weight:700;color:var(--green-deep);white-space:nowrap}
+select.mb-sel{width:100%;font-size:10.5px;padding:2px 2px;border:1px solid #d7deda;border-radius:5px;background:#fbfdfc;color:#233228;max-width:150px}
+select.mb-sel:disabled{background:#f0f2f1;color:#9aa7a0}
+select.mb-sel.overq{border-color:#d98c8c;background:#fdf2f2}
+td.mb-changed select{outline:2px solid var(--amber);background:var(--amber-tint)}
+.mb-cards{display:flex;flex-direction:column;gap:8px;margin:6px 0 14px}
+.mb-card{background:#fff;border:1px solid #e3aeae;border-left:4px solid #c33;border-radius:8px;padding:8px 12px;font-size:12px}
+.mb-card.soft{border-color:#e5c47c;border-left-color:var(--amber-deep)}
+.mb-card.data{border-color:#b9c4bd;border-left-color:#7d8b83}
+.mb-card .cap{font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:#8f1f1f}
+.mb-card.soft .cap{color:var(--amber-deep)}
+.mb-card.data .cap{color:#5c6f63}
+.mb-card .acts{margin-top:6px;display:flex;gap:8px;flex-wrap:wrap}
+.mb-card .acts button{font-size:10.5px}
+.mb-banner{background:var(--amber-tint);border:1px solid #e5c47c;border-radius:8px;padding:8px 12px;font-size:12px;color:#6b4d0c;margin:6px 0 10px}
+.cons-note{''')
+
+rep("""$('viewTweaks').addEventListener('click',()=>setView('tweaks'));""",
+    """$('viewTweaks').addEventListener('click',()=>setView('tweaks'));
+$('viewManual').addEventListener('click',()=>setView('manual'));
+
+/* ---------- manual build + insights + targeted repair (F15) ---------- */
+const MB_DAYS=['MON','TUE','WED','THU','FRI'];
+state.mb=state.mb||{shift:null,template:null,grid:{},analysis:null,analysisKey:null,busy:false,changed:{},banner:null};
+
+function mbShift(){return POP_SHIFT();}
+function mbPops(){return mbShift()===1?['inter-1','bs-1']:['inter-2'];}
+function mbStoreKey(){return 'impcc-manual-shift'+mbShift();}
+function mbSaveDraft(){try{localStorage.setItem(mbStoreKey(),JSON.stringify({grid:state.mb.grid}));}catch(e){}}
+function mbLoadDraft(){
+  try{
+    const raw=localStorage.getItem(mbStoreKey());if(!raw)return null;
+    const d=JSON.parse(raw);return (d&&d.grid)?d.grid:null;
+  }catch(e){return null;}
+}
+function mbBlankRows(){const r=[];for(let d=0;d<5;d++){const row=[];for(let s=0;s<5;s++)row.push(['','']);r.push(row);}return r;}
+function mbEmptyGrid(tpl){const g={};(tpl.order||[]).forEach(function(k){g[k]=mbBlankRows();});return g;}
+function mbSections(){return (state.mb.template&&state.mb.template.order)||[];}
+
+async function mbFetch(path,body){
+  const base=(typeof window.IMPCC_API_URL==='string')?window.IMPCC_API_URL:'';
+  const resp=await fetch(base+path,{
+    method:body===null?'GET':'POST',
+    headers:{'Content-Type':'application/json','Authorization':'Bearer '+(SB&&SB.session&&SB.session.access_token?SB.session.access_token:'')},
+    body:body===null?undefined:JSON.stringify(body)
+  });
+  let data=null;
+  try{data=await resp.json();}catch(e){data={};}
+  if(!resp.ok){
+    const det=(data&&data.detail)?data.detail:{};
+    const msg=typeof det==='string'?det:(det.reason||('request failed ('+resp.status+')'));
+    const err=new Error(msg);err.status=resp.status;err.detail=det;throw err;
+  }
+  return data;
+}
+
+async function mbEnsureTemplate(force){
+  if(state.mb.shift!==mbShift()||force){
+    state.mb={shift:mbShift(),template:null,grid:{},analysis:null,analysisKey:null,busy:false,changed:{},banner:null};
+  }
+  if(state.mb.template)return state.mb.template;
+  const data=await mbFetch('/manual-template?populations='+encodeURIComponent(mbPops().join(',')),null);
+  const order=Object.keys(data.sections||{});
+  state.mb.template={sections:data.sections||{},order:order};
+  const draft=mbLoadDraft();
+  if(draft){
+    const grid=mbEmptyGrid(state.mb.template);
+    order.forEach(function(k){
+      if(!draft[k])return;
+      for(let d=0;d<5;d++)for(let s=0;s<5;s++){
+        const c=(draft[k][d]&&draft[k][d][s])||['',''];
+        grid[k][d][s]=[c[0]||'',c[1]||''];
+      }
+    });
+    state.mb.grid=grid;
+  }else{
+    state.mb.grid=mbEmptyGrid(state.mb.template);
+  }
+  return state.mb.template;
+}
+
+function mbOffDay(sec,d){const t=state.mb.template.sections[sec];return t&&(t.offDays||[]).indexOf(MB_DAYS[d])>=0;}
+function mbOptIndex(sec,subject,teacher){
+  const opts=((state.mb.template.sections[sec]||{}).options)||[];
+  for(let i=0;i<opts.length;i++)if(opts[i].subject===subject&&opts[i].teacher===teacher)return i;
+  return -1;
+}
+function mbPlaced(sec,optIdx){
+  const opts=state.mb.template.sections[sec].options;
+  const o=opts[optIdx];if(!o)return 0;
+  let n=0;const g=state.mb.grid[sec]||[];
+  for(let d=0;d<5;d++)for(let s=0;s<5;s++)if(g[d][s][0]===o.subject)n++;
+  return n;
+}
+function mbSectionProgress(sec){
+  const opts=state.mb.template.sections[sec].options;
+  let target=0,filled=0;
+  for(let i=0;i<opts.length;i++)target+=opts[i].periods|0;
+  const g=state.mb.grid[sec]||[];
+  for(let d=0;d<5;d++)for(let s=0;s<5;s++)if(g[d][s][0])filled++;
+  return {filled:filled,target:target};
+}
+
+function mbSetCell(sec,d,s,val){
+  const g=state.mb.grid[sec];
+  if(val<0)g[d][s]=['',''];
+  else{
+    const o=state.mb.template.sections[sec].options[val];
+    g[d][s]=[o.subject,o.teacher];
+  }
+  delete state.mb.changed[sec+':'+d+':'+s];
+  mbSaveDraft();
+  renderManualNow();
+}
+
+async function renderManual(){
+  const signedIn=SB&&SB.loggedIn;
+  if(!signedIn){
+    mainEl.innerHTML='<div class="cons-note"><b>✍ Manual Build.</b> Enter a whole shift by hand, get insight cards for every clash, and repair each one with a minimal-diff CP-SAT fix. <b style="color:var(--amber-deep)">🔒 Sign in to use Manual Build.</b></div>';
+    return;
+  }
+  if(state.mb.busy){return;}
+  if(!state.mb.template||state.mb.shift!==mbShift()){
+    mainEl.innerHTML='<div class="cons-note">Loading the shift entry template…</div>';
+    try{await mbEnsureTemplate();}catch(e){mainEl.innerHTML='<div class="cons-note">Could not load the template: '+esc(e.message)+'</div>';return;}
+  }
+  renderManualNow();
+}
+
+function renderManualNow(){
+  if(state.view!=='manual')return;
+  const tpl=state.mb.template;
+  if(!tpl){renderManual();return;}
+  const shiftLbl=mbShift()===1?'Shift 1 — Intermediate + BS (solved & checked jointly)':'Shift 2 — Intermediate 2nd shift';
+  const an=state.mb.analysis;
+  const inSync=an&&(state.mb.analysisKey===JSON.stringify(state.mb.grid));
+  let h='<div id="mbRoot">';
+  h+='<div class="cons-note mb-note"><b>✍ Manual Build — '+esc(shiftLbl)+'.</b> '+
+     'Fill the whole shift cell by cell (each picker offers only what is allocated to that section). '+
+     'Then press <b>Analyze</b>: every clash becomes an insight card, and each card can be repaired targetedly — '+
+     'the rest of your timetable stays exactly where you put it (smallest possible diff). '+
+     'When the analysis is clean, <b>Adopt</b> adds the result to the pool like any other combination.</div>';
+
+  // toolbar
+  h+='<div class="mb-toolbar">';
+  h+='<button class="mini-export" id="mbAnalyze">🔍 Insights from timetable</button>';
+  h+='<button class="mini-export" id="mbClear">🗑 Clear shift</button>';
+  const canAdopt=an&&inSync&&an.issues.length===0;
+  h+='<button class="mini-export" id="mbAdopt"'+(canAdopt?'':' disabled title="Analyze first and clear all hard clashes"')+'>✔ Adopt into pool</button>';
+  if(an){
+    h+='<span class="mb-pill '+(inSync?(an.issues.length?'bad':'ok'):'warn')+'">'+
+      (inSync?(an.issues.length?(an.issues.length+' hard clash'+(an.issues.length>1?'es':'')):'no hard clashes — clean'):'grid changed since last analysis — analyze again')+'</span>';
+    h+='<span class="mb-pill">'+'score '+an.score+' · penalty '+an.penalty+' · total '+an.total+'</span>';
+    if(an.violations&&an.violations.length)h+='<span class="mb-pill warn">'+an.violations.length+' soft warning'+(an.violations.length>1?'s':'')+'</span>';
+  }
+  h+='<span class="mb-pill" id="mbBusyTag" style="display:none">CP-SAT repairing…</span>';
+  h+='</div>';
+  if(state.mb.banner)h+='<div class="mb-banner">'+esc(state.mb.banner)+'</div>';
+
+  // insight cards
+  if(an){
+    h+='<div class="mb-cards">';
+    if(an.unmatched&&an.unmatched.length){
+      an.unmatched.forEach(function(u){
+        h+='<div class="mb-card data"><span class="cap">Unrecognized entry</span> — '+esc(MB_DAYS[u.day])+' P'+(u.slot+1)+' in <b>'+esc(u.section)+'</b>: “'+esc(u.subject)+' — '+esc(u.teacher)+'” is not allocated in that section (cleared at repair time).</div>';
+      });
+    }
+    (an.issues_detail||[]).forEach(function(d2,i){
+      h+='<div class="mb-card hard"><span class="cap">Hard clash</span> '+esc(d2.text)+
+        '<div class="acts"><button class="mini-export" data-fix="hard:'+i+'">Fix this</button>'+
+        '<button class="mini-export" data-fix="hard:'+i+':type">Fix all like this</button></div></div>';
+    });
+    (an.violations||[]).forEach(function(v,i){
+      h+='<div class="mb-card soft"><span class="cap">Soft warning · penalty '+v.penalty+'</span> '+esc(v.rule)+': '+esc(v.detail)+
+        '<div class="acts"><button class="mini-export" data-fix="soft:'+i+'">Fix this</button>'+
+        '<button class="mini-export" data-fix="soft:'+i+':type">Fix all like this</button></div></div>';
+    });
+    h+='</div>';
+  }
+
+  // sections
+  h+='<div class="mb-secgrid">';
+  mbSections().forEach(function(sec){
+    const t=tpl.sections[sec];
+    const pr=mbSectionProgress(sec);
+    h+='<div class="mb-sec"><h4><span>'+esc(sec)+'</span><span class="lv">'+esc(t.level)+' · '+pr.filled+'/'+pr.target+' pw</span></h4>';
+    h+='<table class="mb-table"><thead><tr><th></th>';
+    for(let s=0;s<5;s++)h+='<th>P'+(s+1)+'</th>';
+    h+='</tr></thead><tbody>';
+    for(let d=0;d<5;d++){
+      h+='<tr><td class="dy">'+MB_DAYS[d]+'</td>';
+      for(let s=0;s<5;s++){
+        const off=mbOffDay(sec,d);
+        const chg=state.mb.changed[sec+':'+d+':'+s];
+        h+='<td'+(chg?' class="mb-changed"':'')+'>';
+        if(off){h+='<select class="mb-sel" disabled><option>—</option></select>';}
+        else{
+          const g=state.mb.grid[sec];const cell=g[d][s];
+          const cur=cell[0]?mbOptIndex(sec,cell[0],cell[1]):-2;
+          const opts=t.options;
+          h+='<select class="mb-sel'+(cur>=0&&mbPlaced(sec,cur)>opts[cur].periods?' overq':'')+'" data-mb="'+sec+'|'+d+'|'+s+'">';
+          h+='<option value="-1"'+(cur===-2||cur===-1?' selected':'')+'>(free)</option>';
+          for(let i=0;i<opts.length;i++){
+            const placed=mbPlaced(sec,i);
+            h+='<option value="'+i+'"'+(i===cur?' selected':'')+'>'+esc(opts[i].subject)+' — '+esc(opts[i].teacher)+' ('+placed+'/'+opts[i].periods+')</option>';
+          }
+          if(cur===-1)h+='<option selected disabled>'+esc(cell[0])+' (unknown)</option>';
+          h+='</select>';
+        }
+        h+='</td>';
+      }
+      h+='</tr>';
+    }
+    h+='</tbody></table></div>';
+  });
+  if(!mbSections().length){
+    h+='<div class="cons-note">This shift has no sections yet — enter its allocations on the 🗂 Allocation page first (inter-2 currently has no dataset).</div>';
+  }
+  h+='</div></div>';
+  mainEl.innerHTML=h;
+
+  // wiring
+  const onChange=function(){
+    const el=this;const parts=el.dataset.mb.split('|');
+    mbSetCell(parts[0],+parts[1],+parts[2],+el.value);
+  };
+  document.querySelectorAll('select[data-mb]').forEach(function(el){el.addEventListener('change',onChange);});
+  const anBtn=document.getElementById('mbAnalyze');
+  if(anBtn)anBtn.addEventListener('click',function(){mbAnalyze();});
+  const cBtn=document.getElementById('mbClear');
+  if(cBtn)cBtn.addEventListener('click',function(){
+    if(!confirm('Clear every entered cell in this shift?'))return;
+    state.mb.grid=mbEmptyGrid(state.mb.template);state.mb.analysis=null;state.mb.changed={};state.mb.banner=null;
+    mbSaveDraft();renderManualNow();
+  });
+  const aBtn=document.getElementById('mbAdopt');
+  if(aBtn)aBtn.addEventListener('click',function(){mbAdopt();});
+  document.querySelectorAll('[data-fix]').forEach(function(el){
+    el.addEventListener('click',function(){
+      const p=el.dataset.fix.split(':');
+      mbFix(p[0],+p[1],p[2]==='type'?'type':'instance');
+    });
+  });
+}
+
+async function mbAnalyze(){
+  if(state.mb.busy)return;
+  state.mb.busy=true;state.mb.banner=null;
+  const tag=document.getElementById('mbBusyTag');if(tag){tag.style.display='';tag.textContent='Analyzing…';}
+  try{
+    const data=await mbFetch('/manual-analyze',{populations:mbPops(),timetable:state.mb.grid});
+    state.mb.analysis=data;
+    state.mb.analysisKey=JSON.stringify(state.mb.grid);
+    setTicker('Analysis complete — '+data.issues.length+' hard, '+data.violations.length+' soft, score '+data.score+' · penalty '+data.penalty,(data.issues.length?'err':'ok'));
+  }catch(e){
+    state.mb.banner='Analysis failed: '+(e.message||e);
+    setTicker('Analysis failed: '+(e.message||e),'err');
+  }
+  state.mb.busy=false;
+  renderManualNow();
+}
+
+async function mbFix(kind,index,mode){
+  if(state.mb.busy)return;
+  state.mb.busy=true;state.mb.banner=null;
+  renderManualNow();
+  const tag=document.getElementById('mbBusyTag');if(tag)tag.style.display='';
+  try{
+    const data=await mbFetch('/manual-repair',{populations:mbPops(),timetable:state.mb.grid,
+      focus:{kind:kind,index:index},mode:mode,time_per_tier:12});
+    const chg={};
+    (data.diff||[]).forEach(function(df){chg[df.section+':'+df.day+':'+df.slot]=1;});
+    state.mb.grid=data.timetable;
+    state.mb.changed=chg;
+    const before=(data.penalty_before||0)+(data.score_before||0),after=(data.penalty_after||0)+(data.score_after||0);
+    setTicker('Repaired — '+data.changed+' cell'+(data.changed===1?'':'s')+' re-arranged · tier: '+data.tier+' · total '+before+' → '+after,'ok');
+    if(data.fix_enforced)state.mb.banner='Also enforced: '+data.fix_enforced+'.';
+    mbSaveDraft();
+    state.mb.busy=false;
+    await mbAnalyze();
+  }catch(e){
+    state.mb.busy=false;
+    if(e.status===422){
+      state.mb.banner='This cause could not be resolved (the rest of the grid was left untouched). It is likely structurally forced — the documented live violations like Babar P5 are exactly that. Try fixing a related card first, or adjust cells by hand.';
+    }else{
+      state.mb.banner='Repair failed: '+(e.message||e);
+    }
+    setTicker(state.mb.banner,'err');
+    renderManualNow();
+  }
+}
+
+function mbAdopt(){
+  const an=state.mb.analysis;
+  if(!an||state.mb.analysisKey!==JSON.stringify(state.mb.grid)||an.issues.length){
+    setTicker('Analyze first and clear all hard clashes before adopting','err');return;
+  }
+  const combo=makeCtxCombo({score:an.score,penalty:an.penalty,violations:an.violations,timetable:state.mb.grid},'manual');
+  state.combos.push(combo);
+  state.selected=combo.id;
+  persist();
+  setView('sections');
+  renderAll();
+  setTicker('Manual timetable adopted (#'+combo.id+', score '+an.score+(an.penalty?(' +'+an.penalty+' documented penalties'):'')+') — save, push, export etc. work as usual','ok');
+}""", 1)
+
+
 io.open(DST, "w", encoding="utf-8").write(src)
 print("OK → wrote", DST, "(", len(src), "bytes )")

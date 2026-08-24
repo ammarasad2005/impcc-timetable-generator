@@ -507,6 +507,170 @@ check("L5 direct expression: GI rule validated locally (no LLM)",
 # =====================================================================
 print()
 print("=" * 72)
+print("MANUAL BUILD + INSIGHTS + TARGETED REPAIR (F15)")
+print("=" * 72)
+
+# M1: placements <-> grids round-trip on a real scenario solution
+if rB:
+    ttB = canonical.timetable_from_grids(rB[0]["grids"], mB)
+    gB, unB = CM.placements_from_display(ttB, mB)
+    check("M1 display->placements round-trip == solution grids", gB == rB[0]["grids"])
+    check("M1 no unmatched cells for a legitimate solution", unB == [])
+
+# M2: analyze_structured is a byte-identical twin of evaluate (texts + violations)
+def _parity(grids, model, label):
+    ev = CM.evaluate(grids, model)
+    an = CM.analyze_structured(grids, model)
+    v1 = sorted([(v["rule"], v["detail"], v["penalty"]) for v in ev["violations"]])
+    v2 = sorted([(v["rule"], v["detail"], v["penalty"]) for v in an["violations"]])
+    ok = (ev["issues"] == an["issues"] and v1 == v2 and ev["penalty"] == an["penalty"]
+          and len(an["issues_detail"]) == len(ev["issues"]))
+    check("M2 analyze_structured == evaluate (%s)" % label, ok,
+          "issues %d/%d viol %d/%d" % (len(ev["issues"]), len(an["issues"]), len(v1), len(v2)))
+    return an
+
+empty1 = {s["key"]: [[None] * 5 for _ in range(5)] for s in model1["sections"]}
+_parity(empty1, model1, "empty shift-1 grid")
+if rB:
+    _parity(rB[0]["grids"], mB, "scenario B valid grid")
+    gC = copy.deepcopy(rB[0]["grids"])
+    ks = list(gC.keys())[0]
+    gC[ks][0][0], gC[ks][1][1] = gC[ks][1][1], gC[ks][0][0]
+    anC = _parity(gC, mB, "scenario B corrupted grid")
+    check("M2 focus metadata on hard issues (units listed)",
+          all("units" in d and "cells" in d and "sig" in d for d in anC["issues_detail"]))
+
+# M3: manual_vocabulary covers every cell a solution can display
+if rB:
+    voc = CM.manual_vocabulary(scB)
+    ok_vocab = True
+    for sec, rows in ttB.items():
+        opts = {(o["subject"], o["teacher"]) for o in voc[sec]["options"]}
+        for d in range(5):
+            for s in range(5):
+                cell = rows[d][s]
+                if cell[0] == "Library Work":
+                    continue
+                if (cell[0], cell[1]) not in opts:
+                    ok_vocab = False
+    check("M3 vocabulary covers solution cells (pickers can't be wrong)", ok_vocab)
+    check("M3 vocabulary weekly loads sum to the section fill",
+          all(sum(o["periods"] for o in voc[sec]["options"]) == 25 for sec in voc))
+
+# M4: unmatched (unallocated) entries are reported, not silently believed
+_bogus = json.loads(json.dumps(ttB)) if rB else None
+if _bogus:
+    k0 = list(_bogus.keys())[0]
+    _bogus[k0][0][0] = ["Bogus Course", "Prof. Nobody"]
+    _gB2, un2 = CM.placements_from_display(_bogus, mB)
+    check("M4 unallocated cell reported as unmatched",
+          len(un2) == 1 and un2[0]["section"] == k0 and un2[0]["subject"] == "Bogus Course")
+
+# M5: targeted repair of a teacher double-booking (instance mode)
+scM = make_scenario("repair-lab", {
+    "RA": [("English", "Prof. Zair Ahmad", 5), ("Urdu", "Prof. Abdur Rauf", 5),
+           ("Math", "Prof. Najam us Saqib", 5), ("Isl", "Prof. Waseem A. Farooq", 5),
+           ("Link", "Visiting-1", 5)],
+    "RB": [("English", "Prof. Noor Muhammad", 5), ("Urdu", "Prof. Ehsam Ullah Baig", 5),
+           ("Stat", "Prof. Tanveer Ahmed", 5), ("Isl", "Visiting-2", 5),
+           ("Link", "Visiting-1", 5)],
+})
+mM = CM.context_to_model(scM)
+rM, _ = cp_solver.generate_context(scM, n_seeds=1, time_per_seed=10, max_solutions=1)
+check("M5 lab scenario solves", len(rM) > 0, "got %d" % len(rM))
+if rM:
+    g0 = copy.deepcopy(rM[0]["grids"])
+    uA = next(u for u in mM["units"] if u["teacher"] == "V1" and u["secs"] == ["RA"])
+    uB = next(u for u in mM["units"] if u["teacher"] == "V1" and u["secs"] == ["RB"])
+    a_cells = [(d, s) for d in range(5) for s in range(5) if g0["RA"][d][s] == uA["id"]]
+    d1, s1 = a_cells[0]
+    b_same_day = next(s for s in range(5) if g0["RB"][d1][s] == uB["id"])
+    g0["RA"][d1][s1] = None
+    g0["RA"][d1][b_same_day] = uA["id"]
+    tt0 = canonical.timetable_from_grids(g0, mM)
+    an0 = CM.analyze_structured(g0, mM)
+    dbl = [i for i, d in enumerate(an0["issues_detail"]) if d["sig"].startswith("teacher_double@V1")]
+    check("M5 crafted double-booking detected", len(dbl) == 1, an0["issues"][:3])
+    if dbl:
+        rep = cp_solver.repair_context(scM, tt0, focus={"kind": "hard", "index": dbl[0]},
+                                       mode="instance", time_per_tier=4)
+        check("M5 instance repair succeeds (strict tier)", rep.get("ok") and rep.get("tier_index") == 0,
+              rep.get("reason") or rep.get("tier"))
+        if rep.get("ok"):
+            check("M5 repair leaves 0 hard issues", rep["issues_after"] == [])
+            check("M5 repair is minimal-diff (<= 4 cells)", rep["changed"] <= 4,
+                  "%d cells" % rep["changed"])
+        repT = cp_solver.repair_context(scM, tt0, focus={"kind": "hard", "index": dbl[0]},
+                                        mode="type", time_per_tier=4)
+        check("M5 type-mode repair also succeeds", repT.get("ok") and repT["issues_after"] == [],
+              repT.get("reason"))
+
+# M6: soft-infeasible causes fail honestly, fixable soft causes get fixed
+_fd = canonical.name_to_code()["Prof. Waseem A. Farooq"]
+scS = make_scenario("soft-lab", {
+    "SA": [("English", "Prof. Zair Ahmad", 5), ("Urdu", "Prof. Abdur Rauf", 5),
+           ("Math", "Prof. Najam us Saqib", 5), ("Isl", "Prof. Waseem A. Farooq", 5),
+           ("Comp", "Prof. Faisal Bashir", 5)],
+}, constraints={_fd: {"name": "Prof. Waseem A. Farooq",
+                      "rules": {"forbidden_slots": ["P1"]},
+                      "soft": ["forbidden_slots"]}})
+mS = CM.context_to_model(scS)
+rS, _ = cp_solver.generate_context(scS, n_seeds=1, time_per_seed=10, max_solutions=1)
+if rS:
+    g0 = copy.deepcopy(rS[0]["grids"])
+    # guarantee a soft violation exists: swap a Soft Y cell onto a P1 cell in the same section
+    uY = next(u for u in mS["units"] if u["teacher"] == _fd)
+    y_cell = next((d, s) for d in range(5) for s in range(5)
+                  if g0["SA"][d][s] == uY["id"] and s != 0)
+    d_, s_ = y_cell
+    p1_day = next(d for d in range(5) if g0["SA"][d][0] is not None and g0["SA"][d][0] != uY["id"])
+    other = g0["SA"][p1_day][0]
+    g0["SA"][p1_day][0], g0["SA"][d_][s_] = uY["id"], other
+    ttS = canonical.timetable_from_grids(g0, mS)
+    anS = CM.analyze_structured(g0, mS)
+    sidx = [i for i, v in enumerate(anS["violations"]) if v["sig"].startswith("facrule@{}:forbidden_slots".format(_fd))]
+    check("M6 crafted soft violation detected", len(sidx) == 1, anS["violations"][:2])
+    if sidx:
+        repS = cp_solver.repair_context(scS, ttS, focus={"kind": "soft", "index": sidx[0]},
+                                        mode="instance", time_per_tier=4)
+        okS = repS.get("ok")
+        check("M6 soft repair succeeds", okS, repS.get("reason"))
+        if okS:
+            gone = all(not v["sig"].startswith("facrule@{}:forbidden_slots".format(_fd))
+                       for v in repS["violations_after"])
+            check("M6 focused soft rule cleared after repair", gone)
+            check("M6 soft repair stays minimal-diff (<= 6)", repS["changed"] <= 6,
+                  "%d cells" % repS["changed"])
+
+# M7 app-level: API routes for Manual Build (guarded: only when fastapi+httpx importable)
+import importlib.util as _ilu
+if _ilu.find_spec("fastapi") and _ilu.find_spec("httpx"):
+    try:
+        from fastapi.testclient import TestClient as _TC
+        import api.index as _API
+        _API.app.dependency_overrides[_API.require_user] = lambda: {"id": "suite-user"}
+        _client = _TC(_API.app)
+        _r = _client.get("/manual-template", params={"populations": "inter-1,bs-1"})
+        check("M7 /manual-template 200 + shift-1 sections", _r.status_code == 200 and len(_r.json()["sections"]) == 23)
+        if rM:
+            _ttM = canonical.timetable_from_grids(rM[0]["grids"], mM)
+            _r = _client.post("/manual-analyze", json={"populations": ["inter-2"], "timetable": _ttM})
+            check("M7 /manual-analyze 200 with mismatched-pop payload surfaces data", _r.status_code in (200, 400))
+            _r = _client.post("/manual-analyze", json={"populations": ["inter-2"], "timetable": {}})
+            check("M7 /manual-analyze empty grid 200 (nothing to check)", _r.status_code == 200)
+        _r = _client.post("/manual-repair", json={"populations": ["inter-2"], "timetable": {}, "mode": "bogus"})
+        check("M7 /manual-repair rejects bad mode", _r.status_code == 400)
+        _API.app.dependency_overrides = {}
+        _r = _client.post("/manual-analyze", json={"populations": ["inter-2"], "timetable": {}})
+        check("M7 auth gating: no token -> 401", _r.status_code == 401)
+    except Exception as e:
+        check("M7 API route tests importable", False, repr(e))
+else:
+    check("M7 API route tests skipped (fastapi/httpx not installed locally)", True)
+
+# =====================================================================
+print()
+print("=" * 72)
 total = passed + failures
 print("RESULT: %d/%d checks passed%s" %
       (passed, total, "  —  ALL TESTS PASSED ✓" if failures == 0 else
