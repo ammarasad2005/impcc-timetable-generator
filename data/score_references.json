@@ -1,0 +1,26 @@
+{
+  "fingerprint": "f8769622006c8143",
+  "computedAt": "2026-08-24 21:00 UTC",
+  "references": {
+    "inter-1": {
+      "population": "inter-1",
+      "score": 10460,
+      "total": 16960,
+      "penalty": 6500,
+      "optimal": true,
+      "allPenalized": true,
+      "solutionsConsidered": 81
+    },
+    "bs-1": {
+      "population": "bs-1",
+      "score": 80460,
+      "total": 88760,
+      "penalty": 8300,
+      "optimal": false,
+      "allPenalized": true,
+      "solutionsConsidered": 113
+    }
+  },
+  "bakedBy": "F17 bake n_seeds=2",
+  "note": "standalone (solved alone) best-known shuffle score per population"
+}

@@ -686,6 +686,64 @@ check("N4 exports skip un-covered sections instead of throwing",
       "does not cover '+secId+'" in built or "does not cover '+secId+'" in built.replace("\'", "'")
       or "Not exported — the selected combination does not cover" in built)
 
+# ---- O-series: F17 fairness scorecard (per-side split + standalone refs) ----
+try:
+    import context_model as _cm
+    import canonical as _canon
+    ctxO = _canon.solver_context(['inter-1', 'bs-1'])
+    mO = _cm.context_to_model(ctxO)
+    units_by_sec = {}
+    for u in mO['units']:
+        for s in u['secs']:
+            units_by_sec.setdefault(s, u['id'])
+    gridsO = {s['key']: [[units_by_sec.get(s['key']) if d == 0 and p == 0 else None
+                          for p in range(mO['periods'])] for d in range(mO['days'])]
+              for s in mO['sections']}
+    wholeO = _cm.shuffle_score(gridsO, mO)
+    interO = _cm.shuffle_score_partial(gridsO, mO, level='inter')
+    bsO = _cm.shuffle_score_partial(gridsO, mO, level='bs')
+    check("O1 shuffle split is exactly additive (inter + bs == whole)",
+          interO + bsO == wholeO)
+    check("O2 section-level attribution covers both levels",
+          any(s.get('level') == 'inter' for s in mO['sections']) and
+          any(s.get('level') == 'bs' for s in mO['sections']))
+except Exception as e:
+    check("O1/O2 shuffle split helpers", False)
+
+try:
+    import cp_solver as _cs_o
+    r2 = _cs_o.standalone_reference('inter-2', time_per_seed=1, n_seeds=1)
+    check("O3 standalone_reference is None-safe for populations without sections (inter-2 pre-entry)",
+          r2 is None)
+except Exception as e:
+    check("O3 standalone_reference None-safety", False)
+
+try:
+    import json as _jo
+    baked = _jo.load(open('data/score_references.json', encoding='utf-8'))
+    refs = baked.get('references') or {}
+    check("O4 baked standalone references carry both shift-1 sides with scores",
+          'inter-1' in refs and 'bs-1' in refs and
+          isinstance(refs['inter-1'].get('score'), int) and isinstance(refs['bs-1'].get('score'), int))
+    check("O5 vercel.json bundles data/score_references.json",
+          'data/score_references.json' in _jo.load(open('vercel.json'))['functions']['api/index.py']['includeFiles'])
+except Exception as e:
+    check("O4/O5 baked references + bundling", False)
+
+built17 = open('index.html', encoding='utf-8').read()
+check("O6 UI computes the per-side split (scChipText/scSplitCombo/scSplitRaw present)",
+      'function scChipText(' in built17 and 'function scSplitCombo(' in built17 and 'function scSplitRaw(' in built17)
+check("O7 UI fetches + displays standalone references (ensureScoreRefs / '% standalone')",
+      'function ensureScoreRefs(' in built17 and '/score-references' in built17 and '% standalone' in built17)
+check("O8 scorecard drill-down shows the coexistence split line",
+      'coexistence split: ' in built17 and 'splitLine+' in built17)
+check("O9 ranking semantics unchanged (pool sorts by validity, then score+penalty)",
+      '((a.penalty>0?1:0)-(b.penalty>0?1:0))' in built17 and '((a.score+(a.penalty||0))-(b.score+(b.penalty||0)))' in built17)
+api_src17 = open('api/index.py', encoding='utf-8').read()
+seg = api_src17.split('@app.get("/score-references")')[1].split('@app.')[0]
+check("O10 /score-references route is public, fingerprinted, baked-first",
+      '_SCORE_REF_CACHE' in seg and 'score_references.json' in seg and '_canon_fingerprint' in seg and 'Depends(require_user)' not in seg)
+
 # =====================================================================
 print()
 print("=" * 72)

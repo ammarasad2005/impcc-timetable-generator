@@ -764,6 +764,43 @@ def decode_context(solver, model, piece_slots, piece_days):
     return grids
 
 
+def standalone_reference(population, time_per_seed=45, n_seeds=1):
+    """Solve ONE population alone (no cross-population coupling) and return its
+    best-known standalone figures for the fairness scorecard:
+    {population, score, total, penalty, optimal}.
+
+    None if the population has no sections yet (e.g. inter-2 before data entry).
+    """
+    import canonical
+    import context_model as CM
+
+    ctx = canonical.solver_context([population])
+    model = CM.context_to_model(ctx)
+    if not model["sections"]:
+        return None
+    ranked, optimal = generate_context(ctx, n_seeds=n_seeds, time_per_seed=time_per_seed, max_solutions=0)
+    if not ranked:
+        return None
+    # fairness reference = the best SHUFFLE SCORE this population reaches alone.
+    # Prefer fully-valid solutions (no soft penalties); only fall back to the
+    # best total otherwise, and say so in the record.
+    import context_model as CM
+    model = CM.context_to_model(ctx)   # fresh model (grids get consumed per call)
+    def own(g):
+        m = CM.context_to_model(ctx)
+        return CM.shuffle_score_partial(g, m)
+    valid = [s for s in ranked if not s.get("penalty")]
+    if valid:
+        s = min(valid, key=lambda s: own(s["grids"]))
+        fallback = False
+    else:
+        s = min(ranked, key=lambda s: own(s["grids"]))   # reference tracks the SCORE, not the total
+        fallback = True
+    return {"population": population, "score": own(s["grids"]),
+            "total": s["total"], "penalty": s["penalty"], "optimal": bool(optimal),
+            "allPenalized": fallback, "solutionsConsidered": len(ranked)}
+
+
 def generate_context(context, n_seeds=2, time_per_seed=45, max_solutions=0):
     """Solve a context (canonical.solver_context output). Returns (ranked, any_optimal):
     ranked = list of {grids, score, penalty, violations, total}, best first.

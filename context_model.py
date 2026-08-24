@@ -560,9 +560,18 @@ def evaluate(grids, model):
 
 def shuffle_score(grids, model):
     """Shuffle penalty (the classic score) under a context model."""
+    return shuffle_score_partial(grids, model)
+
+
+def shuffle_score_partial(grids, model, level=None):
+    """Same terms as shuffle_score, restricted to sections of one level
+    ('inter' / 'bs'). The shuffle score is exactly additive per section, so
+    inter + bs == whole for shift-1 solutions — a fair per-side breakdown."""
     pen = 0
     units = {u["id"]: u for u in model["units"]}
     for section in model["sections"]:
+        if level is not None and section.get("level") != level:
+            continue
         g = grids.get(section["key"])
         if not g:
             continue
