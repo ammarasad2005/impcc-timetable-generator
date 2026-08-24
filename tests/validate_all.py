@@ -461,6 +461,52 @@ else:
 # =====================================================================
 print()
 print("=" * 72)
+print("TRANSLATION LAYER (llm_translate) — vocabulary + direct expressions")
+print("=" * 72)
+
+import llm_translate as LLM
+
+# every structured rule key in the canonical data must be translatable
+rule_keys_used = set()
+for _e in canonical.solver_constraints().values():
+    rule_keys_used.update((_e.get("rules") or {}).keys())
+check("L1 llm RULE_SPEC covers every canonical rule key",
+      rule_keys_used <= set(LLM.RULE_SPEC.keys()),
+      "missing: %s" % sorted(rule_keys_used - set(LLM.RULE_SPEC.keys())))
+
+# every GI type in the canonical data must be translatable
+_raw = json.load(open("data/canonical.json", encoding="utf-8"))
+gi_types_used = set()
+for _items in _raw["generalInstructions"].values():
+    gi_types_used.update(g["type"] for g in _items)
+check("L2 llm GI_RULE_TYPES covers every canonical GI type",
+      gi_types_used <= set(LLM.GI_RULE_TYPES),
+      "missing: %s" % sorted(gi_types_used - set(LLM.GI_RULE_TYPES)))
+
+# direct-expression route: structured JSON pasted by the admin is validated
+# locally (confidence 1.0) WITHOUT calling the LLM — works with no API key
+dx = LLM.translate_constraints(
+    '{"natural": "Assad BM pinned to P3 Mon+Tue", "rules": '
+    '{"subject_slot_days": [{"subject": "Business Mathematics", "slot": "P3",'
+    ' "days": ["MON", "TUE"]}], "allowed_slots_in_stream": '
+    '[{"stream": "I.COM", "slots": ["P1", "P2", "P3"]}]}}')
+check("L3 direct expression: faculty rules validated locally (no LLM)",
+      dx.get("confidence") == 1.0 and not dx.get("errors") and
+      dx["rules"].get("subject_slot_days") ==
+      [{"subject": "Business Mathematics", "slot": "P3", "days": ["MON", "TUE"]}],
+      str(dx)[:200])
+dx_bad = LLM.translate_constraints('{"rules": {"subject_slot_days": [{"subject": "X", "slot": "P9", "days": ["SUN"]}]}}')
+check("L4 direct expression: invalid shapes rejected with errors",
+      "error" in dx_bad and dx_bad.get("errors"), str(dx_bad)[:160])
+gi_dx = LLM.translate_general_instruction(
+    '{"type": "section_off_days", "params": {"sections": ["BSAF-SEM-VII"], "days": ["FRI"]}}')
+check("L5 direct expression: GI rule validated locally (no LLM)",
+      gi_dx.get("type") == "section_off_days" and gi_dx.get("confidence") == 1.0 and
+      gi_dx["params"]["days"] == ["FRI"], str(gi_dx)[:200])
+
+# =====================================================================
+print()
+print("=" * 72)
 total = passed + failures
 print("RESULT: %d/%d checks passed%s" %
       (passed, total, "  —  ALL TESTS PASSED ✓" if failures == 0 else
