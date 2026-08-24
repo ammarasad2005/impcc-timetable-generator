@@ -744,6 +744,30 @@ seg = api_src17.split('@app.get("/score-references")')[1].split('@app.')[0]
 check("O10 /score-references route is public, fingerprinted, baked-first",
       '_SCORE_REF_CACHE' in seg and 'score_references.json' in seg and '_canon_fingerprint' in seg and 'Depends(require_user)' not in seg)
 
+# ---- P-series: F18 themes (dark mode + palettes) ----
+built18 = open('index.html', encoding='utf-8').read()
+check("P1 four palettes declared as data-theme overrides",
+      'html[data-theme="midnight"]' in built18 and 'html[data-theme="forest"]' in built18 and
+      'html[data-theme="sand"]' in built18)
+check("P2 theme applies before first paint (head script reads impcc-theme)",
+      "localStorage.getItem('impcc-theme')" in built18.split('</head>')[0] and
+      'document.documentElement.dataset.theme' in built18.split('</head>')[0])
+check("P3 picker present in the masthead with all options",
+      'id="themeSel"' in built18 and 'value="midnight"' in built18 and 'value="forest"' in built18 and
+      'value="sand"' in built18 and 'value="system"' in built18 and 'value="classic"' in built18)
+check("P4 change wiring + system-mode media-query listener + boot init",
+      'function initTheme()' in built18 and "addEventListener('change'" in built18 and
+      'prefers-color-scheme: dark' in built18 and 'initTheme();\nconst restored=restore();'
+      in built18.replace('\r', ''))
+check("P5 print always resets to the classic palette",
+      built18.count('@media print{') >= 1 and
+      built18.find('--paper:#eef0e8; --surface:#fcfcf7; --surface2:#f5f6ee;', built18.find('@media print{')) > built18.find('@media print{'))
+check("P6 classic theme remains the default (no data-theme override required)",
+      'html[data-theme="classic"]' not in built18)
+check("P7 dark-theme literal fixes cover the big white-surface components",
+      'tg-cell.dual' in built18 and '.sp-cell' in built18 and '.mast-search input' in built18 and
+      ':is(html[data-theme="midnight"], html[data-theme="forest"])' in built18)
+
 # =====================================================================
 print()
 print("=" * 72)
