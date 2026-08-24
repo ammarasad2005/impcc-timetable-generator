@@ -5155,5 +5155,158 @@ const restored=restore();""",
 ensureScoreRefs();
 const restored=restore();""")
 
+# ---- 49) THEMES: dark mode + palette themes (F18) ------------------------------
+f18_css = """
+/* ================================================================
+ * F18 THEMES — every visual derives from the :root palette; a theme is
+ * therefore a palette override on <html data-theme="...">, applied BEFORE
+ * first paint (head script) to avoid flashes. Themes: classic (default
+ * light), midnight + forest (dark), sand (light sepia), system (follows
+ * the OS dark/light setting). Selection persists per browser in
+ * localStorage (impcc-theme). Print always uses the classic palette.
+ * ================================================================ */
+html[data-theme="midnight"]{
+  --paper:#0e1512; --surface:#161f1a; --surface2:#1d2923;
+  --ink:#e4ece7; --ink2:#9fb0a6; --line:#2c3a33; --line2:#3a4a40;
+  --green:#58bd8b; --green-deep:#a8e2c5; --green-tint:#152a20;
+  --ics:#8ba2ee; --ics-deep:#c9d4f7; --ics-tint:#1b2540;
+  --amber:#f2b23c; --amber-deep:#ffd97e; --amber-tint:#2b2110;
+  --gold:#e5ac1e; --red:#e26a50;
+  --console:#080f0b; --console2:#0d1811;
+}
+html[data-theme="forest"]{
+  --paper:#07120d; --surface:#0e1d15; --surface2:#13291e;
+  --ink:#e0f0e8; --ink2:#8fae9c; --line:#21402f; --line2:#2c5340;
+  --green:#3fd494; --green-deep:#9ff0c8; --green-tint:#0f2e20;
+  --ics:#86a5f0; --ics-deep:#bfd1f8; --ics-tint:#122038;
+  --amber:#ffc85e; --amber-deep:#ffdd92; --amber-tint:#2c2410;
+  --gold:#f0b428; --red:#ef7050;
+  --console:#04120b; --console2:#081a10;
+}
+html[data-theme="sand"]{
+  --paper:#ece1c9; --surface:#f9f2e1; --surface2:#f2e9d2;
+  --ink:#2d2318; --ink2:#71604a; --line:#d6c6a8; --line2:#c3b08a;
+  --green:#1d6a44; --green-deep:#123a27; --green-tint:#e0e8d4;
+  --ics:#3a55b0; --ics-deep:#28397c; --ics-tint:#e3e2ef;
+  --amber:#da9712; --amber-deep:#7a5a10; --amber-tint:#f6ecd2;
+  --gold:#96700e; --red:#b44a2e;
+  --console:#241a0e; --console2:#2e2314;
+}
+/* dark-theme literal fixes: components that hardcode light surfaces */
+:is(html[data-theme="midnight"], html[data-theme="forest"]) body{
+  background-image:radial-gradient(rgba(230,240,235,.05) 1px,transparent 1px);
+}
+:is(html[data-theme="midnight"], html[data-theme="forest"]) select#comboSel,
+:is(html[data-theme="midnight"], html[data-theme="forest"]) .mast-search input,
+:is(html[data-theme="midnight"], html[data-theme="forest"]) .mb-pill,
+:is(html[data-theme="midnight"], html[data-theme="forest"]) .mb-sec,
+:is(html[data-theme="midnight"], html[data-theme="forest"]) .mb-card,
+:is(html[data-theme="midnight"], html[data-theme="forest"]) .cons-nl,
+:is(html[data-theme="midnight"], html[data-theme="forest"]) .ed-chip,
+:is(html[data-theme="midnight"], html[data-theme="forest"]) .dir-add input#dirNewName,
+:is(html[data-theme="midnight"], html[data-theme="forest"]) .dir-add select,
+:is(html[data-theme="midnight"], html[data-theme="forest"]) .dir-name:hover,
+:is(html[data-theme="midnight"], html[data-theme="forest"]) .dir-name:focus,
+:is(html[data-theme="midnight"], html[data-theme="forest"]) .alloc-row input,
+:is(html[data-theme="midnight"], html[data-theme="forest"]) .alloc-row select,
+:is(html[data-theme="midnight"], html[data-theme="forest"]) .clear-f,
+:is(html[data-theme="midnight"], html[data-theme="forest"]) .tg-cell,
+:is(html[data-theme="midnight"], html[data-theme="forest"]) .sp-cell,
+:is(html[data-theme="midnight"], html[data-theme="forest"]) .cell-editor select,
+:is(html[data-theme="midnight"], html[data-theme="forest"]) .tweak-add select,
+:is(html[data-theme="midnight"], html[data-theme="forest"]) .tweak-add input[type=date],
+:is(html[data-theme="midnight"], html[data-theme="forest"]) .eng-stmt{background:var(--surface);color:var(--ink)}
+:is(html[data-theme="midnight"], html[data-theme="forest"]) .tg-cell.dual,
+:is(html[data-theme="midnight"], html[data-theme="forest"]) .sp-cell.dual,
+:is(html[data-theme="midnight"], html[data-theme="forest"]) .sp-course:hover{background:var(--amber-tint)}
+:is(html[data-theme="midnight"], html[data-theme="forest"]) .hist .bar{background:var(--line2)}
+:is(html[data-theme="midnight"], html[data-theme="forest"]) .mb-note{color:var(--ink2)}
+/* theme picker control (masthead) */
+.theme-wrap{display:flex;align-items:center;gap:6px}
+.theme-sel{font-family:var(--mono);font-size:10.5px;padding:5px 8px;border-radius:999px;
+  border:1px solid rgba(255,255,255,.35);background:rgba(255,255,255,.10);color:#fff;cursor:pointer}
+.theme-sel option{color:var(--ink)}
+"""
+rep("""::selection{background:var(--amber);color:#241a02}""",
+    """::selection{background:var(--amber);color:#241a02}
+""" + f18_css.strip() + """
+""")
+
+f18_head = """<script>
+/* F18: apply the saved theme before first paint (no flash) */
+(function(){try{
+  var t=localStorage.getItem('impcc-theme')||'classic';
+  var r=t;
+  if(t==='system'){r=(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)?'midnight':'classic';}
+  document.documentElement.dataset.theme=r;
+  document.documentElement.dataset.themeSel=t;
+}catch(e){document.documentElement.dataset.theme='classic';}})();
+</script>
+</head>"""
+rep("</head>", f18_head)
+
+rep("""  <div class="mast-auth" id="authUi"></div>
+</header>""",
+    """  <label class="theme-wrap" title="Colour theme — saved in this browser">
+    <select id="themeSel" class="theme-sel" aria-label="Colour theme">
+    <option value="classic">Classic</option>
+    <option value="midnight">Midnight</option>
+    <option value="forest">Forest</option>
+    <option value="sand">Sand</option>
+    <option value="system">System</option>
+  </select></label>
+  <div class="mast-auth" id="authUi"></div>
+</header>""")
+
+f18_js = """
+/* F18 theme application + persistence */
+function applyThemeChoice(sel){
+  var res=sel;
+  if(sel==='system'){res=(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)?'midnight':'classic';}
+  document.documentElement.dataset.theme=res;
+  document.documentElement.dataset.themeSel=sel;
+  try{localStorage.setItem('impcc-theme',sel);}catch(e){}
+  var s=document.getElementById('themeSel');
+  if(s&&s.value!==sel)s.value=sel;
+}
+function initTheme(){
+  var sel='classic';
+  try{sel=localStorage.getItem('impcc-theme')||'classic';}catch(e){}
+  applyThemeChoice(sel);
+  var s=document.getElementById('themeSel');
+  if(s)s.addEventListener('change',function(){applyThemeChoice(s.value);setTicker('Theme: '+s.options[s.selectedIndex].text+' (saved in this browser)','ok');});
+  if(window.matchMedia){
+    var mq=window.matchMedia('(prefers-color-scheme: dark)');
+    var f=function(){var cur='classic';try{cur=localStorage.getItem('impcc-theme')||'classic';}catch(e){}
+      if(cur==='system')applyThemeChoice('system');};
+    if(mq.addEventListener)mq.addEventListener('change',f);
+    else if(mq.addListener)mq.addListener(f);
+  }
+}
+"""
+rep("/* ---------- boot: restore saved results (no auto-generation) ---------- */",
+    f18_js + "/* ---------- boot: restore saved results (no auto-generation) ---------- */")
+rep("""renderAuth();
+ensureScoreRefs();
+const restored=restore();""",
+    """renderAuth();
+ensureScoreRefs();
+initTheme();
+const restored=restore();""")
+
+# print must always use the classic palette (surface vars are overridden in dark themes)
+rep("""@media print{
+  @page{size:A4;margin:12mm}""",
+    """@media print{
+  :root{
+    --paper:#eef0e8; --surface:#fcfcf7; --surface2:#f5f6ee;
+    --ink:#182720; --ink2:#5b6a61; --line:#d7dbcc; --line2:#c6ccba;
+    --green:#1c6b48; --green-deep:#0e3b29; --green-tint:#e2efe6;
+    --ics:#3a55b0; --ics-deep:#28397c; --ics-tint:#e5e9f8;
+    --amber:#e8a41f; --amber-deep:#8a6210; --amber-tint:#fdf3dc;
+    --gold:#a97b0a; --red:#c04a2b;
+  }
+  @page{size:A4;margin:12mm}""")
+
 io.open(DST, "w", encoding="utf-8").write(src)
 print("OK → wrote", DST, "(", len(src), "bytes )")
