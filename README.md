@@ -6,7 +6,7 @@
 
 **Islamabad Model Postgraduate College of Commerce (H-8/4)** — Intermediate · 1st Shift · ICS &amp; I.Com
 
-A production timetable generator that turns the college's faculty constraints and course allocation into **clash-free weekly schedules** — solved live in the browser and proven-optimal by a CP-SAT backend.
+A production timetable generator for the college's **three timetable populations** — **Intermediate 1st Shift**, **BS Departments 1st Shift** (solved jointly: one teacher pool, zero cross-level clashes) and **Intermediate 2nd Shift** (an independent system) — turning faculty constraints, course allocations and institution-level general instructions into clash-free weekly schedules with documented soft-constraint violations.
 
 <br/>
 
@@ -86,7 +86,11 @@ A production timetable generator that turns the college's faculty constraints an
 | ✦ **Compute optimal (CP-SAT)** | A proven-optimal backend (OR-Tools CP-SAT on Vercel) finds the mathematically best schedules — score **560** — and merges them into the pool. |
 | 🔢 **Combination pool** | Every distinct valid timetable is kept, ranked by shuffle score, and switchable with ‹ ›. Nothing is ever silently dropped. |
 | 🧭 **Nine views** | Sections · Faculty · Constraints · Allocation · Directory · Saved · History · Tweaks · Engagement. |
-| 📣 **Publish** | Push **one** timetable so every visitor sees it without signing in; unpush removes it again. |
+| 📣 **Publish** | Push **one timetable per population** so every visitor sees it without signing in; unpush removes it again. |
+| ⚡ **Simulation mode** | Evaluate *hypothetical* faculty constraints against the selected combination — real constraints untouched, verdicts per teacher, apply or discard. |
+| 📋 **Instructions** | Institution-level general instructions as admin-managed data: structured rule editors, NL→AI translation, per-population publish. |
+| 🔒 **Locks** | Cell, day and section locks + re-optimize around them. |
+| ⚑ **Documented violations** | Solutions that must disobey soft constraints (physically unavoidable) carry itemized violation reports + penalties; the pool rule shows ≥10 valid, or pads with documented violators. |
 
 ## 🎯 The score
 
@@ -99,7 +103,7 @@ Lower is better — it measures **how much a subject shuffles between period slo
 | 3 / week | 100 |
 | 2 / week | 10 |
 
-The **proven optimum is 560**; the in-browser solver typically lands at 570–580, and the CP-SAT backend proves 560.
+The **legacy dataset's proven optimum is 560** (its regression fixture). The 2026-27 multi-population dataset is structurally denser (day+slot bans force some 5/wk splitting) — its score compares solutions within the dataset, plus itemized soft-penalty totals.
 
 ## 🛠 Adjusting the timetable
 
@@ -161,6 +165,7 @@ Exports carry **only college identity** — no scores, ranks, solver or site/dev
 | `constraints_schema.md` · `tweaks_schema.md` · `engagement_schema.md` · `versioning_schema.md` · `swap_schema.md` · `canonical_model.md` | Feature specs |
 | `gen_all.py` · `export_xlsx.py` · `metrics.py` · `make_report.py` | Offline pipeline (batch solve → XLSX → report) |
 | `assets/` | README screenshots |
+| `tests/validate_all.py` | **The final validation suite** — 87 checks: all three populations, cross-shift isolation, capacity/expandability, the 560 regression (`--fast` skips long solves) |
 
 ## 🧪 Development
 

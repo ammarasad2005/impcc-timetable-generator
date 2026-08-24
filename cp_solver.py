@@ -612,6 +612,12 @@ def build_from_context(model):
             if daybools:
                 m.Add(sum(daybools) >= need)
         for e in (rules.get("stream_slots_required") or []):
+            # stream must EXIST in this context (a shift-2 scenario without ICS
+            # sections cannot satisfy an ICS stream requirement — skip it)
+            stream_units = [u for u in units_of
+                            if any(_sec_stream(sec) == e["stream"] for sec in u["secs"])]
+            if not stream_units:
+                continue
             for sl in e["slots"]:
                 si = SLOT_OF[sl]
                 daybools = []

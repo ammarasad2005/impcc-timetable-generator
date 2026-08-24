@@ -915,7 +915,7 @@
       let found = false;
       for (let d = 0; d < Dg && !found; d++) {
         for (let s = 0; s < Pg && !found; s++) {
-          if (UNITS[gx[d][s]].subject === "Principles of Accounting") {
+          if (gx[d][s] !== null && UNITS[gx[d][s]].subject === "Principles of Accounting") {
             let okall = true;
             for (const y of com1) {
               if (y === x) continue;

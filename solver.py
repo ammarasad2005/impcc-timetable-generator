@@ -606,9 +606,19 @@ def validate(grids, R=None):
         found = False
         for d in range(Dg):
             for s in range(Pg):
-                if UNITS[gx[d][s]]["subject"] == "Principles of Accounting":
-                    if all(UNITS[grids[y][d][s]]["subject"] != "Principles of Economics"
-                           for y in com1 if y != x):
+                uid = gx[d][s]
+                if uid is None:
+                    continue
+                if UNITS[uid]["subject"] == "Principles of Accounting":
+                    ok_all = True
+                    for y in com1:
+                        if y == x:
+                            continue
+                        uidy = grids[y][d][s]
+                        if uidy is not None and UNITS[uidy]["subject"] == "Principles of Economics":
+                            ok_all = False
+                            break
+                    if ok_all:
                         found = True
                         break
             if found:
