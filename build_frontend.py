@@ -5224,7 +5224,9 @@ html[data-theme="sand"]{
 /* theme picker control (masthead) */
 .theme-wrap{display:flex;align-items:center;gap:6px}
 .theme-sel{font-family:var(--mono);font-size:10.5px;padding:5px 8px;border-radius:999px;
-  border:1px solid rgba(255,255,255,.35);background:rgba(255,255,255,.10);color:#fff;cursor:pointer}
+  border:1px solid var(--line2);background:var(--surface);color:var(--ink);cursor:pointer;
+  box-shadow:0 1px 3px rgba(20,40,30,.08)}
+.theme-sel:hover{border-color:var(--green)}
 .theme-sel option{color:var(--ink)}
 """
 rep("""::selection{background:var(--amber);color:#241a02}""",
