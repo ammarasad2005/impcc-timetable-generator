@@ -116,6 +116,16 @@ def supabase_js():
     return JSONResponse({"detail": "supabase.js not found"}, status_code=404)
 
 
+@app.get("/populations.js", include_in_schema=False)
+def populations_js():
+    """The population/schedule domain model (IMPCC_POPULATIONS)."""
+    root = _find_root()
+    f = root / "populations.js"
+    if f.exists():
+        return FileResponse(f, media_type="application/javascript")
+    return JSONResponse({"detail": "populations.js not found"}, status_code=404)
+
+
 
 
 def require_user(authorization: str = Header(default="")):
