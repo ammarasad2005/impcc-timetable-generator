@@ -1868,6 +1868,12 @@ const RULE_META={
   subject_forbidden_days:{label:'Subject not on days',kind:'subjectDays'},
   stream_slots_required:{label:'Stream fills periods',kind:'streamSlots'},
   stream_forbidden_days:{label:'Stream not on days',kind:'streamDays'},
+  allowed_slots_in_stream:{label:'Stream: only these periods',kind:'streamSlotsOnly'},
+  allowed_days_in_stream:{label:'Stream: only these days',kind:'streamDaysOnly'},
+  subject_slot_days:{label:'Subject pinned to period on days',kind:'subjectSlotDays'},
+  soft_prefer_free_slots:{label:'Prefer free periods (soft)',kind:'slots'},
+  soft_even_distribution:{label:'Even distribution over week (soft)',kind:'bool'},
+  allow_same_subject_same_day:{label:'Same-subject doubles allowed',kind:'bool'},
 };
 function describeRule(key,v){
   const m=RULE_META[key];if(!m)return JSON.stringify(v);
@@ -1880,6 +1886,10 @@ function describeRule(key,v){
     case 'subjectDays':return (v||[]).map(e=>e.subject+' not '+e.days.join(',')).join(' · ');
     case 'streamSlots':return (v||[]).map(e=>e.stream+' fills '+e.slots.join(',')).join(' · ');
     case 'streamDays':return (v||[]).map(e=>e.stream+' not '+e.days.join(',')).join(' · ');
+    case 'streamSlotsOnly':return (v||[]).map(e=>e.stream+' only '+e.slots.join(',')).join(' · ');
+    case 'streamDaysOnly':return (v||[]).map(e=>e.stream+' only '+e.days.join(',')).join(' · ');
+    case 'subjectSlotDays':return (v||[]).map(e=>e.subject+' at '+e.slot+' on '+e.days.join(',')).join(' · ');
+    case 'bool':return (v?'yes':'no');
   }
   return JSON.stringify(v);
 }
@@ -1918,6 +1928,10 @@ function readRuleEditor(root,kind){
   if(kind==='subjectDays'){const subj=root.querySelector('.ed-subject').value.trim(),d=selTokens(root,'ed-chip-day');return (subj&&d.length)?[{subject:subj,days:d}]:null;}
   if(kind==='streamSlots'){const st=root.querySelector('.ed-stream').value,sl=selTokens(root,'ed-chip-slot');return (st&&sl.length)?[{stream:st,slots:sl}]:null;}
   if(kind==='streamDays'){const st=root.querySelector('.ed-stream').value,d=selTokens(root,'ed-chip-day');return (st&&d.length)?[{stream:st,days:d}]:null;}
+  if(kind==='streamSlotsOnly'){const st=root.querySelector('.ed-stream').value,sl=selTokens(root,'ed-chip-slot');return (st&&sl.length)?[{stream:st,slots:sl}]:null;}
+  if(kind==='streamDaysOnly'){const st=root.querySelector('.ed-stream').value,d=selTokens(root,'ed-chip-day');return (st&&d.length)?[{stream:st,days:d}]:null;}
+  if(kind==='subjectSlotDays'){const subj=root.querySelector('.ed-subject').value.trim(),sl=root.querySelector('.ed-slot-sel').value,d=selTokens(root,'ed-chip-day');return (subj&&sl&&d.length)?[{subject:subj,slot:sl,days:d}]:null;}
+  if(kind==='bool'){const cb=root.querySelector('.ed-bool input');return cb&&cb.checked?true:null;}
   return null;
 }
 function chipsHTML(cls,tokens,selected){
@@ -1937,6 +1951,10 @@ function ruleEditorHTML(code,key,value){
     case 'subjectDays':inner='<input class="ed-subject" placeholder="Subject" value="'+esc((v&&v[0]&&v[0].subject)||'')+'"> '+chipsHTML('ed-chip '+D,DAYS,(v&&v[0]&&v[0].days)||[]);break;
     case 'streamSlots':inner='<select class="ed-stream"><option value="ICS"'+(v&&v[0]&&v[0].stream==='ICS'?' selected':'')+'>ICS</option><option value="I.COM"'+(v&&v[0]&&v[0].stream==='I.COM'?' selected':'')+'>I.COM</option></select> '+chipsHTML('ed-chip '+C,SLOTS,(v&&v[0]&&v[0].slots)||[]);break;
     case 'streamDays':inner='<select class="ed-stream"><option value="ICS"'+(v&&v[0]&&v[0].stream==='ICS'?' selected':'')+'>ICS</option><option value="I.COM"'+(v&&v[0]&&v[0].stream==='I.COM'?' selected':'')+'>I.COM</option></select> '+chipsHTML('ed-chip '+D,DAYS,(v&&v[0]&&v[0].days)||[]);break;
+    case 'streamSlotsOnly':inner='<select class="ed-stream"><option value="ICS"'+(v&&v[0]&&v[0].stream==='ICS'?' selected':'')+'>ICS</option><option value="I.COM"'+(v&&v[0]&&v[0].stream==='I.COM'?' selected':'')+'>I.COM</option></select> '+chipsHTML('ed-chip '+C,SLOTS,(v&&v[0]&&v[0].slots)||[]);break;
+    case 'streamDaysOnly':inner='<select class="ed-stream"><option value="ICS"'+(v&&v[0]&&v[0].stream==='ICS'?' selected':'')+'>ICS</option><option value="I.COM"'+(v&&v[0]&&v[0].stream==='I.COM'?' selected':'')+'>I.COM</option></select> '+chipsHTML('ed-chip '+D,DAYS,(v&&v[0]&&v[0].days)||[]);break;
+    case 'subjectSlotDays':inner='<input class="ed-subject" placeholder="Subject" value="'+esc((v&&v[0]&&v[0].subject)||'')+'"> at <select class="ed-slot-sel">'+SLOTS.map(x=>'<option'+(v&&v[0]&&v[0].slot===x?' selected':'')+'>'+x+'</option>').join('')+'</select> on '+chipsHTML('ed-chip '+D,DAYS,(v&&v[0]&&v[0].days)||[]);break;
+    case 'bool':inner='<label class="ed-bool"><input type="checkbox"'+(v?' checked':'')+'> enabled</label>';break;
   }
   return '<div class="rule-ed" data-code="'+esc(code)+'" data-key="'+esc(key)+'" data-kind="'+m.kind+'">'+inner+'<button class="mini-export rule-save">Save</button><button class="mini-export rule-cancel">Cancel</button></div>';
 }
@@ -1945,6 +1963,7 @@ function renderConstraints(){
   const res=IMPCC_SOLVER.resolveConstraints(state.constraints);
   let h='<div class="cons-note">'+(SB&&SB.loggedIn?'':'<b style="color:var(--amber-deep)">🔒 Sign in to unlock AI translation & cloud sync. </b>')+'<b>Faculty constraints are data.</b> Add, edit or remove individual rules below (✎ / ✕), or describe a change in plain language and press <b>✦ Translate with AI</b>, then <b>Apply</b>. Changes take effect on the next generation.<span class="cons-actions"><button class="mini-export" id="consDownload">⇩ Download</button><button class="mini-export" id="consUpload">⇧ Upload</button><button class="mini-export" id="consReset">Reset to defaults</button></span></div>';
   h+='<input type="file" id="consUploadInput" accept="application/json" style="display:none">';
+  h+=simBar;
   h+='<div class="cons-grid">';
   for(const e of entries){
     const eff=((res[e.code]||{}).rules)||{};
@@ -2703,7 +2722,7 @@ rep('<button id="viewTweaks">🛠 Tweaks</button>',
     '<button id="viewTweaks">🛠 Tweaks</button>\n      <button id="viewEngagement">👥 Engagement</button>')
 # (b) listener
 rep("$('viewTweaks').addEventListener('click',()=>setView('tweaks'));",
-    "$('viewTweaks').addEventListener('click',()=>setView('tweaks'));\n$('viewEngagement').addEventListener('click',()=>setView('engagement'));")
+    "$('viewTweaks').addEventListener('click',()=>setView('tweaks'));\n$('viewGI').addEventListener('click',()=>setView('gi'));\n$('viewEngagement').addEventListener('click',()=>setView('engagement'));")
 # (c) setView toggle
 rep("  $('viewTweaks').classList.toggle('on',v==='tweaks');",
     "  $('viewTweaks').classList.toggle('on',v==='tweaks');\n  $('viewEngagement').classList.toggle('on',v==='engagement');")
@@ -4268,9 +4287,6 @@ rep('/* ---------- population layer (inter-1 / bs-1 / inter-2) ---------- */',
 # (a2) simulation banner + per-card verdicts in renderConstraints
 rep('function renderConstraints(){\n  const entries=constraintEntries();\n  const res=IMPCC_SOLVER.resolveConstraints(state.constraints);',
     'function renderConstraints(){\n  const entries=constraintEntries();\n  const res=IMPCC_SOLVER.resolveConstraints(simActive()?simBaseConstraints():state.constraints);\n  const simRes=simActive()?simRuleVerdicts():null;\n  const simBar=simActive()?\n    \'<div class="sim-banner"><b>⚡ SIMULATION MODE</b> — evaluating hypothetical constraints against combination \'+(getSel()?(\'#\'+rankOf(getSel(),sortedList())+\' (\'+getSel().score+\' pts)\'):\'— none selected —\')+\'. Real constraints are NOT modified.\'+\n    \'<span class="sim-actions">\'+\n    \'<button class="mini-export" id="simRefresh">↻ Re-evaluate</button>\'+\n    \'<button class="mini-export" id="simApply">✓ Apply to real constraints</button>\'+\n    \'<button class="mini-export" id="simDiscard">✕ Discard simulation</button></span>\'+\n    (simRes&&!simRes.error&&simRes.summary?(\'<div class="sim-verdict">\'+(simRes.summary.issues.length?(\'⚠ <b>\'+simRes.summary.issues.length+\' hard violations</b> — this combination would be INVALID under these rules\'):(simRes.summary.penalty>0?(\'⚑ <b>\'+simRes.summary.violations.length+\' soft violations</b> (+\'+simRes.summary.penalty+\' penalty)\'):\'✓ all constraints satisfied\'))+\'</div>\'):\'\')+\n    \'</div>\':\'\';')
-
-rep('h+=\'<div class="cons-grid">\';',
-    'h+=simBar;h+=\'<div class="cons-grid">\';')
 
 rep('h+=\'<article class="cons-card\'+(e.overridden?\' edited\':\'\')+\'">\';',
     'h+=\'<article class="cons-card\'+(e.overridden?\' edited\':\'\')+(simActive()&&simRulesOf(e.code)?\' sim-edited\':\'\')+\'">\'\n    +(simActive()&&simRes&&!simRes.error&&simRes.verdicts[e.code]?\'<div class="sim-fail">⚑ would violate: \'+simRes.verdicts[e.code].length+\' rule\'+(simRes.verdicts[e.code].length===1?\'\':\'s\')+\'</div>\':\'\')')
