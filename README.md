@@ -118,6 +118,7 @@ The **legacy dataset's proven optimum is 560** (its regression fixture). The 202
 - **🔍 Insights from timetable** — one click asks the backend to audit the entered grid as one shift. Every hard clash (double-booked teacher, off-day class, load drift, combined-class misalignment, …) and every soft warning becomes a card with its exact cause.
 - **🎯 Targeted repair** — each card offers **Fix this** and **Fix all like this**. CP-SAT then re-solves with every uninvolved cell **pinned to where the admin put it** (strict → local → open tiers), so the fix touches the fewest cells mathematically possible. Physically-forced causes (e.g. Babar P5) report honestly instead of promising a fix.
 - Once the analysis is clean, **✔ Adopt** adds the result to the pool as a normal combination — save, push, export, and history all work unchanged. Drafts autosave per shift in the browser.
+- **📋 General Instructions page** — the per-rule **✕ Remove** and **on/off** controls now actually take effect (local draft → **☁ Publish** to sync), and the sections grid renders combinations that predate the joint shift context with a clear *coverage note* instead of stalling on the previous population's cards.
 
 ## 💾 Save · Version · Push
 

@@ -671,6 +671,24 @@ else:
 # =====================================================================
 print()
 print("=" * 72)
+print("UI FIX GUARDS (F16) — GI remove/toggle wiring + population-aware rendering")
+print("=" * 72)
+built = open("index.html", encoding="utf-8").read()
+check("N1 GI remove buttons are wired (renderGI binds [data-gi-remove])",
+      "mainEl.querySelectorAll('[data-gi-remove]')" in built and "giRemove(" in built)
+check("N1b GI on/off toggles are wired (renderGI binds [data-gi-toggle])",
+      "mainEl.querySelectorAll('[data-gi-toggle]')" in built and "giToggle(" in built)
+check("N2 sectionCard tolerates combinations that miss a section (no crash)",
+      "This combination does not cover this section" in built)
+check("N3 renderSections shows a coverage note instead of stale cards",
+      "does not cover '+esc(POP_LABEL())+'" in built)
+check("N4 exports skip un-covered sections instead of throwing",
+      "does not cover '+secId+'" in built or "does not cover '+secId+'" in built.replace("\'", "'")
+      or "Not exported — the selected combination does not cover" in built)
+
+# =====================================================================
+print()
+print("=" * 72)
 total = passed + failures
 print("RESULT: %d/%d checks passed%s" %
       (passed, total, "  —  ALL TESTS PASSED ✓" if failures == 0 else

@@ -1156,6 +1156,7 @@ function exportSectionCSV(secId){
   const c=getSel();if(!c)return;
   const sec=SECTIONS.find(s=>s.id===secId);if(!sec)return;
   const g=c.tt[secId];
+  if(!g){setTicker('Not exported — the selected combination does not cover '+secId,'err');return;}
   const rows=[['Section','Day','Period','Time','Subject','Teacher']];
   for(let d=0;d<5;d++)for(let s=0;s<5;s++){
     const cell=g[d][s];
@@ -1321,6 +1322,7 @@ async function drawSectionCanvas(secId){
   const c=getSel();if(!c)return;
   const sec=exportSectionOf(secId);if(!sec)return;
   const grid=c.tt[secId];
+  if(!grid)return null;   // combination does not cover this section
   const accent=exportAccentOf(sec);
   const tint=exportTintOf(sec);
   const ink='#182720',muted='#5b6a61',line='#d7dbcc';
@@ -1581,6 +1583,10 @@ function renderScorecard(){
 }
 
 function sectionCard(sec,grid,idx){
+  if(!grid){
+    return '<article class="sec-card" style="opacity:.62"><header><span class="stag">'+esc(sec.stream.toUpperCase())+'</span><h3>'+esc(sec.label)+'</h3><span class="pw">&mdash;</span></header>'+
+      '<div class="cons-note" style="margin:10px">This combination does not cover this section (it was created before the joint shift context, or restored from an old saved pool). Press <b>Generate</b> to create shift-complete combinations.</div></article>';
+  }
   const cfg=POP();
   const times=popDayTimes('MON');
   const days=cfg.days||5, periods=cfg.periods||5, bp=cfg.breakAfterPeriod||0;
@@ -1632,6 +1638,11 @@ function renderSections(tt){
     html+='<section class="stream '+g.key+'"><div class="stream-head"><span class="swatch"></span><h2>'+g.name+'</h2><span class="cnt">'+secs.length+' class'+(secs.length>1?'es':'')+' · '+tot+' periods/wk</span></div><div class="sec-grid'+(shown.length===1?' solo':'')+'">';
     for(const sec of secs){html+=sectionCard(sec,tt[sec.id],idx++);}
     html+='</div></section>';
+  }
+  if(idx===0){
+    html='<div class="cons-note"><b>This combination does not cover '+esc(POP_LABEL())+'.</b> '+
+      'It predates the joint shift context (or was restored from an old saved pool). '+
+      'Press <b>Generate</b> to create shift-complete combinations, or choose another combination from the pool.</div>';
   }
   mainEl.innerHTML=html;
 }
@@ -4402,6 +4413,12 @@ function renderGI(){
   });
   const ms = document.getElementById('giTypeSelect');
   if(ms) ms.addEventListener('change', function(){ if(ms.value){ giAddManual(); } });
+  mainEl.querySelectorAll('[data-gi-remove]').forEach(function(el){
+    el.addEventListener('click', function(){ giRemove(el.getAttribute('data-gi-remove')); });
+  });
+  mainEl.querySelectorAll('[data-gi-toggle]').forEach(function(el){
+    el.addEventListener('change', function(){ giToggle(el.getAttribute('data-gi-toggle')); });
+  });
 }
 
 /* ---------- constraints simulation mode (Q3) ---------- */

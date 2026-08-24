@@ -4608,6 +4608,70 @@ rep("for(const code in R){out[code]={name:R[code].name,rules:JSON.parse(JSON.str
     "for(const code in R){out[code]={name:R[code].name,rules:JSON.parse(JSON.stringify(R[code].rules))};if(R[code].soft&&R[code].soft.length)out[code].soft=R[code].soft.slice();}")
 
 
+
+# ---- 47) FIXES: GI remove/toggle wiring + population-aware resilience (F16)
+# (a) The GI "Remove"/"on" controls rendered but had NO event listeners — dead
+#     buttons (which is also why accidental clicks never reached the cloud).
+# (b) renderSections() assumed every combination covers every section: a pool
+#     combination missing the current population's sections (legacy/restored
+#     combinations) made sectionCard() throw mid-render — leaving the previous
+#     population's cards on screen (BS view silently kept showing Inter).
+
+# (a) wire the GI remove/toggle buttons (delegated per render, like tweaks)
+rep("""  const ms = document.getElementById('giTypeSelect');
+  if(ms) ms.addEventListener('change', function(){ if(ms.value){ giAddManual(); } });
+}""",
+    """  const ms = document.getElementById('giTypeSelect');
+  if(ms) ms.addEventListener('change', function(){ if(ms.value){ giAddManual(); } });
+  mainEl.querySelectorAll('[data-gi-remove]').forEach(function(el){
+    el.addEventListener('click', function(){ giRemove(el.getAttribute('data-gi-remove')); });
+  });
+  mainEl.querySelectorAll('[data-gi-toggle]').forEach(function(el){
+    el.addEventListener('change', function(){ giToggle(el.getAttribute('data-gi-toggle')); });
+  });
+}""")
+
+# (b1) sectionCard degrades to a clear placeholder instead of throwing
+rep("""function sectionCard(sec,grid,idx){
+  const cfg=POP();""",
+    """function sectionCard(sec,grid,idx){
+  if(!grid){
+    return '<article class="sec-card" style="opacity:.62"><header><span class="stag">'+esc(sec.stream.toUpperCase())+'</span><h3>'+esc(sec.label)+'</h3><span class="pw">&mdash;</span></header>'+
+      '<div class="cons-note" style="margin:10px">This combination does not cover this section (it was created before the joint shift context, or restored from an old saved pool). Press <b>Generate</b> to create shift-complete combinations.</div></article>';
+  }
+  const cfg=POP();""")
+
+# (b2) whole-population coverage notice (no crash, never stale cards)
+rep("""    for(const sec of secs){html+=sectionCard(sec,tt[sec.id],idx++);}
+    html+='</div></section>';
+  }
+  mainEl.innerHTML=html;
+}""",
+    """    for(const sec of secs){html+=sectionCard(sec,tt[sec.id],idx++);}
+    html+='</div></section>';
+  }
+  if(idx===0){
+    html='<div class="cons-note"><b>This combination does not cover '+esc(POP_LABEL())+'.</b> '+
+      'It predates the joint shift context (or was restored from an old saved pool). '+
+      'Press <b>Generate</b> to create shift-complete combinations, or choose another combination from the pool.</div>';
+  }
+  mainEl.innerHTML=html;
+}""")
+
+# (b3) exports tolerate combinations that do not cover a section
+rep("""  const sec=SECTIONS.find(s=>s.id===secId);if(!sec)return;
+  const g=c.tt[secId];""",
+    """  const sec=SECTIONS.find(s=>s.id===secId);if(!sec)return;
+  const g=c.tt[secId];
+  if(!g){setTicker('Not exported — the selected combination does not cover '+secId,'err');return;}""")
+rep("""  const sec=exportSectionOf(secId);if(!sec)return;
+  const grid=c.tt[secId];""",
+    """  const sec=exportSectionOf(secId);if(!sec)return;
+  const grid=c.tt[secId];
+  if(!grid)return null;   // combination does not cover this section""")
+
+
+
 # ---- 46) MANUAL BUILD + INSIGHTS + TARGETED REPAIR (F15) --------------
 # Per-shift manual timetable entry: the whole shift (1st: Inter + BS; 2nd:
 # Inter) is entered into an empty template via per-cell pickers (each cell
