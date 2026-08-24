@@ -437,8 +437,13 @@ def _unit_day_domain(u, R, model):
     return sorted(dom)
 
 
-def build_from_context(model):
-    """CP-SAT model for a context model (context_model.context_to_model output)."""
+def build_from_context(model, objective="default", collect=None):
+    """CP-SAT model for a context model (context_model.context_to_model output).
+
+    objective="default" sets the classic shuffle+soft objective. objective="none"
+    leaves the objective unset so a caller (e.g. targeted repair) can install its
+    own; when a `collect` dict is passed it receives the internal presolve
+    structures (soft_terms, teacher_keys, section_keys)."""
     Dg, Pg = _solver.D, _solver.P
     R = model["constraints"]
     pen = model["penalties"]
@@ -738,7 +743,12 @@ def build_from_context(model):
             obj.append(_neq_bool(m, piece_slots[i][0], piece_slots[i][1], f"cne2_{i}") * 10)
     for weight, var in soft_terms:
         obj.append(var * weight)
-    m.Minimize(sum(obj))
+    if objective == "default":
+        m.Minimize(sum(obj))
+    if collect is not None:
+        collect["soft_terms"] = soft_terms
+        collect["teacher_keys"] = teacher_keys
+        collect["section_keys"] = section_keys
     return m, piece_slots, piece_days, piece_keys
 
 
@@ -812,3 +822,360 @@ def _json_key(grids):
     import json as _j
     return _j.dumps({k: [x for row in v for x in row] for k, v in grids.items()},
                     sort_keys=True)
+
+
+# ---------------------------------------------------------------- targeted repair
+def _slot_domain_vals(m, var):
+    """Flatten an IntVar's domain to a python list of ints."""
+    return list(var.Proto().domain)
+
+
+def _restrict_to(m, var, keep, name):
+    m.AddLinearExpressionInDomain(var, cp_model.Domain.FromValues(sorted(keep)))
+
+
+def _soft_fix_constraints(m, model, piece_slots, piece_days, picked):
+    """Hard constraints that erase ONE soft violation card (by family).
+
+    picked: a structured violation ({rule, sig, units, ...}) from
+    context_model.analyze_structured. Returns a human note of what was
+    enforced, or None when the family is objective-handled only."""
+    i = None  # silence linters
+    sig = picked.get("sig") or ""
+    rule = picked.get("rule") or ""
+    units = {u["id"]: u for u in model["units"]}
+    focus = set(picked.get("units") or [])
+    R = model["constraints"]
+
+    teacher_of = None
+    fam, _, rest = sig.partition("@")
+    key = rest
+    if sig.startswith("facrule@"):
+        code, _, rule_key = rest.partition(":")
+        teacher_of, fam_key = code, rule_key
+    elif sig.startswith("softpref@"):
+        teacher_of, fam_key = rest, "soft_prefer_free_slots"
+    elif sig.startswith("softspread@"):
+        teacher_of, fam_key = rest, "soft_individual_spread"
+    elif sig.startswith("softeven@"):
+        teacher_of, fam_key = rest, "soft_even_distribution"
+    elif sig.startswith("soft_dayex@"):
+        return None   # consecutive-day prefs stay objective-
+    else:
+        return None
+    if teacher_of not in R:
+        return None
+    rules = (R.get(teacher_of) or {}).get("rules") or {}
+    my = [u for u in model["units"]
+          if u["teacher"] == teacher_of or (u["members"] and teacher_of in u["members"])]
+    if not my:
+        return None
+
+    def ban_pairs(units_list, dayset, slotset, tag):
+        for u in units_list:
+            i = u["id"]
+            for p in range(u["count"]):
+                for d in dayset:
+                    for s in slotset:
+                        b1 = _eq_bool(m, piece_days[i][p], d, f"fx_{tag}_{i}_{p}_{d}_{s}")
+                        b2 = _eq_bool(m, piece_slots[i][p], s, f"fs_{tag}_{i}_{p}_{d}_{s}")
+                        m.AddBoolOr([b1.Not(), b2.Not()])
+
+    def slots_keep(units_list, allowed, tag):
+        for u in units_list:
+            i = u["id"]
+            for p in range(u["count"]):
+                base = list(piece_slots[i][p].Proto().domain)
+                _restrict_to(m, piece_slots[i][p], {v for v in base if v in allowed}, f"rk_{tag}_{i}_{p}")
+
+    def days_keep(units_list, allowed, tag, units_by_stream=None, stream=None):
+        for u in units_list:
+            i = u["id"]
+            for p in range(u["count"]):
+                base = list(piece_days[i][p].Proto().domain)
+                _restrict_to(m, piece_days[i][p], {v for v in base if v in allowed}, f"rd_{tag}_{i}_{p}")
+
+    from solver import _slotset, _dayset, SLOT_OF
+    if fam_key == "forbidden_slots" and rules.get("forbidden_slots"):
+        ban_pairs(my, list(range(model["days"])), _slotset(rules["forbidden_slots"]), "fs")
+        return "soft forbidden slots cleared for %s" % teacher_of
+    if fam_key == "allowed_slots" and rules.get("allowed_slots"):
+        slots_keep(my, _slotset(rules["allowed_slots"]), "as")
+        return "soft allowed-slots restored for %s" % teacher_of
+    if fam_key == "forbidden_days" and rules.get("forbidden_days"):
+        ban_pairs(my, _dayset(rules["forbidden_days"]), list(range(model["periods"])), "fd")
+        return "soft forbidden days cleared for %s" % teacher_of
+    if fam_key == "allowed_days" and rules.get("allowed_days"):
+        days_keep(my, _dayset(rules["allowed_days"]), "ad")
+        return "soft allowed-days restored for %s" % teacher_of
+    if fam_key == "forbidden_slots_on_days":
+        for e in (rules.get("forbidden_slots_on_days") or []):
+            ban_pairs(my, _dayset(e["days"]), _slotset(e["slots"]), "fsd")
+        return "soft day/slot bans cleared for %s" % teacher_of
+    if fam_key == "allowed_slots_in_stream":
+        for e in (rules.get("allowed_slots_in_stream") or []):
+            us = [u for u in my if any(_sec_stream(sec) == e["stream"] for sec in u["secs"])]
+            slots_keep(us, _slotset(e["slots"]), "ass")
+        return "soft stream slot windows restored for %s" % teacher_of
+    if fam_key == "allowed_days_in_stream":
+        for e in (rules.get("allowed_days_in_stream") or []):
+            us = [u for u in my if any(_sec_stream(sec) == e["stream"] for sec in u["secs"])]
+            days_keep(us, _dayset(e["days"]), "ads")
+        return "soft stream day windows restored for %s" % teacher_of
+    if fam_key == "subject_slots":
+        for e in (rules.get("subject_slots") or []):
+            us = [u for u in my if any(c == e["subject"] for c in u["courseBySec"].values())]
+            slots_keep(us, _slotset(e["slots"]), "ss")
+        return "soft subject slot windows restored for %s" % teacher_of
+    if fam_key == "subject_forbidden_days":
+        for e in (rules.get("subject_forbidden_days") or []):
+            us = [u for u in my if any(c == e["subject"] for c in u["courseBySec"].values())]
+            ban_pairs(us, _dayset(e["days"]), list(range(model["periods"])), "sfd")
+        return "soft subject day bans cleared for %s" % teacher_of
+    if fam_key == "subject_slot_days":
+        for e in (rules.get("subject_slot_days") or []):
+            us = [u for u in my if any(c == e["subject"] for c in u["courseBySec"].values())]
+            slots_keep(us, {SLOT_OF[e["slot"]]}, "ssd")
+            days_keep(us, _dayset(e["days"]), "ssd")
+        return "soft subject slot/day pin restored for %s" % teacher_of
+    if fam_key == "soft_prefer_free_slots" and rules.get("soft_prefer_free_slots"):
+        ban_pairs(my, list(range(model["days"])), _slotset(rules["soft_prefer_free_slots"]), "spf")
+        return "preferred-free slots vacated for %s" % teacher_of
+    if fam_key == "min_days_in_slot":
+        for e in (rules.get("min_days_in_slot") or []):
+            si = SLOT_OF[e["slot"]]
+            dayflags = []
+            for d in range(model["days"]):
+                pflags = [_eq_bool(m, piece_slots[u["id"]][p], si, f"mds_{u['id']}_{p}_{d}")
+                          for u in my for p in range(u["count"])]
+                df = m.NewBoolVar(f"mdf_{si}_{d}")
+                m.AddMaxEquality(df, pflags)
+                dayflags.append(df)
+            m.Add(sum(dayflags) >= (e.get("min_days") or 1))
+        return "minimum engagement days restored for %s" % teacher_of
+    if fam_key == "min_days_engaged":
+        dayflags = []
+        for d in range(model["days"]):
+            pflags = [_eq_bool(m, piece_days[u["id"]][p], d, f"mde_{u['id']}_{p}_{d}")
+                      for u in my for p in range(u["count"])]
+            df = m.NewBoolVar(f"mdef_{d}")
+            m.AddMaxEquality(df, pflags)
+            dayflags.append(df)
+        m.Add(sum(dayflags) >= rules["min_days_engaged"])
+        return "minimum days engaged restored for %s" % teacher_of
+    if fam_key == "stream_slots_required":
+        for e in (rules.get("stream_slots_required") or []):
+            us = [u for u in my if any(_sec_stream(sec) == e["stream"] for sec in u["secs"])]
+            if not us:
+                continue
+            for sl in e["slots"]:
+                si = SLOT_OF[sl]
+                dayflags = []
+                for d in range(model["days"]):
+                    pflags = [_eq_bool(m, piece_slots[u["id"]][p], si, f"ssr_{u['id']}_{p}_{d}")
+                              for u in us for p in range(u["count"])]
+                    df = m.NewBoolVar(f"ssrf_{si}_{d}")
+                    m.AddMaxEquality(df, pflags)
+                    dayflags.append(df)
+                m.Add(sum(dayflags) >= 4)
+        return "stream slot engagement restored for %s" % teacher_of
+    if fam_key == "soft_individual_spread":
+        p1 = [_eq_bool(m, piece_slots[u["id"]][p], 0, f"ssp1_{u['id']}_{p}")
+              for u in my for p in range(u["count"])]
+        pl = [_eq_bool(m, piece_slots[u["id"]][p], model["periods"] - 1, f"sspl_{u['id']}_{p}")
+              for u in my for p in range(u["count"])]
+        b1, b2 = m.NewBoolVar("ssb1"), m.NewBoolVar("ssb2")
+        m.AddMaxEquality(b1, p1)
+        m.AddMaxEquality(b2, pl)
+        m.AddBoolOr([b1.Not(), b2.Not()])
+        return "P1/last-period spread removed for %s" % teacher_of
+    return None   # soft_even_distribution & friends: objective-handled only
+
+
+def repair_context(context, timetable, focus=None, mode="instance",
+                   time_per_tier=12, workers=None):
+    """Targeted repair of a manually-entered timetable (a full shift).
+
+    context:    canonical.solver_context(populations)
+    timetable:  {section: dayRows[[subject, teacher]]} display cells
+    focus:      {"kind": "hard"|"soft", "index": int} — the insight being fixed
+                (None = repair all hard issues)
+    mode:       "instance" (only the focused card's units freed first) or
+                "type" (all cards of the same signature freed at once)
+
+    All structural/hard constraints stay infeasible-hard; the entered grid is
+    pinned cell-by-cell and only units implicated in the focus (and their
+    neighbourhood, escalating through tiers) may move. The objective is
+    minimal diff: every cell kept at its entered position costs 0.
+
+    Returns {"ok": bool, ...repaired timetable, diff report, before/after
+    metrics...} or {"ok": False, "reason": ...} when all tiers are infeasible.
+    """
+    import time as _time
+    import context_model as CM
+    import canonical as _canon
+    t0 = _time.time()
+    model = CM.context_to_model(context)
+    grids0, unmatched = CM.placements_from_display(timetable, model)
+    ev0 = CM.analyze_structured(grids0, model)
+    Dg, Pg = model["days"], model["periods"]
+
+    # per-unit entered placements (deduped over the unit's sections)
+    entered = {}
+    stray_free = set()
+    for u in model["units"]:
+        cells = set()
+        for sec in u["secs"]:
+            g = grids0.get(sec) or []
+            for d in range(Dg):
+                for s in range(Pg):
+                    if d < len(g) and s < len(g[d]) and g[d][s] == u["id"]:
+                        cells.add((d, s))
+        entered[u["id"]] = sorted(cells)
+
+    hard_units = set()
+    for det in ev0["issues_detail"]:
+        hard_units.update(det["units"])
+
+    picked = None
+    focus_units = set()
+    if focus:
+        kind = (focus or {}).get("kind", "hard")
+        pool = ev0["violations"] if kind == "soft" else ev0["issues_detail"]
+        try:
+            idx = int(focus.get("index", 0))
+        except Exception:
+            idx = -1
+        if 0 <= idx < len(pool):
+            picked = pool[idx]
+            focus_units = set(picked.get("units") or [])
+            if mode == "type":
+                sig = picked.get("sig")
+                for it in pool:
+                    if it.get("sig") == sig:
+                        focus_units.update(it.get("units") or [])
+
+    def neighbors(seed):
+        out = set(seed)
+        teachers = {model["units"][i]["teacher"] for i in seed}
+        secs = set()
+        for i in seed:
+            secs.update(model["units"][i]["secs"])
+        for u in model["units"]:
+            if u["id"] in out:
+                continue
+            if u["teacher"] in teachers or any(s in secs for s in u["secs"]):
+                out.add(u["id"])
+        return out
+
+    tiers = []
+    tier1 = set(focus_units) | hard_units | stray_free
+    tiers.append(("strict", tier1))
+    tiers.append(("local", neighbors(tier1)))
+    tiers.append(("open", {u["id"] for u in model["units"]}))
+    tier_budgets = [time_per_tier, time_per_tier + 5, time_per_tier * 2]
+    tier_names = ["strict (focused cells only)", "local (involved teachers & sections)",
+                  "open (min-diff re-solve of the shift)"]
+
+    score0 = CM.shuffle_score(grids0, model)
+    diff0 = None
+    for tnum, (tname, free) in enumerate(tiers):
+        collect = {}
+        built = build_from_context(model, objective="none", collect=collect)
+        if built is None:
+            continue
+        m, piece_slots, piece_days, piece_keys = built
+        chg_terms = []
+        auto_freed = []
+        for u in model["units"]:
+            i = u["id"]
+            cells = entered[i]
+            complete = len(cells) == u["count"]
+            must_free = i in free
+            wgt = 1 if i in focus_units else (3 if i in hard_units else (
+                  6 if tname == "local" else (20 if tname == "open" else 3)))
+            if complete:
+                # defensive precheck: never pin a piece outside the solver's own domains
+                sd = _unit_slot_domain(u, model["constraints"], model)
+                dd = _unit_day_domain(u, model["constraints"], model)
+                if any(s not in sd or d not in dd for (d, s) in cells):
+                    must_free = True
+                    if i not in free:
+                        auto_freed.append(i)
+            if complete and not must_free:
+                for p, (d, s) in enumerate(cells):
+                    m.Add(piece_days[i][p] == d)
+                    m.Add(piece_slots[i][p] == s)
+            elif complete:
+                for p, (d, s) in enumerate(cells):
+                    chg = m.NewBoolVar(f"chg_{i}_{p}")
+                    m.Add(piece_days[i][p] == d).OnlyEnforceIf(chg.Not())
+                    m.Add(piece_slots[i][p] == s).OnlyEnforceIf(chg.Not())
+                    chg_terms.append((wgt, chg))
+            # units with incomplete/over-complete entered placements float free
+
+        fix_note = None
+        if picked and focus and (focus or {}).get("kind") == "soft":
+            fix_note = _soft_fix_constraints(m, model, piece_slots, piece_days, picked)
+
+        obj = [chg * (100 * w) for (w, chg) in chg_terms]
+        for wgt, var in (collect.get("soft_terms") or []):
+            obj.append(var * min(wgt, 300))
+        m.Minimize(sum(obj) if obj else 0)
+
+        solver = cp_model.CpSolver()
+        solver.parameters.random_seed = 1000
+        solver.parameters.max_time_in_seconds = tier_budgets[tnum]
+        solver.parameters.num_search_workers = int(
+            workers or os.environ.get("CP_SAT_WORKERS", "8"))
+        status = solver.Solve(m)
+        if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            continue
+        grids1 = decode_context(solver, model, piece_slots, piece_days)
+        ev1 = CM.analyze_structured(grids1, model)
+        if ev1["issues"]:
+            continue   # do not ship an invalid repair; escalate the tier
+
+        tt1 = _canon.timetable_from_grids(grids1, model)
+        diff = []
+        for section in model["sections"]:
+            k = section["key"]
+            rows0 = timetable.get(k) or []
+            rows1 = tt1.get(k) or []
+            for d in range(Dg):
+                r0 = rows0[d] if d < len(rows0) else []
+                r1 = rows1[d] if d < len(rows1) else []
+                for s in range(Pg):
+                    before = r0[s] if s < len(r0) else ["", ""]
+                    after = r1[s] if s < len(r1) else ["", ""]
+                    b = [(before[0] or "").strip() if len(before) > 0 else "",
+                         (before[1] or "").strip() if len(before) > 1 else ""]
+                    b = [x if x and not x.lower().startswith("library") else "" for x in b]
+                    a2 = [x if x and not x.lower().startswith("library") else "" for x in after]
+                    if b != a2:
+                        diff.append({"section": k, "day": d, "slot": s,
+                                     "before": before, "after": after})
+        return {
+            "ok": True,
+            "tier": tier_names[tnum], "tier_index": tnum,
+            "elapsed": round(_time.time() - t0, 1),
+            "changed": len(diff), "diff": diff,
+            "timetable": tt1,
+            "unmatched": unmatched,
+            "issues_before": ev0["issues"],
+            "issues_after": ev1["issues"],
+            "violations_before": ev0["violations"],
+            "violations_after": ev1["violations"],
+            "penalty_before": ev0["penalty"], "penalty_after": ev1["penalty"],
+            "score_before": score0, "score_after": CM.shuffle_score(grids1, model),
+            "auto_freed": auto_freed,
+            "fix_enforced": fix_note,
+            "mode": mode,
+            "focus": (picked or {}).get("text") or (picked or {}).get("detail"),
+        }
+    return {"ok": False, "reason": "repair infeasible at every tier",
+            "elapsed": round(_time.time() - t0, 1),
+            "issues_before": ev0["issues"],
+            "violations_before": ev0["violations"],
+            "penalty_before": ev0["penalty"], "score_before": score0,
+            "unmatched": unmatched}

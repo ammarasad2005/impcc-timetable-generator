@@ -112,6 +112,14 @@ The **legacy dataset's proven optimum is 560** (its regression fixture). The 202
 - **⇄ Swaps** — drag cells into **perfect circles** (a→b→c→a). Live disruption count (vacancies, conflicts, double-bookings) with a **targeted optimization** that closes incomplete chains using the fewest extra cells.
 - **👥 Engagement** — when a teacher is away, a deterministic substitute engine finds an *engaging professor* for each affected period — one who has **no class of his own** there and **satisfies his own constraints** — output as a printable **statements stack**, never merged into the regular grids.
 
+## ✍ Manual build (insights + targeted repair)
+
+- **Per-shift entry** — the **✍ Manual** view gives a fully empty template covering the *whole shift* (1st shift: Inter + BS jointly; 2nd shift: Inter only). Every cell is a picker limited to that section's **allocated subject+teacher pairs**, with weekly quotas shown inline and off-days locked.
+- **🔍 Insights from timetable** — one click asks the backend to audit the entered grid as one shift. Every hard clash (double-booked teacher, off-day class, load drift, combined-class misalignment, …) and every soft warning becomes a card with its exact cause.
+- **🎯 Targeted repair** — each card offers **Fix this** and **Fix all like this**. CP-SAT then re-solves with every uninvolved cell **pinned to where the admin put it** (strict → local → open tiers), so the fix touches the fewest cells mathematically possible. Physically-forced causes (e.g. Babar P5) report honestly instead of promising a fix.
+- Once the analysis is clean, **✔ Adopt** adds the result to the pool as a normal combination — save, push, export, and history all work unchanged. Drafts autosave per shift in the browser.
+- **📋 General Instructions page** — the per-rule **✕ Remove** and **on/off** controls now actually take effect (local draft → **☁ Publish** to sync), and the sections grid renders combinations that predate the joint shift context with a clear *coverage note* instead of stalling on the previous population's cards.
+
 ## 💾 Save · Version · Push
 
 - **Originals** are saved from the main page. **Load** one, tweak it, and save it as a **version** (chainable) or **replace the original** (old one archived).

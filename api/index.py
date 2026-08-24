@@ -332,3 +332,108 @@ def generate_context(req: GenerateContextRequest, user: dict = Depends(require_u
             "section_order": [s["key"] for s in model["sections"]],
         },
     }
+
+
+# ------------------------------------------------------------------ manual build
+class ManualAnalyzeRequest(BaseModel):
+    """A manually-entered shift timetable to check ('insights from timetable')."""
+    populations: list = Field(default=["inter-1", "bs-1"],
+                              description="shift context — shift 1: ['inter-1','bs-1']; shift 2: ['inter-2']")
+    timetable: dict = Field(default=None,
+                            description="{section: dayRows[[subject, teacher]]} display cells")
+
+
+class ManualRepairRequest(BaseModel):
+    """Targeted repair request for one insight card (or all like it)."""
+    populations: list = Field(default=["inter-1", "bs-1"])
+    timetable: dict = Field(default=None)
+    focus: dict = Field(default=None,
+                        description='{"kind":"hard"|"soft","index":int} — the insight card; null repairs all')
+    mode: str = Field(default="instance", description="instance = this card only; type = all cards of its kind")
+    time_per_tier: int = Field(default=12, ge=1, le=60,
+                               description="CP-SAT seconds per repair tier (strict → local → open)")
+
+
+def _manual_ctx(populations):
+    import canonical as _canon
+    try:
+        return _canon.solver_context(populations)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+def _check_manual_body(tt):
+    if not isinstance(tt, dict):
+        raise HTTPException(status_code=400, detail="timetable must be an object {section: dayRows}")
+    import json as _j
+    try:
+        size = len(_j.dumps(tt))
+    except Exception:
+        raise HTTPException(status_code=400, detail="timetable payload is not JSON-serializable")
+    if size > 256 * 1024:
+        raise HTTPException(status_code=413, detail="timetable payload too large")
+
+
+@app.get("/manual-template")
+def manual_template(populations: str = "inter-1,bs-1", user: dict = Depends(require_user)):
+    """The Manual Build vocabulary: per-section entry options (subjects + their
+    teachers, weekly period counts), schedule config and off-days — everything
+    the in-browser picker grid needs, straight from the canonical dataset."""
+    import context_model as _cm
+    pops = [p.strip() for p in populations.split(",") if p.strip()]
+    ctx = _manual_ctx(pops)
+    vocab = _cm.manual_vocabulary(ctx)
+    return {
+        "populations": pops,
+        "sections": {k: {"level": v["level"], "offDays": v["offDays"],
+                         "firstLast": v["firstLast"], "options": v["options"]}
+                     for k, v in vocab.items()},
+    }
+
+
+@app.post("/manual-analyze")
+def manual_analyze(req: ManualAnalyzeRequest, user: dict = Depends(require_user)):
+    """Check a manually-entered shift timetable and return structured insights
+    (hard issues + soft violations) with focus metadata for targeted repair."""
+    import time as _time
+    import context_model as _cm
+    t0 = _time.time()
+    ctx = _manual_ctx(req.populations)
+    _check_manual_body(req.timetable)
+    model = _cm.context_to_model(ctx)
+    grids, unmatched = _cm.placements_from_display(req.timetable or {}, model)
+    ev = _cm.analyze_structured(grids, model)
+    return {
+        "issues": ev["issues"],
+        "issues_detail": ev["issues_detail"],
+        "violations": ev["violations"],
+        "penalty": ev["penalty"],
+        "score": _cm.shuffle_score(grids, model),
+        "total": _cm.shuffle_score(grids, model) + ev["penalty"],
+        "unmatched": unmatched,
+        "elapsed_seconds": round(_time.time() - t0, 2),
+    }
+
+
+@app.post("/manual-repair")
+def manual_repair(req: ManualRepairRequest, user: dict = Depends(require_user)):
+    """Fix one insight (or all of its kind) with a minimal-diff CP-SAT repair:
+    every uninvolved cell stays where the admin put it; only the implicated
+    units (and, escalating through tiers, their neighbourhood) may move."""
+    import cp_solver as _cs
+    ctx = _manual_ctx(req.populations)
+    _check_manual_body(req.timetable)
+    mode = (req.mode or "instance").lower()
+    if mode not in ("instance", "type"):
+        raise HTTPException(status_code=400, detail="mode must be 'instance' or 'type'")
+    result = _cs.repair_context(
+        ctx, req.timetable or {}, focus=req.focus, mode=mode,
+        time_per_tier=req.time_per_tier)
+    if not result.get("ok"):
+        raise HTTPException(status_code=422, detail={
+            "reason": result.get("reason"),
+            "issues_before": result.get("issues_before"),
+            "penalty_before": result.get("penalty_before"),
+            "violations_before": result.get("violations_before"),
+        })
+    return result

@@ -304,3 +304,36 @@ def solver_context(population_ids, overrides=None):
         "teacherCodes": name_to_code(),
         "softPenalties": dict(overrides or {}).get("softPenalties", {}),
     }
+
+
+# ---------------------------------------------------------------- manual entry
+def timetable_from_grids(grids, model):
+    """Context grids (unit ids per cell) -> {section: dayRows[[subject, teacher]]}.
+
+    Display form of a solution: course names per section; parallel groups render
+    their members joined with ' / '; empty cells become ["Library Work", ""].
+    (Same rendering as the API's /generate-context response.)"""
+    units = {u["id"]: u for u in model["units"]}
+    D, P = model["days"], model["periods"]
+    out = {}
+    for section in model["sections"]:
+        key = section["key"]
+        g = grids.get(key) or []
+        rows = []
+        for d in range(D):
+            row = []
+            for s in range(P):
+                uid = g[d][s] if d < len(g) and s < len(g[d]) else None
+                if uid is None:
+                    row.append(["Library Work", ""])
+                    continue
+                u = units[uid]
+                cname = u["courseBySec"].get(key) or list(u["courseBySec"].values())[0]
+                if u["group"]:
+                    tname = " / ".join(display_name(t) for t in u["members"])
+                else:
+                    tname = display_name(u["teacher"])
+                row.append([cname, tname])
+            rows.append(row)
+        out[key] = rows
+    return out
