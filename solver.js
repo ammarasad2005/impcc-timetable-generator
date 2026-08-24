@@ -222,7 +222,12 @@
         const v = edits[rk];
         if (v === null || v === undefined) delete base[rk]; else base[rk] = v;
       }
+      // carry the `soft` list (rule keys enforced as documented soft violations,
+      // not hard rejections) so the context engine can honour it; override wins,
+      // else inherit the base entry's list.
+      const soft = entry.soft || (out[code] && out[code].soft) || [];
       out[code] = { name: entry.name || (out[code] && out[code].name) || k, rules: base };
+      if (soft.length) out[code].soft = soft.slice();
     }
     return out;
   }
