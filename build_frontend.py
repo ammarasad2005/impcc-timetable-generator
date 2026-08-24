@@ -5013,5 +5013,147 @@ function mbAdopt(){
 }""", 1)
 
 
+
+# ---- 48) FAIRNESS SCORECARD (F17) — per-side split + standalone refs ----------
+f17_helpers = '''
+/* ================================================================
+ * F17 — FAIRNESS SCORECARD: every combination carries an exact per-side
+ * decomposition of the shuffle score (Inter side / BS side) plus its
+ * share of that side's STANDALONE best (the population solved alone by
+ * CP-SAT — fetched once from /score-references). The shuffle score is
+ * exactly additive per section, so inter + bs == joint score; any combo
+ * whose parts do not reconcile shows NO split rather than a wrong one.
+ * Ranking semantics are UNCHANGED (pool still orders by total).
+ * ================================================================ */
+let _scModelCache = {shift: null, model: null};
+function scModel(){
+  if(typeof CANON==='undefined'||!CANON||typeof CTXS==='undefined'||!CTXS) return null;
+  const sh=(typeof POP_SHIFT==='function')?POP_SHIFT():1;
+  if(_scModelCache.shift===sh&&_scModelCache.model) return _scModelCache.model;
+  let m=null;
+  try{
+    const ctx=buildShiftContext();
+    try{ ctx.constraints=CANON.solverConstraints(); }catch(e){}
+    m=CTXS.contextToModel(ctx);
+  }catch(e){ m=null; }
+  _scModelCache={shift:sh, model:m};
+  return m;
+}
+function scSplitRaw(rawtt){
+  /* rawtt may be cells ({section: dayRows[{subj,...}]}) OR display rows
+     ({section: dayRows[[subj, teacher]]}) — both forms handled. */
+  if(!rawtt) return null;
+  const m=scModel(); if(!m) return null;
+  const out={inter:0, bs:0, hasInter:false, hasBs:false};
+  for(const section of m.sections){
+    const tt=rawtt[section.key]; if(!tt) continue;
+    const lv=(section.level==='bs')?'bs':'inter';
+    if(lv==='bs') out.hasBs=true; else out.hasInter=true;
+    const slotsBy={};
+    for(const row of tt){
+      for(let s=0;s<row.length;s++){
+        const cell=row[s];
+        const subj=Array.isArray(cell)?cell[0]:(cell&&cell.subj);
+        if(!subj||subj==='Library Work') continue;
+        (slotsBy[subj]=slotsBy[subj]||new Set()).add(s);
+      }
+    }
+    for(const sub of section.subs){
+      const cname=sub[0], count=sub[2];
+      const extra=(slotsBy[cname]?slotsBy[cname].size:0)-1;
+      if(count===5) out[lv]+=extra*100000;
+      else if(count===4) out[lv]+=extra*10000;
+      else if(count===3) out[lv]+=extra*100;
+      else out[lv]+=extra*10;
+    }
+  }
+  return out;
+}
+function scSplitCombo(c){
+  if(!c||!c.tt) return null;
+  const s=scSplitRaw(c.tt);
+  if(!s) return null;
+  if(s.hasInter&&s.hasBs){
+    if(s.inter+s.bs!==c.score) return null;   /* parts must reconcile with the joint score — never show a wrong split */
+  }else if(s.hasInter){
+    if(s.inter!==c.score) return null;
+  }else if(s.hasBs){
+    if(s.bs!==c.score) return null;
+  }
+  return s;
+}
+let _scRefsAsked=false;
+async function ensureScoreRefs(){
+  if(_scRefsAsked||typeof mbFetch!=='function') return;
+  _scRefsAsked=true;
+  try{
+    const d=await mbFetch('/score-references',null);
+    state.scoreRefs=(d&&d.references)?d.references:null;
+    if(state.scoreRefs&&state.combos&&state.combos.length&&typeof renderAll==='function') renderAll();
+  }catch(e){ state.scoreRefs=null; }
+}
+function scSidePop(lv){
+  if(lv==='bs') return 'bs-1';
+  return (typeof POP_SHIFT==='function'&&POP_SHIFT()===2)?'inter-2':'inter-1';
+}
+function scPct(lv, val){
+  const refs=(typeof state!=='undefined')?state.scoreRefs:null;
+  if(!refs||val===null||val===undefined) return '';
+  const r=refs[scSidePop(lv)];
+  if(!r||typeof r.score!=='number') return '';
+  const pct=(val>0)?Math.round(100*r.score/val):100;
+  return ' ('+((r.optimal&&!r.allPenalized)?'':'~')+pct+'% standalone)';
+}
+function scChipText(c){
+  const s=scSplitCombo(c); if(!s) return '';
+  const parts=[];
+  if(s.hasInter) parts.push('Inter '+s.inter+scPct('inter',s.inter));
+  if(s.hasBs) parts.push('BS '+s.bs+scPct('bs',s.bs));
+  return parts.join(' / ');
+}
+function scSplitSavedText(it){
+  if(!it||!it.timetable) return '';
+  const s=scSplitRaw(it.timetable);
+  if(!s) return '';
+  if(s.hasInter&&s.hasBs&&s.inter+s.bs!==it.score) return '';
+  const parts=[];
+  if(s.hasInter) parts.push('Inter '+s.inter+scPct('inter',s.inter));
+  if(s.hasBs) parts.push('BS '+s.bs+scPct('bs',s.bs));
+  return parts.join(' / ');
+}
+
+'''
+rep("/* ---------- boot: restore saved results (no auto-generation) ---------- */",
+    f17_helpers + "/* ---------- boot: restore saved results (no auto-generation) ---------- */")
+
+# (a) chrome SCORE badge: append the exact per-side split
+rep("""    scoreBadge.textContent='SCORE '+c.score+((c.penalty>0)?(' +'+c.penalty+' pen'):'');""",
+    """    scoreBadge.textContent='SCORE '+c.score+((c.penalty>0)?(' +'+c.penalty+' pen'):'');
+    const _sc17=(typeof scChipText==='function')?scChipText(c):'';
+    if(_sc17)scoreBadge.textContent+=' / '+_sc17;""")
+
+# (b) scorecard drill-down: coexistence split line under the total line
+rep("""  const totalLine=hasVio?('<div class="sc-delta">total '+c.total+' = shuffle '+c.score+(c.penalty>0?' + penalties '+c.penalty:'')+'</div>'):'';""",
+    """  const totalLine=hasVio?('<div class="sc-delta">total '+c.total+' = shuffle '+c.score+(c.penalty>0?' + penalties '+c.penalty:'')+'</div>'):'';
+  const _scCard17=(typeof scChipText==='function')?scChipText(c):'';
+  const splitLine=_scCard17?('<div class="sc-delta">coexistence split: '+_scCard17+'</div>'):'';""")
+rep("""      totalLine+
+""",
+    """      totalLine+
+      splitLine+
+""")
+
+# (c) saved-list cards: per-side split tag next to the score tag
+rep("""    return '<article class="cons-card'+(it.archived?' edited':'')+'"><header><h4>'+esc(it.name||'Untitled')+'</h4>'+kindBadge+'<span class="stag">score '+it.score+'</span></header>'+""",
+    """    const _scSaved17=(typeof scSplitSavedText==='function')?scSplitSavedText(it):'';
+    return '<article class="cons-card'+(it.archived?' edited':'')+'"><header><h4>'+esc(it.name||'Untitled')+'</h4>'+kindBadge+'<span class="stag">score '+it.score+'</span>'+(_scSaved17?('<span class="stag">'+esc(_scSaved17)+'</span>'):'')+'</header>'+""")
+
+# (d) boot: fetch standalone references once (public endpoint; silent if unavailable)
+rep("""renderAuth();
+const restored=restore();""",
+    """renderAuth();
+ensureScoreRefs();
+const restored=restore();""")
+
 io.open(DST, "w", encoding="utf-8").write(src)
 print("OK → wrote", DST, "(", len(src), "bytes )")

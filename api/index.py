@@ -254,6 +254,62 @@ def generate(req: GenerateRequest, user: dict = Depends(require_user)):
     }
 
 
+_SCORE_REF_CACHE = {}
+
+
+def _canon_fingerprint():
+    """Fingerprint of the shipped canonical dataset (score references are
+    derived from it — the fingerprint guards stale baked/cache entries)."""
+    import hashlib
+    import canonical as _canon
+    try:
+        with open(_canon._DEFAULT_PATH, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()[:16]
+    except Exception:
+        return "unknown"
+
+
+@app.get("/score-references")
+def score_references():
+    """Per-population STANDALONE best-known figures for the fairness
+    scorecard: each population solved ALONE by CP-SAT (no cross-population
+    coupling), so combinations can show "95% of Inter's standalone best"
+    per side. Public read; results fingerprinted to the canonical dataset,
+    preferring the file baked at deploy time over live compute."""
+    import json as _j
+    import time as _time
+    import timetable_config as TC
+
+    fp = _canon_fingerprint()
+    if _SCORE_REF_CACHE.get("fingerprint") == fp:
+        return _SCORE_REF_CACHE["payload"]
+    baked = _find_root() / "data" / "score_references.json"
+    if baked.exists():
+        try:
+            doc = _j.loads(baked.read_text(encoding="utf-8"))
+            if doc.get("fingerprint") == fp:
+                doc["source"] = "baked"
+                _SCORE_REF_CACHE["fingerprint"] = fp
+                _SCORE_REF_CACHE["payload"] = doc
+                return doc
+        except Exception:
+            pass
+    t0 = _time.time()
+    refs = {}
+    for pid in TC.POPULATIONS.keys():
+        try:
+            r = CS.standalone_reference(pid, time_per_seed=25, n_seeds=1)
+        except Exception:
+            r = None
+        if r:
+            refs[pid] = r
+    doc = {"fingerprint": fp, "computedAt": _time.strftime("%Y-%m-%d %H:%M UTC", _time.gmtime()),
+           "references": refs, "elapsedSeconds": round(_time.time() - t0, 2), "source": "live"}
+    _SCORE_REF_CACHE["fingerprint"] = fp
+    _SCORE_REF_CACHE["payload"] = doc
+    return doc
+
+
 @app.get("/populations")
 def populations():
     """The timetable population registry + schedule configurations (domain model)."""
