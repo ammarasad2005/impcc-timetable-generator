@@ -90,6 +90,18 @@ check("T1 1 parallel group unit",
 check("T1 parallel members = Haroon|Ishfaq",
       [u["members"] for u in model1["units"] if u.get("group")] == [["Haroon", "Ishfaq"]])
 
+# resolve_constraints (the edit-model merge used by the browser pipeline and
+# /generate) must carry each entry's `soft` list, or the physically-infeasible
+# rules (Babar P5, Millat P1) get promoted from documented soft violations to
+# hard rejections — the engines are already soft-aware, the merge was not.
+res_c = solver.resolve_constraints(copy.deepcopy(canonical.solver_constraints()))
+check("T1 resolve_constraints carries `soft` (Babar)",
+      res_c["Babar"].get("soft") == ["forbidden_slots"])
+check("T1 resolve_constraints carries `soft` (Millat)",
+      res_c["Millat"].get("soft") == ["forbidden_slots"])
+check("T1 resolve_constraints omits `soft` when the entry has none",
+      "soft" not in res_c.get("Haroon", {}))
+
 FAST = "--fast" in sys.argv
 if not FAST:
     print("  … solving shift 1 (CP-SAT, 2 x 45s seeds) — the full test 1 + 2 grid")

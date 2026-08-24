@@ -4593,5 +4593,20 @@ rep('  ctx.constraints = effectiveConstraints();',
     "  ctx.constraints = effectiveConstraints();\n  // the admin's edited general instructions (per population) override the canonical set.\n  // Merge PER POPULATION: inter fields from inter lists, bs fields from the bs-1 list —\n  // later populations never overwrite earlier ones' level-scoped fields.\n  try{\n    const giCtx = CANON.solverContext(shiftPopulations());\n    const adminLists = shiftPopulations().map(function(pid){ return (state.giByPop || {})[pid] || null; });\n    const typeHasAdmin = {};\n    for(const lst of adminLists){ if(lst){ for(const g of lst){ typeHasAdmin[g.type] = true; } } }\n    const unionSFD = [], seenSFD = {}, unionNO = [];\n    for(let pi = 0; pi < shiftPopulations().length; pi++){\n      const pid = shiftPopulations()[pi];\n      const adminList = adminLists[pi];\n      if(adminList){\n        const isBs = (pid === 'bs-1');\n        const byType = {};\n        for(const g of adminList){ if(g.enabled === false) continue; (byType[g.type] = byType[g.type] || []).push(g); }\n        if(isBs){\n          giCtx.instructions.noSameSubjectSameDay.bs = !(byType.same_subject_same_day_allowed);\n        }else{\n          giCtx.instructions.noSameSubjectSameDay.inter = !!(byType.no_same_subject_same_day);\n          giCtx.instructions.consecutiveFor2pw.inter = !!(byType.consecutive_days_for_2pw);\n        }\n        giCtx.instructions.softIndividualSpread = giCtx.instructions.softIndividualSpread || !!byType.soft_individual_spread;\n        for(const g of (byType.subject_forbidden_days || [])){\n          const r = { subject: (g.params||{}).subject, days: (g.params||{}).days||[], scope: (g.params||{}).scope };\n          const k = r.subject + '|' + (r.scope || '');\n          if(!seenSFD[k]){ seenSFD[k] = true; unionSFD.push(r); }\n        }\n        for(const g of (byType.non_overriding || [])){\n          unionNO.push({ sections: (g.params||{}).sections||[], subjects: (g.params||{}).subjects||[] });\n        }\n        // section off-days + first/last live in sectionMeta — recompute\n        for(const g of (byType.section_off_days || [])){\n          for(const sk of ((g.params||{}).sections||[])){\n            if(giCtx.sectionMeta[sk]) giCtx.sectionMeta[sk].offDays = (giCtx.sectionMeta[sk].offDays||[]).concat((g.params||{}).days||[]);\n          }\n        }\n        if(byType.first_last_period_occupied){\n          for(const sk in giCtx.sectionMeta){ if(giCtx.sectionMeta[sk].level === 'bs') giCtx.sectionMeta[sk].firstLast = true; }\n        }\n      }\n    }\n    if(typeHasAdmin['subject_forbidden_days']) giCtx.instructions.subjectForbiddenDays = unionSFD;\n    if(typeHasAdmin['non_overriding']) giCtx.instructions.nonOverriding = unionNO;\n    ctx.instructions = giCtx.instructions;\n    ctx.sectionMeta = giCtx.sectionMeta;\n  }catch(e){/* fall back to the canonical instructions */}")
 
 
+# =====================================================================
+# ---- 45) SOFT-CONSTRAINT PROPAGATION (F2 fix) ------------------------
+# ---------------------------------------------------------------------
+# resolveConstraints() now carries each entry's `soft` list (rule keys
+# enforced as DOCUMENTED soft violations instead of hard rejections).
+# effectiveConstraints() rebuilt entries as {name, rules} and DROPPED
+# that list — so the browser context engine treated e.g. Babar's P5 ban
+# and Millat's P1 ban as HARD, making the full shift-1 context logically
+# infeasible in-browser (Babar 22 periods vs 20 non-P5 slots). Carry
+# `soft` through here so the in-browser engine (and constraint
+# simulation, which uses the same path) matches the CP-SAT semantics.
+rep("for(const code in R){out[code]={name:R[code].name,rules:JSON.parse(JSON.stringify(R[code].rules))};}",
+    "for(const code in R){out[code]={name:R[code].name,rules:JSON.parse(JSON.stringify(R[code].rules))};if(R[code].soft&&R[code].soft.length)out[code].soft=R[code].soft.slice();}")
+
+
 io.open(DST, "w", encoding="utf-8").write(src)
 print("OK → wrote", DST, "(", len(src), "bytes )")

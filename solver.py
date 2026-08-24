@@ -208,6 +208,14 @@ def resolve_constraints(C=None):
                     base[rk] = rv
             out[code] = {"name": entry.get("name") or (out.get(code) or {}).get("name") or k,
                          "rules": base}
+            # carry the `soft` list (rule keys enforced as documented soft
+            # violations, not hard rejections) so the context engine can honour
+            # it; the override's list wins, else inherit the base entry's.
+            soft = entry.get("soft")
+            if soft is None:
+                soft = (out.get(code) or {}).get("soft") or []
+            if soft:
+                out[code]["soft"] = list(soft)
     return out
 
 def _slotset(a):

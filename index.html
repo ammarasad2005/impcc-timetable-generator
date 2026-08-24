@@ -3100,7 +3100,7 @@ function effectiveConstraints(){
   const R=IMPCC_SOLVER.resolveConstraints(state.constraints);
   const delta=tweaksToRulesDelta();
   const out={};
-  for(const code in R){out[code]={name:R[code].name,rules:JSON.parse(JSON.stringify(R[code].rules))};}
+  for(const code in R){out[code]={name:R[code].name,rules:JSON.parse(JSON.stringify(R[code].rules))};if(R[code].soft&&R[code].soft.length)out[code].soft=R[code].soft.slice();}
   for(const name in delta){
     const code=IMPCC_SOLVER.NAME_TO_CODE[name]||name;
     const entry=out[code]||{name:name,rules:{}};
