@@ -59,6 +59,19 @@ Slots: `P1 P2 P3 P4 P5` · Days: `MON TUE WED THU FRI` · Streams: `I.COM` / `IC
 | `subject_forbidden_days` | `[{"subject":"Principles of Commerce","days":["MON"]}]` | Forbid a subject on specific days. |
 | `stream_slots_required` | `[{"stream":"ICS","slots":["P1","P2"]}]` | Must occupy those periods in that stream (e.g. "ICS fills P1 & P2"). |
 | `stream_forbidden_days` | `[{"stream":"I.COM","days":["FRI"]}]` | No classes of that stream on those days. |
+| `allowed_slots_in_stream` | `[{"stream":"I.COM","slots":["P1","P2","P3"]}]` | In that stream, ONLY these periods may be used. |
+| `allowed_days_in_stream` | `[{"stream":"I.COM","days":["THU","FRI"]}]` | In that stream, ONLY these days may be used. |
+| `subject_slot_days` | `[{"subject":"Business Mathematics","slot":"P3","days":["MON","TUE"]}]` | Pin a subject's period onto specific days (e.g. Assad's BM on P3 Mon+Tue). |
+| `allow_same_subject_same_day` | `true` | Personal exception: this teacher's same-subject classes may double on one day (overrides the inter-level no-double rule for their units). |
+
+### 2.4 Soft preferences (penalized, never forbidden)
+
+| Key | Type | Meaning |
+|---|---|---|
+| `soft_prefer_free_slots` | `["P3"]` | Prefer these periods free "as much as possible" — violations add the documented soft penalty (e.g. Khurram's P3). |
+| `soft_even_distribution` | `true` | Spread the teacher's periods evenly over the week — deviations add the soft penalty (e.g. Farooq). |
+
+Rule keys may also be listed in a teacher entry's `soft` array (e.g. `"soft": ["forbidden_slots"]`): those keys are enforced as documented soft violations instead of hard rejections — see Babar (P5) and Millat (P1) in the canonical data, whose slot bans are physically unsatisfiable under the current load.
 
 ---
 

@@ -31,6 +31,12 @@ RULE_SPEC = {
     "subject_forbidden_days": list,    # [{"subject": "...", "days":[...]}]
     "stream_slots_required": list,     # [{"stream": "ICS", "slots":[...]}]
     "stream_forbidden_days": list,     # [{"stream": "I.COM", "days":[...]}]
+    "allowed_slots_in_stream": list,   # [{"stream": "I.COM", "slots": ["P1","P2","P3"]}]
+    "allowed_days_in_stream": list,    # [{"stream": "I.COM", "days": ["THU","FRI"]}]
+    "subject_slot_days": list,         # [{"subject": "...", "slot": "P3", "days": ["MON","TUE"]}]
+    "soft_prefer_free_slots": list,    # ["P3"] — SOFT: penalized, not forbidden
+    "soft_even_distribution": bool,    # SOFT: spread the weekly load evenly
+    "allow_same_subject_same_day": bool,  # personal exception: same-subject doubles allowed
 }
 
 SYSTEM_PROMPT = """You translate a faculty member's natural-language timetable constraints into strict JSON.
@@ -62,6 +68,12 @@ RULES — use ONLY these keys:
 - "subject_slots": [{"subject":"Business Mathematics","slots":["P3"]}]  → pin a subject into specific periods.
 - "subject_forbidden_days": [{"subject":"Principles of Commerce","days":["MON"]}] → forbid a subject on days.
 - "stream_slots_required": [{"stream":"ICS","slots":["P1","P2"]}]  → must occupy periods in a stream ("ICS fills P1 & P2").
+- "allowed_slots_in_stream": [{"stream":"I.COM","slots":["P1","P2","P3"]}] → in that stream ONLY these periods may be used ("engage 1st-3rd periods in I.Com").
+- "allowed_days_in_stream": [{"stream":"I.COM","days":["THU","FRI"]}] → in that stream ONLY these days may be used ("I.Com classes on Thursday and Friday").
+- "subject_slot_days": [{"subject":"Business Mathematics","slot":"P3","days":["MON","TUE"]}] → pin a subject's period onto specific days ("3rd period in I.Com on Monday and Tuesday" where their I.Com subject is BM).
+- "soft_prefer_free_slots": ["P3"] → SOFT preference: keep these periods free "as much as possible"; violations are penalized, never forbidden.
+- "soft_even_distribution": true → SOFT: spread this teacher's periods evenly over the week.
+- "allow_same_subject_same_day": true → personal exception: this teacher's same-subject classes MAY double on one day (overrides the inter-level no-double rule for their units).
 - "stream_forbidden_days": [{"stream":"I.COM","days":["FRI"]}]  → no classes of a stream on days.
 
 MAPPING RULES (synonyms → canonical keys)
@@ -69,6 +81,12 @@ MAPPING RULES (synonyms → canonical keys)
 - "only", "can only come", "available only" → allowed_*.
 - "no day off", "every day", "daily" → min_days_engaged 5.
 - "engaged", "must take", "should take" + a period number + a day count → min_days_in_slot.
+- stream words ("in I.Com", "in ICS", "for ICS") + period list → stream_slots_required when "must engage/fill", else allowed_slots_in_stream.
+- stream words + day list ("on Thursday and Friday") → allowed_days_in_stream.
+- "as much as possible", "preferably", "if possible" + period list → soft_prefer_free_slots (SOFT — never forbidden_slots).
+- "evenly distribute", "spread over the week" → soft_even_distribution (SOFT).
+- "two consecutive classes for the same subject can be set on the same day", "doubles allowed" (about one teacher) → allow_same_subject_same_day.
+- "<subject> on P<n> on <days>" / "engage P<n> in <subject> on <days>" → subject_slot_days.
 - "first period" = P1, "last period" = P5.
 - "after break" = P4 or P5; ask yourself which fits, prefer the more specific reading.
 - A subject name should be kept verbatim (e.g. "Business Mathematics", "Principles of Accounting").
@@ -124,6 +142,23 @@ def _validate_rules(rules):
         elif key in ("stream_slots_required", "stream_forbidden_days"):
             ok = isinstance(val, list) and all(
                 isinstance(e, dict) and e.get("stream") in STREAMS for e in val)
+        elif key == "allowed_slots_in_stream":
+            ok = isinstance(val, list) and all(
+                isinstance(e, dict) and e.get("stream") in STREAMS
+                and all(s in SLOTS for s in e.get("slots", [])) for e in val)
+        elif key == "allowed_days_in_stream":
+            ok = isinstance(val, list) and all(
+                isinstance(e, dict) and e.get("stream") in STREAMS
+                and all(d in DAYS for d in e.get("days", [])) for e in val)
+        elif key == "subject_slot_days":
+            ok = isinstance(val, list) and all(
+                isinstance(e, dict) and isinstance(e.get("subject"), str)
+                and e.get("slot") in SLOTS
+                and all(d in DAYS for d in e.get("days", [])) for e in val)
+        elif key == "soft_prefer_free_slots":
+            ok = isinstance(val, list) and all(s in SLOTS for s in val)
+        elif key in ("soft_even_distribution", "allow_same_subject_same_day"):
+            ok = isinstance(val, bool)
         if not ok:
             errors.append(f"bad shape for '{key}': {val!r}")
             continue
@@ -131,8 +166,78 @@ def _validate_rules(rules):
     return clean, errors, warnings
 
 
+def try_direct_expression(text, teacher=None):
+    """Direct-expression route: an admin may paste the structured JSON itself
+    instead of natural language. If the input parses as a rules payload it is
+    validated locally and returned with confidence 1.0 — no LLM call at all.
+    Returns None when the text is not a JSON payload (normal NL flow).
+    Accepted shapes: {"rules": {...}} or a bare rules object
+    ({"forbidden_slots": ["P5"], ...})."""
+    t = (text or "").strip()
+    if not (t.startswith("{") and t.endswith("}")):
+        return None
+    try:
+        payload = json.loads(t)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    raw_rules = payload.get("rules") if isinstance(payload.get("rules"), dict) else (
+        payload if any(k in RULE_SPEC for k in payload.keys()) else None)
+    if raw_rules is None:
+        return None
+    clean, errs, warns = _validate_rules(raw_rules)
+    note = "direct expression (validated locally, no LLM call)"
+    if errs:
+        return {"error": "invalid direct expression", "errors": errs, "warnings": warns,
+                "rules": clean, "natural": payload.get("natural") or t,
+                "teacher": teacher or payload.get("teacher") or None,
+                "notes": note, "unmapped": errs}
+    return {
+        "teacher": teacher or payload.get("teacher") or None,
+        "natural": payload.get("natural") or t,
+        "rules": clean,
+        "confidence": 1.0,
+        "unmapped": payload.get("unmapped") or [],
+        "notes": ("; ".join(warns) + " — " if warns else "") + note,
+        "errors": [],
+        "warnings": warns,
+    }
+
+
+def try_direct_gi_expression(text):
+    """Direct-expression route for general instructions: {"type": ..., "params": {...}}.
+    Validated locally, no LLM call. Returns None for non-JSON input."""
+    t = (text or "").strip()
+    if not (t.startswith("{") and t.endswith("}")):
+        return None
+    try:
+        payload = json.loads(t)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict) or "type" not in payload:
+        return None
+    rtype = payload.get("type")
+    if rtype not in GI_RULE_TYPES:
+        return {"error": f"unknown rule type '{rtype}' in direct expression"}
+    params = payload.get("params")
+    if params is not None and not isinstance(params, dict):
+        return {"error": "'params' must be an object in direct expression"}
+    return {
+        "type": rtype,
+        "params": params or {},
+        "natural": payload.get("natural") or t,
+        "notes": "direct expression (validated locally, no LLM call)",
+        "confidence": 1.0,
+        "unmapped": [],
+    }
+
+
 def translate_constraints(text, teacher=None):
     """Call the LLM and return a normalized result dict (never raises)."""
+    direct = try_direct_expression(text, teacher)
+    if direct is not None:
+        return direct
     api_key = os.environ.get("LLM_API_KEY")
     if not api_key:
         return {"error": "LLM not configured — set LLM_API_KEY on the backend"}
@@ -379,6 +484,9 @@ GI_RULE_TYPES = {
 
 def translate_general_instruction(text):
     """Natural-language general instruction -> structured GI rule via the LLM."""
+    direct = try_direct_gi_expression(text)
+    if direct is not None:
+        return direct
     api_key = os.environ.get("LLM_API_KEY")
     if not api_key:
         return {"error": "LLM not configured — set LLM_API_KEY on the backend"}
