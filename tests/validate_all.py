@@ -802,6 +802,10 @@ import json as _jr
 _can19 = _jr.load(open('data/canonical.json', encoding='utf-8'))
 check("R4 inter-2 canonical starts empty (sections created in the UI)",
       len((_can19['populations']['inter-2'].get('sections')) or []) == 0)
+check("R4b BS add-form offers all 8 semesters and the real canonical programs",
+      "'I','II','III','IV','V','VI','VII','VIII'" in built19 and
+      'value="BSAF">BSAF' in built19 and 'value="BSCM">BSCM' in built19 and 'value="BBA">BBA' in built19 and
+      len({_can19['populations']['bs-1']['sections'][ii].get('semester') for ii in range(len(_can19['populations']['bs-1']['sections']))}) >= 1)
 check("R5 popSections union view: canonical minus tombstones plus metas",
       'function popSections(' in built19 and 'uiSecForm(pop, s)' in built19 and 'if(removed[s.key]) continue' in built19)
 check("R6 generation context drops tombstoned sections (in-browser path)",

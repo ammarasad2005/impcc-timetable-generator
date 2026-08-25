@@ -2846,11 +2846,13 @@ function renderAllocationPops(){
       h += '<p class="gi-note">Second shift has no sections yet — create them below (each then takes its own subject allocation).</p>';
     }
     h += '<div class="sec-add-row">'
-      + '<input id="secKey-' + pop + '" placeholder="Section id — e.g. ' + (pop === 'bs-1' ? 'BSHM-I-A' : 'ICS-II-A') + '" maxlength="24">'
+      + '<input id="secKey-' + pop + '" placeholder="Section id — e.g. ' + (pop === 'bs-1' ? 'BSAF-SEM-II' : 'ICS-II-A') + '" maxlength="24">'
       + '<select id="secProg-' + pop + '">' + (pop === 'bs-1'
-          ? '<option value="BS">BSAF / BS program</option><option value="BBA">BBA</option>'
+          ? '<option value="BSAF">BSAF</option><option value="BSCM">BSCM</option><option value="BBA">BBA</option>'
           : '<option value="ICS">ICS</option><option value="I.COM">I.Com</option>') + '</select>'
-      + '<select id="secYear-' + pop + '"><option value="I">Year/Semester I</option><option value="II">II</option></select>'
+      + '<select id="secYear-' + pop + '">' + (pop === 'bs-1'
+          ? ['I','II','III','IV','V','VI','VII','VIII'].map(function(s){ return '<option value="' + s + '">Semester ' + s + '</option>'; }).join('')
+          : '<option value="I">Year I</option><option value="II">Year II</option>') + '</select>'
       + '<button class="mini-export" data-sec-add="' + pop + '">＋ Add section</button></div>';
     h += '<div class="cons-grid">';
     for(const sec of secs){
