@@ -331,6 +331,59 @@ class GenerateContextRequest(BaseModel):
     time_limit: int = Field(default=45, ge=1, le=300, description="seconds per CP-SAT seed")
     n_seeds: int = Field(default=1, ge=1, le=4, description="randomized seeds")
     max_solutions: int = Field(default=0, ge=0, description="cap on returned solutions (0 = no cap)")
+    overrides: dict = Field(default=None,
+                            description="Admin's live data for this generation: grid{days,periods}, "
+                                        "allocation{pop:{sec:{subjects:[{subject,teacher,periods}]}}} "
+                                        "(per-pop replace — includes UI-created/deleted sections). Validated + capped.")
+
+
+def _clean_overrides(populations, raw):
+    """Allowlist-validate client overrides for solver_context (never trust the wire)."""
+    if not isinstance(raw, dict):
+        return None
+    import json as _j
+    out = {}
+    g = raw.get("grid")
+    if isinstance(g, dict):
+        try:
+            days = int(g.get("days", 5)); periods = int(g.get("periods", 5))
+            if 3 <= days <= 6 and 3 <= periods <= 8:
+                out["grid"] = {"days": days, "periods": periods}
+        except (TypeError, ValueError):
+            pass
+    a = raw.get("allocation")
+    if isinstance(a, dict):
+        try:
+            if len(_j.dumps(a)) > 96 * 1024:
+                a = None
+        except Exception:
+            a = None
+    clean = {}
+    if isinstance(a, dict):
+        for pid, secs in a.items():
+            if pid not in populations or not isinstance(secs, dict) or len(secs) > 24:
+                continue  # only this shift's populations; cap sections per population
+            ok = True
+            for sec, body in secs.items():
+                subs = body.get("subjects") if isinstance(body, dict) else None
+                if not isinstance(subs, list) or len(subs) > 30:
+                    ok = False; break
+                for e in subs:
+                    try:
+                        p = int(e.get("periods"))
+                        if not (1 <= p <= 8):
+                            raise ValueError
+                        if not str(e.get("subject") or "").strip() or not str(e.get("teacher") or "").strip():
+                            raise ValueError
+                    except (AttributeError, TypeError, ValueError):
+                        ok = False; break
+                if not ok:
+                    break
+            if ok:
+                clean[pid] = secs
+    if clean:
+        out["allocation"] = clean
+    return out or None
 
 
 def _grids_to_dict_ctx(grids, model):
@@ -372,7 +425,8 @@ def generate_context(req: GenerateContextRequest, user: dict = Depends(require_u
     import context_model as _cm
     t0 = _time.time()
     try:
-        ctx = _canon.solver_context(req.populations)
+        ctx = _canon.solver_context(req.populations,
+                                    overrides=_clean_overrides(req.populations, req.overrides))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     ranked, any_optimal = _cs.generate_context(

@@ -243,20 +243,45 @@ def solver_context(population_ids, overrides=None):
         raise ValueError("a solve context spans exactly ONE shift "
                          "(shift 1 = inter-1 + bs-1; shift 2 = inter-2)")
 
-    # grid: both shift-1 populations share one time grid
+    ov = dict(overrides or {})
+
+    # grid: both shift-1 populations share one time grid; the admin may submit
+    # an edited schedule (days/periods) for generation
     cfg = TC.POPULATIONS[pids[0]]["config"]
     grid = {"days": cfg["days"], "periods": cfg["periods"]}
+    if isinstance(ov.get("grid"), dict):
+        try:
+            grid["days"] = int(ov["grid"].get("days", grid["days"]))
+            grid["periods"] = int(ov["grid"].get("periods", grid["periods"]))
+        except (TypeError, ValueError):
+            pass
 
     gi = _gi_rules(pids)
 
     sections = {}
     section_meta = {}
+    pop_keys = {}
     for pid in pids:
         alloc = solver_allocation(pid)
+        pop_keys[pid] = set(alloc.keys())
         sections.update(alloc)
         level = _population_level(pid)
         for key in alloc:
             section_meta[key] = {"level": level, "offDays": [], "firstLast": False}
+
+    # the admin's CURRENT per-population allocation (incl. sections created or
+    # deleted in the UI) replaces the bundled canonical allocation per passed pop
+    if isinstance(ov.get("allocation"), dict):
+        for pid, a in ov["allocation"].items():
+            if pid not in pids or not isinstance(a, dict):
+                continue
+            level = _population_level(pid)
+            for key in pop_keys.get(pid, set()):
+                sections.pop(key, None)
+                section_meta.pop(key, None)
+            for key, rows in a.items():
+                sections[key] = rows
+                section_meta[key] = {"level": level, "offDays": [], "firstLast": False}
 
     # instructions -> section meta + behavioural flags
     no_same = {"inter": bool(gi.get("no_same_subject_same_day")),
@@ -302,7 +327,7 @@ def solver_context(population_ids, overrides=None):
         "instructions": instructions,
         "constraints": solver_constraints(),
         "teacherCodes": name_to_code(),
-        "softPenalties": dict(overrides or {}).get("softPenalties", {}),
+        "softPenalties": dict(ov).get("softPenalties", {}),
     }
 
 
