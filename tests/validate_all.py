@@ -771,6 +771,84 @@ check("P7 dark-theme literal fixes cover the big white-surface components",
 # =====================================================================
 print()
 print("=" * 72)
+# ---- Q-series: F19 GI tab — organized schedule facts + grouped rule cards ----
+built19 = open('index.html', encoding='utf-8').read()
+check("Q1 GI nav button + setView('gi') binding",
+      'id="viewGI"' in built19 and "setView('gi')" in built19)
+check("Q2 schedule facts card: editable grid/length/day-start/break fields + Friday override",
+      'data-sched="days"' in built19 and 'data-sched="periods"' in built19 and
+      'data-sched="breakAfterPeriod"' in built19 and 'data-sched-ov="Fri"' in built19)
+check("Q3 staging model kept: draft staged -> ☁ Publish applies into POPS",
+      'impcc-ttcfg-' in built19 and 'applies them everywhere' in built19 and
+      'function applyScheduleCfg(' in built19 and 'function schedStage(' in built19)
+check("Q4 rules grouped by area (GI_GROUPS + rule-cards + group headers)",
+      'var GI_GROUPS' in built19 and 'giRuleCard(' in built19 and 'gi-group-h' in built19)
+check("Q5 publish carries schedule + section structure via timetableConfig",
+      'ttConfigFor(' in built19 and 'sectionsAdded' in built19 and 'sectionsRemoved' in built19)
+check("Q6 syncFromCloud restores staging (schedule facts + per-day overrides)",
+      'function syncFromCloud(' in built19 and 'dayStartOverrides' in built19)
+check("Q7 frontend passes {grid, allocation} overrides to the CP-SAT route",
+      'function cpsatOverrides' in built19 and 'overrides:cpsatOverrides()' in built19)
+
+# ---- R-series: F20 allocation — per-population panels + dynamic sections ----
+check("R1 allocation renders 3 population panels in dependency order",
+      "ALLOC_POPS = ['inter-1','bs-1','inter-2']" in built19 and 'function renderAllocationPops(' in built19)
+check("R2 dynamic sections: add/delete helpers + localStorage persistence",
+      'function secAdd(' in built19 and 'function secRemove(' in built19 and 'function secMetas(' in built19 and
+      'impcc-secs-' in built19 and 'impcc-secrm-' in built19)
+check("R3 section delete cascades its subject rows (confirm dialog)",
+      'subject rows will be dropped' in built19 and 'pending ☁ Publish / 💾 Save' in built19)
+import json as _jr
+_can19 = _jr.load(open('data/canonical.json', encoding='utf-8'))
+check("R4 inter-2 canonical starts empty (sections created in the UI)",
+      len((_can19['populations']['inter-2'].get('sections')) or []) == 0)
+check("R5 popSections union view: canonical minus tombstones plus metas",
+      'function popSections(' in built19 and 'uiSecForm(pop, s)' in built19 and 'if(removed[s.key]) continue' in built19)
+check("R6 generation context drops tombstoned sections (in-browser path)",
+      'const rm = secRemoved(p);' in built19 and 'delete ctx.sections[k];' in built19)
+
+bf19 = open('build_frontend.py', encoding='utf-8').read()
+import ast as _ast19
+try:
+    _ast19.parse(bf19)
+    check("R7 build_frontend.py remains valid Python", True)
+except SyntaxError:
+    check("R7 build_frontend.py remains valid Python", False)
+
+# backend override semantics (fast: context only, no solve)
+try:
+    import canonical as _c19
+    base = _c19.solver_context(['inter-1', 'bs-1'])
+    ov = _c19.solver_context(['inter-1', 'bs-1'], overrides={'grid': {'days': 6, 'periods': 6},
+                                                             'allocation': {'bs-1': {'BS-NEW-1': {'subjects': [{'subject': 'X', 'teacher': 'T', 'periods': 2}]}}}})
+    check("R8 overrides: grid applies + allocation replace is per-pop",
+          ov['grid']['periods'] == 6 and 'BS-NEW-1' in ov['sections'] and
+          not any(k.startswith('BSAF') for k in ov['sections']) and
+          len([k for k in base['sections'] if k.startswith('ICS')]) == len([k for k in ov['sections'] if k.startswith('ICS')]))
+except Exception as e:
+    check("R8 overrides semantics (grid + per-pop allocation replace)", False, str(e)[:120])
+
+try:
+    from fastapi.testclient import TestClient as _TC19
+    import api.index as _API19
+    _API19.app.dependency_overrides[_API19.require_user] = lambda: {"id": "suite-user"}
+    _cl19 = _TC19(_API19.app)
+    _r19 = _cl19.post('/generate-context', json={"populations": ["inter-1"], "time_limit": 1, "n_seeds": 1,
+                                                "overrides": {"grid": {"days": 6, "periods": 6}}})
+    _j19 = _r19.json()
+    check("R9 /generate-context accepts cleaned overrides (grid 6x6 applied via meta)",
+          _r19.status_code == 200 and len(_j19['meta'].get('slots', [])) == 6 and len(_j19['meta'].get('days', [])) == 6)
+    _r19b = _cl19.post('/generate-context', json={"populations": ["inter-1"], "time_limit": 1, "n_seeds": 1,
+                                                 "overrides": {"allocation": {
+                                                     "bs-1": {},
+                                                     "inter-1": {"ICS-II-A": {"subjects": [{"subject": "", "teacher": "T", "periods": 4}]}}}}})
+    _j19b = _r19b.json()
+    check("R10 invalid/forbidden allocation drops; canonical dataset stays intact",
+          _r19b.status_code == 200 and len(_j19b['meta'].get('section_order', [])) == 11)
+    _API19.app.dependency_overrides = {}
+except Exception as e:
+    check("R9/R10 API override flow (accept + validate)", False, str(e)[:120])
+
 total = passed + failures
 print("RESULT: %d/%d checks passed%s" %
       (passed, total, "  —  ALL TESTS PASSED ✓" if failures == 0 else

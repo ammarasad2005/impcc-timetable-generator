@@ -5314,5 +5314,512 @@ rep("""@media print{
   }
   @page{size:A4;margin:12mm}""")
 
+# ---- 51) GI PAGE: organized groups + editable schedule facts (F19) --------------
+
+f19_js = '''
+/* ================================================================
+ * F19 — ORGANIZED GENERAL INSTRUCTIONS + SCHEDULE FACTS.
+ * The GI page is the institution's rulebook for ONE population:
+ *   1) ⏱ Schedule facts card — working days, periods/day, period length,
+ *      start time (with per-day overrides like Fri 14:00), break
+ *      (after which period + minutes). Draft → ☁ Publish applies it
+ *      everywhere (timings render, JS generation grid, and CP-SAT via
+ *      /generate-context overrides).
+ *   2) Rules grouped by topic — every rule keeps its on/off toggle,
+ *      ✕ remove, structured effect, and the AI-translation flow to add
+ *      new ones. Published via the existing draft→publish channel.
+ * ================================================================ */
+var GI_GROUPS = [
+  { id:'timing', icon:'🗓', label:'Off-days & restricted days',
+    types:['section_off_days','subject_forbidden_days'] },
+  { id:'repeat', icon:'🔁', label:'Repetition & spacing',
+    types:['no_same_subject_same_day','same_subject_same_day_allowed','consecutive_days_for_2pw','non_overriding'] },
+  { id:'shuffle', icon:'🧩', label:'Solution shape (shuffling)',
+    types:['avoid_shuffling'] },
+  { id:'structure', icon:'🏫', label:'Class & period structure',
+    types:['combined_classes','first_last_period_occupied'] },
+  { id:'faculty', icon:'👤', label:'Faculty balance (soft rules)',
+    types:['soft_individual_spread'] },
+  { id:'other', icon:'➕', label:'Custom', types:[] }
+];
+function giGroupOf(type){
+  for(const g of GI_GROUPS){ if(g.types.indexOf(type) >= 0) return g.id; }
+  return 'other';
+}
+function schedDraft(pop){
+  state.ttConfigByPop = state.ttConfigByPop || {};
+  if(!state.ttConfigByPop[pop]){
+    let saved = null;
+    try{ const raw = localStorage.getItem('impcc-ttcfg-' + pop); if(raw) saved = JSON.parse(raw); }catch(e){}
+    state.ttConfigByPop[pop] = saved || {};
+  }
+  return state.ttConfigByPop[pop];
+}
+function schedCfg(pop){
+  const base = (POPS && POPS.POPULATIONS[pop]) ? JSON.parse(JSON.stringify(POPS.POPULATIONS[pop].config)) : {};
+  return Object.assign(base, schedDraft(pop));
+}
+function applyScheduleCfg(pop, cfg){
+  if(!POPS || !POPS.POPULATIONS[pop]) return;
+  const c = POPS.POPULATIONS[pop].config;
+  const keys = ['days','periods','start','periodMinutes','breakAfterPeriod','breakMinutes'];
+  for(const k of keys){ if(cfg[k] !== undefined && cfg[k] !== null) c[k] = cfg[k]; }
+  if(cfg.dayStartOverrides && typeof cfg.dayStartOverrides === 'object') c.dayStartOverrides = cfg.dayStartOverrides;
+  scheduleConfigCacheClear();
+}
+function scheduleConfigCacheClear(){ /* derived timing caches go here if any are added */ }
+function schedStage(pop, key, val){
+  const d = schedDraft(pop);
+  d[key] = val;
+  try{ localStorage.setItem('impcc-ttcfg-' + pop, JSON.stringify(d)); }catch(e){}
+  const badge = document.getElementById('schedBadge');
+  if(badge){ badge.textContent = 'draft staged — ☁ Publish to apply'; badge.classList.add('warn'); }
+  setTicker('Schedule draft updated for ' + POP_LABEL() + ' — publish to apply everywhere', 'run', true);
+}
+function schedRevert(pop){
+  state.ttConfigByPop = state.ttConfigByPop || {};
+  delete state.ttConfigByPop[pop];
+  try{ localStorage.removeItem('impcc-ttcfg-' + pop); }catch(e){}
+  renderMain();
+  setTicker('Schedule draft reverted — published values in effect', 'ok');
+}
+function ttConfigFor(pop){
+  const out = Object.assign({}, schedDraft(pop));
+  const added = ((state.secMetaByPop || {})[pop]) || [];
+  if(added.length) out.sectionsAdded = added;
+  const removed = (state.secRemovedByPop || {})[pop] || {};
+  const rk = Object.keys(removed).filter(function(k){ return removed[k]; });
+  if(rk.length) out.sectionsRemoved = rk;
+  return out;
+}
+function schedCardHtml(pop){
+  const c = schedCfg(pop);
+  const staged = (state.ttConfigByPop && state.ttConfigByPop[pop] && Object.keys(state.ttConfigByPop[pop]).length) ? true : false;
+  const DAYN = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  let h = '<section class="gi-group"><h3 class="gi-group-h">⏱ Schedule facts <span class="gi-count">' + POP_LABEL() + '</span></h3>'
+    + '<p class="gi-note">Lecture timings, working week and break for this population. Edits are staged here; <b>☁ Publish</b> applies them everywhere (rendered times, in-browser generation, and CP-SAT generation all read this). Existing generated combinations stay as they are — the new facts govern <i>future</i> generations.</p>'
+    + '<div class="sched-grid">';
+  h += '<label>Working days<span class="sched-hint">week starts Monday</span><select data-sched="days">'
+    + [5,6].map(function(n){ return '<option value="' + n + '"' + ((c.days|0) === n ? ' selected' : '') + '>' + n + ' days (Mon–' + DAYN[n-1] + ')</option>'; }).join('') + '</select></label>';
+  h += '<label>Periods per day <span class="sched-hint">capacity up to 8</span><select data-sched="periods">'
+    + [5,6,7,8].map(function(n){ return '<option value="' + n + '"' + ((c.periods|0) === n ? ' selected' : '') + '>' + n + '</option>'; }).join('') + '</select></label>';
+  h += '<label>Period length (min)<input type="number" min="30" max="90" data-sched="periodMinutes" value="' + (c.periodMinutes|0) + '"></label>';
+  h += '<label>Day starts at<input type="time" data-sched="start" value="' + esc(c.start || '08:30') + '"></label>';
+  h += '<label>Break after period<select data-sched="breakAfterPeriod">'
+    + [-1,1,2,3,4,5,6,7].slice(1).map(function(n){ return '<option value="' + n + '"' + ((c.breakAfterPeriod|0) === n ? ' selected' : '') + '>after P' + n + '</option>'; }).join('') + '</select></label>';
+  h += '<label>Break length (min)<input type="number" min="0" max="60" data-sched="breakMinutes" value="' + (c.breakMinutes|0) + '"></label>';
+  const ov = c.dayStartOverrides || {};
+  h += '<label>Friday start override <span class="sched-hint">e.g. 2nd shift prays-time change</span><input type="time" data-sched-ov="Fri" value="' + esc(ov.Fri || '') + '" placeholder="none"></label>';
+  h += '</div>'
+    + '<div class="gi-note">Currently lectures run <b>' + (c.periodMinutes|0) + ' min</b> P1 08:30-onwards default start, break of <b>' + (c.breakMinutes|0) + ' min</b> after P' + (c.breakAfterPeriod|0) + ' — see the timetable cards for the exact per-day clock.</div>'
+    + '<div class="cons-btns"><span class="sched-badge' + (staged ? ' warn' : '') + '" id="schedBadge">' + (staged ? 'draft staged — ☁ Publish to apply' : 'in sync with published') + '</span>'
+    + '<button class="mini-export" id="schedRevert"' + (staged ? '' : ' disabled') + '>↩ Revert draft</button></div></section>';
+  return h;
+}
+function giRuleCard(gi){
+  const m = GI_META[gi.type] || { label: gi.type };
+  const desc = giDescribe(gi);
+  return '<article class="cons-card' + (gi.enabled === false ? ' gi-off' : '') + '">'
+    + '<header><h4>' + esc(m.label) + '</h4>'
+    + '<span class="stag' + (gi.enabled === false ? '' : ' ok-tag') + '">' + (gi.enabled === false ? 'disabled' : 'active') + '</span>'
+    + '<label class="gi-toggle"><input type="checkbox" data-gi-toggle="' + esc(gi.id) + '"' + (gi.enabled === false ? '' : ' checked') + '> on</label>'
+    + '</header>'
+    + (desc ? '<div class="gi-desc">' + esc(desc) + '</div>' : '')
+    + (gi.natural ? '<div class="gi-natural">"' + esc(gi.natural) + '"</div>' : '')
+    + '<div class="cons-btns">'
+    + '<button class="card-csv" data-gi-remove="' + esc(gi.id) + '" title="Remove this rule">✕ Remove</button>'
+    + '</div>'
+    + '</article>';
+}
+
+'''
+rep("function renderGI(){\n  const pop = POP_ID;",
+    f19_js + "function renderGI(){\n  const pop = POP_ID;")
+
+# scheduled card right after the intro note
+rep("""    + '<button class="mini-export" id="giReset">Reset to defaults</button></span></div>';
+
+  // NL translate box""",
+    """    + '<button class="mini-export" id="giReset">Reset to defaults</button></span></div>';
+
+  h += schedCardHtml(pop);
+
+  // NL translate box""")
+
+# flat rule list -> grouped rule sections
+rep("""  // rule list
+  h += '<div class="cons-grid">';
+  for(const gi of list){
+    const m = GI_META[gi.type] || { label: gi.type };
+    const desc = giDescribe(gi);
+    h += '<article class="cons-card' + (gi.enabled === false ? ' gi-off' : '') + '">'
+      + '<header><h4>' + esc(m.label) + '</h4>'
+      + '<span class="stag' + (gi.enabled === false ? '' : ' ok-tag') + '">' + (gi.enabled === false ? 'disabled' : 'active') + '</span>'
+      + '<label class="gi-toggle"><input type="checkbox" data-gi-toggle="' + esc(gi.id) + '"' + (gi.enabled === false ? '' : ' checked') + '> on</label>'
+      + '</header>'
+      + (desc ? '<div class="gi-desc">' + esc(desc) + '</div>' : '')
+      + (gi.natural ? '<div class="gi-natural">"' + esc(gi.natural) + '"</div>' : '')
+      + '<div class="cons-btns">'
+      + '<button class="card-csv" data-gi-remove="' + esc(gi.id) + '" title="Remove this rule">✕ Remove</button>'
+      + '</div>'
+      + '</article>';
+  }
+  h += '</div>';""",
+    """  // grouped rule sections (off-days → repetition → shape → structure → faculty → custom)
+  for(const grp of GI_GROUPS){
+    const rules = list.filter(function(gi){ return giGroupOf(gi.type) === grp.id; });
+    if(!rules.length) continue;
+    h += '<section class="gi-group"><h3 class="gi-group-h">' + grp.icon + ' ' + esc(grp.label)
+      + ' <span class="gi-count">' + rules.length + '</span></h3><div class="cons-grid">'
+      + rules.map(giRuleCard).join('') + '</div></section>';
+  }
+  if(!list.length){
+    h += '<div class="empty"><div class="eic">📋</div><h3>No instructions yet</h3><p>Add one above — typed in plain words, the AI translates it.</p></div>';
+  }""")
+
+# schedule field bindings inside renderGI (after the existing listeners)
+rep("""  mainEl.querySelectorAll('[data-gi-remove]').forEach(function(el){""",
+    """  mainEl.querySelectorAll('[data-sched]').forEach(function(el){
+    el.addEventListener('change', function(){
+      const k = el.getAttribute('data-sched');
+      let v = (el.tagName === 'SELECT' || el.type === 'time') ? el.value : (parseInt(el.value, 10) || 0);
+      if(el.type === 'number'){ v = parseInt(el.value, 10); if(!(v > 0)) v = 0; }
+      if(k === 'days' || k === 'periods') v = parseInt(el.value, 10);
+      schedStage(pop, k, v);
+      if(badgeVisible()) badgeWarn();
+    });
+  });
+  function badgeVisible(){ return document.getElementById('schedBadge'); }
+  function badgeWarn(){ const b = document.getElementById('schedBadge'); if(b){ b.textContent='draft staged — ☁ Publish to apply'; b.classList.add('warn'); } }
+  mainEl.querySelectorAll('[data-sched-ov]').forEach(function(el){
+    el.addEventListener('change', function(){
+      const day = el.getAttribute('data-sched-ov');
+      const d = schedDraft(pop);
+      const cur = Object.assign({}, (POPS.POPULATIONS[pop].config.dayStartOverrides || {}), (d.dayStartOverrides || {}));
+      if(el.value) cur[day] = el.value; else delete cur[day];
+      d.dayStartOverrides = cur;
+      try{ localStorage.setItem('impcc-ttcfg-' + pop, JSON.stringify(d)); }catch(e){}
+      badgeWarn();
+      setTicker('Schedule draft updated — publish to apply everywhere', 'run', true);
+    });
+  });
+  const rv = document.getElementById('schedRevert');
+  if(rv) rv.addEventListener('click', function(){ schedRevert(pop); });
+  mainEl.querySelectorAll('[data-gi-remove]').forEach(function(el){""")
+
+# published timetable_config (schedule) is honored on cloud sync
+rep("""      if(pub.constraints&&Object.keys(pub.constraints).length){state.constraints=pub.constraints;try{localStorage.setItem(CONST_KEY,JSON.stringify(state.constraints));}catch(e){}}""",
+    """      if(pub.constraints&&Object.keys(pub.constraints).length){state.constraints=pub.constraints;try{localStorage.setItem(CONST_KEY,JSON.stringify(state.constraints));}catch(e){}}
+      if(pub.timetable_config&&Object.keys(pub.timetable_config).length){
+        state.ttConfigByPop=state.ttConfigByPop||{};
+        const pure={}; for(const kk in pub.timetable_config){ if(kk!=='sectionsAdded'&&kk!=='sectionsRemoved') pure[kk]=pub.timetable_config[kk]; }
+        if(Object.keys(pure).length){ state.ttConfigByPop[POP_ID]=pure; try{localStorage.setItem('impcc-ttcfg-'+POP_ID,JSON.stringify(pure));}catch(e){} applyScheduleCfg(POP_ID,pure); }
+        if(Array.isArray(pub.timetable_config.sectionsAdded)){ state.secMetaByPop=state.secMetaByPop||{}; state.secMetaByPop[POP_ID]=pub.timetable_config.sectionsAdded; try{localStorage.setItem('impcc-secs-'+POP_ID,JSON.stringify(pub.timetable_config.sectionsAdded));}catch(e){} }
+        if(Array.isArray(pub.timetable_config.sectionsRemoved)){ state.secRemovedByPop=state.secRemovedByPop||{}; const rm={}; pub.timetable_config.sectionsRemoved.forEach(function(k){rm[k]=true;}); state.secRemovedByPop[POP_ID]=rm; try{localStorage.setItem('impcc-secrm-'+POP_ID,JSON.stringify(rm));}catch(e){} }
+      }""")
+
+# publish pushes the staged schedule + section-structure metas through the existing channel
+rep("""    pop, giList(pop), (state.ttConfigByPop || {})[pop] || {}
+  ).then(function(){
+    setTicker('General instructions published for ' + POP_LABEL() + ' ✓', 'ok');
+  }).catch(function(err){""",
+    """    pop, giList(pop), ttConfigFor(pop)
+  ).then(function(){
+    applyScheduleCfg(pop, schedDraft(pop));
+    setTicker('General instructions & schedule published for ' + POP_LABEL() + ' ✓', 'ok');
+    renderMain();
+  }).catch(function(err){""")
+
+# allocation save keeps the same full timetable_config (never wipes schedule/sections)
+rep("""function pushToCloud(){
+  if(!SB||!SB.loggedIn)return;
+  const alloc=(POP_ID==='inter-1')?(state.allocation||defaultAllocation()):(state.allocByPop[POP_ID]||getPopAllocation(POP_ID));
+  SB.savePublished(alloc,state.constraints||{},getFaculty(),state.tweaks||[],POP_ID)
+    .then(()=>{publishedAt=new Date().toISOString();renderPublishedAge();setTicker('Published for all users ✓ ('+POP_LABEL()+')','ok');})
+    .catch(err=>setTicker('Cloud sync failed: '+err.message,'err'));
+}""",
+    """function pushToCloud(pop){
+  if(!SB||!SB.loggedIn)return;
+  pop = pop || POP_ID;
+  const alloc=(pop==='inter-1')?(state.allocation||defaultAllocation()):(state.allocByPop[pop]||getPopAllocation(pop));
+  SB.savePublished(alloc,state.constraints||{},getFaculty(),state.tweaks||[],pop,undefined,ttConfigFor(pop))
+    .then(()=>{publishedAt=new Date().toISOString();renderPublishedAge();setTicker('Published for all users ✓ ('+(POPS.POPULATIONS[pop]?POPS.POPULATIONS[pop].label:pop)+')','ok');})
+    .catch(err=>setTicker('Cloud sync failed: '+err.message,'err'));
+}""")
+
+# CP-SAT generation sends the admin's live grid + per-pop allocation (sections incl. UI-created ones)
+rep("""  const _pops=shiftPopulations();
+  const _ctxBody=CANON?{time_limit:120,n_seeds:1,max_solutions:0,populations:_pops}:{time_limit:120,n_seeds:1,max_solutions:0,constraints:effectiveConstraints(),sections:currentAllocation()};""",
+    """  const _pops=shiftPopulations();
+  const _ctxBody=CANON?{time_limit:120,n_seeds:1,max_solutions:0,populations:_pops,overrides:cpsatOverrides()}:{time_limit:120,n_seeds:1,max_solutions:0,constraints:effectiveConstraints(),sections:currentAllocation()};""")
+rep("""function runCpsat(){""",
+    """function cpsatOverrides(){
+  if(!CANON) return null;
+  const pops=shiftPopulations();
+  const out={};
+  const g=(POPS&&POPS.POPULATIONS[pops[0]])?POPS.POPULATIONS[pops[0]].config:null;
+  if(g) out.grid={days:g.days,periods:g.periods};
+  const alloc={};
+  for(const p of pops){
+    const a=(p==='inter-1'&&state.allocation)?state.allocation:(state.allocByPop[p]||(CANON?getPopAllocation(p):null));
+    if(a&&Object.keys(a).length) alloc[p]=a;
+  }
+  if(Object.keys(alloc).length) out.allocation=alloc;
+  return Object.keys(out).length?out:null;
+}
+function runCpsat(){""")
+
+f19_css = """
+.text-grid, .sched-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px 14px;margin:10px 0 6px}
+.sched-grid label{display:flex;flex-direction:column;gap:5px;font-family:var(--mono);font-size:10.5px;color:var(--ink2)}
+.sched-grid input,.sched-grid select{font-family:var(--body);font-size:12.5px;padding:7px 9px;border:1px solid var(--line2);border-radius:8px;background:var(--surface);color:var(--ink)}
+.sched-hint{font-weight:400;color:var(--ink2);opacity:.75}
+.sched-badge{font-family:var(--mono);font-size:10px;padding:4px 10px;border-radius:999px;border:1px solid var(--green);color:var(--green);margin-right:auto}
+.sched-badge.warn{border-color:var(--amber-deep);color:var(--amber-deep)}
+.gi-group{margin:18px 0 6px}
+.gi-group-h{font-family:var(--disp);font-size:17px;color:var(--green-deep);margin:0 0 8px;display:flex;align-items:center;gap:8px}
+.gi-count{font-family:var(--mono);font-size:9.5px;padding:2px 8px;border:1px solid var(--line2);border-radius:99px;color:var(--ink2)}
+:is(html[data-theme="midnight"], html[data-theme="forest"]) .sched-grid input,
+:is(html[data-theme="midnight"], html[data-theme="forest"]) .sched-grid select{background:var(--surface);color:var(--ink);border-color:var(--line2)}
+"""
+rep("/* theme picker control (masthead) */", f19_css.strip() + "\n/* theme picker control (masthead) */")
+
+# ---- 52) ALLOCATION TAB: per-population split + dynamic sections (F20) --------
+
+f20_js = '''
+/* ================================================================
+ * F20 — ALLOCATION, SPLIT BY POPULATION, WITH DYNAMIC SECTIONS.
+ * The page shows THREE panels in dependency order: Intermediate·1st Shift,
+ * BS·1st Shift, Intermediate·2nd Shift. Every panel lists its sections as
+ * editable cards (subject/teacher/periods per row — the same drafting
+ * flow as before), and sections can be CREATED (＋ Add section — id, label,
+ * program/stream, year/semester) or DELETED (cascade: removes its rows,
+ * after a confirm that says what will be dropped). Deleting a canonical
+ * section is a tombstone (hidden everywhere) — the bundled dataset is
+ * never mutated; everything rides the draft → ☁ Publish channel
+ * (timetable_config carries sectionsAdded/sectionsRemoved). Generation
+ * (in-browser and CP-SAT) reads this same state.
+ * ================================================================ */
+var ALLOC_POPS = ['inter-1','bs-1','inter-2'];
+function secMetas(pop){
+  state.secMetaByPop = state.secMetaByPop || {};
+  if(!state.secMetaByPop[pop]){
+    let saved = null;
+    try{ const raw = localStorage.getItem('impcc-secs-' + pop); if(raw) saved = JSON.parse(raw); }catch(e){}
+    state.secMetaByPop[pop] = saved || [];
+  }
+  return state.secMetaByPop[pop];
+}
+function secRemoved(pop){
+  state.secRemovedByPop = state.secRemovedByPop || {};
+  if(!state.secRemovedByPop[pop]){
+    let saved = null;
+    try{ const raw = localStorage.getItem('impcc-secrm-' + pop); if(raw) saved = JSON.parse(raw); }catch(e){}
+    state.secRemovedByPop[pop] = saved || {};
+  }
+  return state.secRemovedByPop[pop];
+}
+function canonSectionsFor(pop){
+  if(!CANON) return null;
+  return (((CANON.get().populations[pop] || {}).sections) || []);
+}
+function uiSecForm(pop, s){
+  if(pop === 'bs-1') return { id:s.key, label:s.label, stream:(s.program||'bs').toLowerCase(), year:s.semester };
+  return { id:s.key, label:s.label, stream:(s.program === 'I.COM' ? 'icom' : 'ics'), year:s.year };
+}
+function sectionExists(pop, key){
+  if(canonSectionsFor(pop) && canonSectionsFor(pop).some(function(s){ return s.key === key; })) return true;
+  return secMetas(pop).some(function(s){ return s.key === key; });
+}
+function secAdd(pop){
+  const keyEl = document.getElementById('secKey-' + pop);
+  const programEl = document.getElementById('secProg-' + pop);
+  const yearEl = document.getElementById('secYear-' + pop);
+  let key = (keyEl && keyEl.value || '').trim().toUpperCase().replace(/[^A-Z0-9.-]/g, '-').replace(/-{2,}/g, '-');
+  if(!key){ setTicker('Give the new section an id (e.g. ICS-II-A)', ''); if(keyEl) keyEl.focus(); return; }
+  if(sectionExists(pop, key) || (getPopAllocation(pop) || {})[key] || secRemoved(pop)[key] === false){ setTicker('A section named ' + key + ' already exists in ' + pop, ''); return; }
+  const prog = programEl ? programEl.value : (pop === 'bs-1' ? 'BS' : 'ICS');
+  const year = yearEl ? (yearEl.value || '').trim() : 'I';
+  const meta = { key: key, label: key, program: prog, year: year, custom: true };
+  if(pop === 'bs-1'){ meta.semester = year; delete meta.year; }
+  secMetas(pop).push(meta);
+  const rm = secRemoved(pop); if(rm[key]) delete rm[key];
+  const alloc = getPopAllocation(pop) || {};
+  alloc[key] = { subjects: [] };
+  state.allocByPop[pop] = alloc;
+  try{ localStorage.setItem('impcc-secs-' + pop, JSON.stringify(secMetas(pop))); }catch(e){}
+  try{ localStorage.setItem('impcc-secrm-' + pop, JSON.stringify(secRemoved(pop))); }catch(e){}
+  savePopAllocationLocal(pop);
+  renderMain();
+  setTicker('Section ' + key + ' added to ' + (POPS.POPULATIONS[pop] ? POPS.POPULATIONS[pop].label : pop) + ' — fill its subjects, then ☁ Publish / 💾 Save', 'ok');
+}
+function secRemove(pop, key){
+  const alloc = getPopAllocation(pop) || {};
+  const rows = (alloc[key] && alloc[key].subjects ? alloc[key].subjects.length : 0);
+  const layers = sectionExists(pop, key) ? ' (a built-in section — it will be hidden, the bundled dataset is never changed)' : '';
+  if(!window.confirm('Delete section ' + key + ' from ' + (POPS.POPULATIONS[pop] ? POPS.POPULATIONS[pop].label : pop) + layers + '?\\n'
+      + (rows ? 'Its ' + rows + ' subject rows will be dropped.' : 'It has no subjects yet.') + '\\nThe change applies with ☁ Publish / 💾 Save.')) return;
+  const canon = canonSectionsFor(pop) && canonSectionsFor(pop).some(function(s){ return s.key === key; });
+  if(canon){ secRemoved(pop)[key] = true; try{ localStorage.setItem('impcc-secrm-' + pop, JSON.stringify(secRemoved(pop))); }catch(e){} }
+  else{
+    state.secMetaByPop[pop] = secMetas(pop).filter(function(s){ return s.key !== key; });
+    try{ localStorage.setItem('impcc-secs-' + pop, JSON.stringify(state.secMetaByPop[pop])); }catch(e){}
+  }
+  delete alloc[key];
+  state.allocByPop[pop] = alloc;
+  savePopAllocationLocal(pop);
+  renderMain();
+  setTicker('Section ' + key + ' removed (pending ☁ Publish / 💾 Save)', 'ok');
+}
+function popCfgOf(pop){ return (POPS && POPS.POPULATIONS[pop]) ? POPS.POPULATIONS[pop].config : { days:5, periods:5 }; }
+function renderAllocationPops(){
+  const roster = rosterNames();
+  let h = '<div class="cons-note"><b>Course allocation is data, per population.</b> Set the teacher and weekly periods for every subject. Each section must total the population\\u2019s <b>days × periods</b>. '
+    + 'Sections can be added or deleted here — changes ride the same draft → ☁ Publish / 💾 Save channel as everything else. '
+    + (SB&&SB.loggedIn?'Signed in — saving syncs to Supabase across devices.':'Not signed in — saved locally (sign in to sync).')
+    + '<span class="cons-actions"><button class="mini-export" id="allocSaveAll">💾 Save all populations</button></span></div>';
+  for(const pop of ALLOC_POPS){
+    const cfg = popCfgOf(pop), cells = (cfg.days||5) * (cfg.periods||5);
+    const secs = popSections(pop);
+    const label = POPS && POPS.POPULATIONS[pop] ? POPS.POPULATIONS[pop].label : pop;
+    const alloc = getPopAllocation(pop) || {};
+    h += '<section class="gi-group"><h3 class="gi-group-h">' + (pop === 'bs-1' ? '🏛' : '🎓') + ' ' + esc(label)
+      + ' <span class="gi-count">' + secs.length + ' sections · ' + (cfg.days||5) + '×' + (cfg.periods||5) + ' grid (' + cells + ' periods)</span></h3>';
+    if(pop === 'inter-2' && !secs.length){
+      h += '<p class="gi-note">Second shift has no sections yet — create them below (each then takes its own subject allocation).</p>';
+    }
+    h += '<div class="sec-add-row">'
+      + '<input id="secKey-' + pop + '" placeholder="Section id — e.g. ' + (pop === 'bs-1' ? 'BSHM-I-A' : 'ICS-II-A') + '" maxlength="24">'
+      + '<select id="secProg-' + pop + '">' + (pop === 'bs-1'
+          ? '<option value="BS">BSAF / BS program</option><option value="BBA">BBA</option>'
+          : '<option value="ICS">ICS</option><option value="I.COM">I.Com</option>') + '</select>'
+      + '<select id="secYear-' + pop + '"><option value="I">Year/Semester I</option><option value="II">II</option></select>'
+      + '<button class="mini-export" data-sec-add="' + pop + '">＋ Add section</button></div>';
+    h += '<div class="cons-grid">';
+    for(const sec of secs){
+      const key = sec.id;
+      const subs = (alloc[key] && alloc[key].subjects) || [];
+      const total = sectionTotal(subs);
+      h += '<article class="cons-card' + (total !== cells ? ' edited' : '') + '"><header><h4>' + esc(sec.label) + '</h4>'
+        + '<span class="stag" data-total="' + key + '" style="' + (total === cells ? '' : 'color:var(--red);border-color:var(--red)') + '">' + total + '/' + cells + '</span>'
+        + '<button class="card-csv" data-sec-del="' + pop + '|' + esc(key) + '" title="Delete this section">✕ section</button></header><div class="alloc-rows">';
+      subs.forEach(function(e, idx){
+        h += '<div class="alloc-row">'
+          + '<input class="alloc-subj" data-pop="' + pop + '" data-k="' + key + '" data-i="' + idx + '" value="' + esc(e.subject) + '">'
+          + '<select class="alloc-tchr" data-pop="' + pop + '" data-k="' + key + '" data-i="' + idx + '">' + roster.map(function(n){ return '<option' + (n === e.teacher ? ' selected' : '') + '>' + esc(n) + '</option>'; }).join('') + '</select>'
+          + '<input class="alloc-per" type="number" min="1" max="5" data-pop="' + pop + '" data-k="' + key + '" data-i="' + idx + '" value="' + (e.periods|0) + '">'
+          + '<button class="card-csv" data-alloc-del="' + pop + '|' + key + '" data-i="' + idx + '" title="Remove subject">✕</button>'
+          + '</div>';
+      });
+      h += '</div><button class="mini-export" data-alloc-add="' + pop + '|' + key + '">＋ Add subject</button></article>';
+    }
+    h += '</div>';
+    h += '<div class="cons-btns"><button class="mini-export" data-alloc-save="' + pop + '">💾 Save ' + esc(label) + '</button></div>';
+    h += '</section>';
+  }
+  mainEl.innerHTML = h;
+  const saveAll = document.getElementById('allocSaveAll');
+  if(saveAll) saveAll.addEventListener('click', function(){ for(const p of ALLOC_POPS) saveAllocationFor(p); });
+  mainEl.querySelectorAll('[data-sec-add]').forEach(function(el){
+    el.addEventListener('click', function(){ secAdd(el.getAttribute('data-sec-add')); });
+  });
+  mainEl.querySelectorAll('[data-sec-del]').forEach(function(el){
+    el.addEventListener('click', function(){ const parts = el.getAttribute('data-sec-del').split('|'); secRemove(parts[0], parts[1]); });
+  });
+  mainEl.querySelectorAll('[data-alloc-save]').forEach(function(el){
+    el.addEventListener('click', function(){ saveAllocationFor(el.getAttribute('data-alloc-save')); });
+  });
+  mainEl.querySelectorAll('[data-alloc-add]').forEach(function(el){
+    el.addEventListener('click', function(){
+      const parts = el.getAttribute('data-alloc-add').split('|');
+      const pop = parts[0], key = parts[1];
+      const alloc = getPopAllocation(pop);
+      (alloc[key] = alloc[key] || { subjects: [] }).subjects.push({ subject: '', teacher: roster[0] || 'TBA', periods: 1 });
+      state.allocByPop[pop] = alloc; renderMain();
+    });
+  });
+  mainEl.querySelectorAll('[data-alloc-del]').forEach(function(el){
+    el.addEventListener('click', function(){
+      const parts = el.getAttribute('data-alloc-del').split('|');
+      const pop = parts[0], key = parts[1];
+      const alloc = getPopAllocation(pop);
+      if(alloc[key] && alloc[key].subjects) alloc[key].subjects.splice(parseInt(el.getAttribute('data-i'), 10), 1);
+      state.allocByPop[pop] = alloc; renderMain();
+    });
+  });
+  mainEl.querySelectorAll('.alloc-subj,.alloc-tchr,.alloc-per').forEach(function(el){
+    el.addEventListener('change', function(){
+      const pop = el.getAttribute('data-pop'), key = el.getAttribute('data-k');
+      const i = parseInt(el.getAttribute('data-i'), 10);
+      const alloc = getPopAllocation(pop);
+      const subs = alloc[key] ? alloc[key].subjects : null;
+      if(!subs || !subs[i]) return;
+      if(el.classList.contains('alloc-per')) subs[i].periods = Math.max(1, Math.min(8, parseInt(el.value, 10) || 1));
+      else subs[i][el.classList.contains('alloc-subj') ? 'subject' : 'teacher'] = el.value;
+      state.allocByPop[pop] = alloc;
+      const cfg = popCfgOf(pop), cells = (cfg.days||5) * (cfg.periods||5);
+      const badge = mainEl.querySelector('[data-total="' + key + '"]');
+      if(badge){
+        const t = sectionTotal(subs);
+        badge.textContent = t + '/' + cells;
+        badge.style = t === cells ? '' : 'color:var(--red);border-color:var(--red)';
+      }
+    });
+  });
+}
+function saveAllocationFor(pop){
+  const cfg = popCfgOf(pop), cells = (cfg.days||5) * (cfg.periods||5);
+  const alloc = getPopAllocation(pop) || {};
+  const bad = [];
+  for(const sec of popSections(pop)){
+    const t = sectionTotal((alloc[sec.id] || {}).subjects);
+    if(t !== cells) bad.push(sec.id + '=' + t);
+  }
+  if(pop === 'inter-1') saveAllocationLocal();
+  savePopAllocationLocal(pop);
+  pushToCloud(pop);
+  setTicker(bad.length ? ('Saved, but ' + bad.join(', ') + ' not ' + cells + ' periods') : ('Allocation saved (' + (POPS.POPULATIONS[pop] ? POPS.POPULATIONS[pop].label : pop) + ')'), bad.length ? '' : 'ok');
+}
+
+'''
+rep("function renderAllocation(){\n  const a=getWorkingAllocation();const roster=rosterNames();",
+    f20_js + "function renderAllocation(){\n  if(CANON && POPS){ renderAllocationPops(); return; }\n  const a=getWorkingAllocation();const roster=rosterNames();")
+
+# popSections honors created (metas) + deleted (tombstones) sections everywhere
+rep("""function popSections(pop){
+  if(!CANON) return SECTIONS.slice();
+  const secs = ((CANON.get().populations[pop] || {}).sections) || [];
+  return secs.map(function(s){
+    if(pop === 'bs-1') return {id:s.key, label:s.label, stream:s.program.toLowerCase(), year:s.semester};
+    return {id:s.key, label:s.label, stream:(s.program === 'I.COM' ? 'icom' : 'ics'), year:s.year};
+  });
+}""",
+    """function popSections(pop){
+  if(!CANON){ let secs = SECTIONS.slice(); return secs; }
+  const removed = secRemoved(pop);
+  const out = [];
+  const canon = ((CANON.get().populations[pop] || {}).sections) || [];
+  for(const s of canon){ if(removed[s.key]) continue; out.push(uiSecForm(pop, s)); }
+  for(const s of (secMetas(pop) || [])){ if(!removed[s.key]) out.push(uiSecForm(pop, s)); }
+  return out;
+}""")
+
+# in-browser context: admin-deleted sections must not leak into generation
+rep("""    if(alloc) for(const k in alloc) ctx.sections[k] = alloc[k];
+  }
+  ctx.constraints = effectiveConstraints();""",
+    """    if(alloc) for(const k in alloc) ctx.sections[k] = alloc[k];
+    const rm = secRemoved(p);
+    for(const k in rm){ if(rm[k]) delete ctx.sections[k]; }
+  }
+  ctx.constraints = effectiveConstraints();""")
+
+f20_css = """
+.sec-add-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:2px 0 10px}
+.sec-add-row input{font-family:var(--mono);font-size:12px;padding:7px 10px;border:1px solid var(--line2);border-radius:8px;background:var(--surface);color:var(--ink);width:240px}
+.sec-add-row select{font-size:12px;padding:7px 9px;border:1px solid var(--line2);border-radius:8px;background:var(--surface);color:var(--ink)}
+"""
+rep("/* theme picker control (masthead) */", f20_css.strip() + "\n/* theme picker control (masthead) */")
+
 io.open(DST, "w", encoding="utf-8").write(src)
 print("OK → wrote", DST, "(", len(src), "bytes )")

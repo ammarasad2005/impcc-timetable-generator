@@ -88,7 +88,8 @@ A production timetable generator for the college's **three timetable populations
 | 🧭 **Nine views** | Sections · Faculty · Constraints · Allocation · Directory · Saved · History · Tweaks · Engagement. |
 | 📣 **Publish** | Push **one timetable per population** so every visitor sees it without signing in; unpush removes it again. |
 | ⚡ **Simulation mode** | Evaluate *hypothetical* faculty constraints against the selected combination — real constraints untouched, verdicts per teacher, apply or discard. |
-| 📋 **Instructions** | Institution-level general instructions as admin-managed data: structured rule editors, NL→AI translation, per-population publish. |
+| 📋 **Instructions** | Institution-level general instructions as admin-managed data: an editable **schedule-facts card** (days, periods, lecture length, start time, break position/length, Friday override) plus **rules grouped by area** (off-days, repetition, shuffling, structure, faculty) — all editable/addable/removable, with NL→AI translation, per-population publish. Edits govern future generations and reach the CP-SAT cloud solver as validated overrides. |
+| 🏛 **Allocation** | Three population panels (Intermediate 1st · BS 1st · Intermediate 2nd) in dependency order; **sections are dynamic** — add new ones, cascade-delete existing ones (bundled data stays untouched via tombstones) — with per-row subject/teacher/period editing and per-population drafts → publish. |
 | 🔒 **Locks** | Cell, day and section locks + re-optimize around them. |
 | ⚑ **Documented violations** | Solutions that must disobey soft constraints (physically unavoidable) carry itemized violation reports + penalties; the pool rule shows ≥10 valid, or pads with documented violators. |
 
