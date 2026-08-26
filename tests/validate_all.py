@@ -1542,6 +1542,20 @@ console.log(JSON.stringify({
     else:
         _note = "exit %d %s" % (_res.returncode, _res.stderr[:100])
     check("C4k JS mirror: byte-identical hard message on 5-course 2-dev case", _ok, _note)
+
+    # -- BS sections are out of scope: coherence is a bonus, never a rule (§9 v3.1)
+    _gBS = _coh_grid([0, 0, 0, 0, 0])
+    _uidBS = next(u["id"] for u in _mC["units"]
+                  if (u["courseBySec"] or {}).get("BSAF-SEM-I") == "Functional English"
+                  and u["count"] == 4)
+    for d, s in enumerate((0, 1, 2, 3)):
+        _gBS["BSAF-SEM-I"][d][s] = _uidBS
+    _rBS = _CMC.evaluate(_gBS, _mC)
+    check("C4l BS count-4 fully scattered -> complete silence (no issue, no violation)",
+          not any("outside one period" in str(i) for i in _rBS["issues"])
+          and not any("outside dominant period" in str(v.get("detail")) for v in _rBS["violations"])
+          and not any(str(v.get("rule", "")).startswith("courseConsistency")
+                      for v in _rBS["violations"]))
 except Exception as e:
     check("C4 course period-coherence block", False, str(e)[:160])
 

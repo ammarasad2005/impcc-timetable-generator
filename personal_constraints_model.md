@@ -159,15 +159,24 @@ Soft-penalty bases: `rule`=5000, `preferFreeSlot`=500 (per hit),
 The bool soft kinds keep their bases; hard kinds demoted to h<100 report
 against the `rule` base by default.
 
-## 9. Course period-coherence (dominant-slot rule) — v3
+## 9. Course period-coherence (dominant-slot rule) — v3.1
 
-A college-wide invariant orthogonal to personal rules: inside ONE section,
-ONE course taught 3+ times a week must sit at (as near as possible) the
-SAME period every day. It is checked jointly with each teacher's personal
-constraints (those stay dominant — coherence never overrides an h=100
-personal rule).
+An invariant orthogonal to personal rules, applying **to INTERMEDIATE-level
+sections only**: inside ONE intermediate section, ONE course taught 3+
+times a week must sit at (as near as possible) the SAME period every day.
+It is checked jointly with each teacher's personal constraints (those stay
+dominant — coherence never overrides an h=100 personal rule).
 
-| weekly count in section | floor | tolerance | semantics |
+**BS-level scope (locked v3.1):** the whole entropy-minimisation concept
+targets intermediate. For BS sections, slot alignment of a 3+/week course
+is a bonus only ("if it can be done at any level, it's a plus — never a
+requirement"): no floors, no tolerance checks, no documented violations,
+no penalties. The solver still steers BS placement softly toward the
+dominant slot (at the count-3 weight) so aligned BS solutions win the
+ranking whenever they exist at equal cost; checkers stay silent on BS
+groups.
+
+| weekly count in an INTERMEDIATE section | floor | tolerance | semantics |
 | --- | --- | --- | --- |
 | 5 | 4 of 5 in one slot | ≤ 1 class elsewhere, documented soft | hard floor; the single tolerated deviation is charged soft so it is used only when genuinely needed |
 | 4 | 3 of 4 in one slot | ≤ 1 class elsewhere, documented soft | same |
@@ -206,23 +215,26 @@ personal claims and are never charged; anything beyond stays hard. When
 the floor cannot reach 3 the group carries no hard constraint at all —
 its placement is steered by the shuffle objective only.
 
-### 9.2 Tier cascade (feasibility, locked)
+### 9.2 Tier cascade (feasibility, locked) — v3.1
 
-When the (sec, course) floors are JOINTLY infeasible under teacher
-personal rules (real world: BS level alone with 55 floors up), the
-solver walks the deterministic cascade: all floors → inter-level floors
-only → bs-level floors only → none, probes each tier once (first-hit
-wins), caches the decision per full data signature, and persists the
-dropped groups as `_cohExempt` on the context. A dropped group's
-deviations become DOCUMENTED SOFT at `periodConsistency45` per deviation
-— solid documentation of the sanctioned infeasibility, never a silent
-release. Every dropped-group deviation message reads:
+BS groups never carry floors (scope). When the remaining INTERMEDIATE
+floors are jointly infeasible under teacher personal rules, the solver
+walks the deterministic cascade: all inter floors → none, probes each
+tier once (first-hit wins), caches the decision per full data signature,
+and persists any dropped groups as `_cohExempt` on the context. A
+dropped group's deviations become DOCUMENTED SOFT at
+`periodConsistency45` per deviation — solid documentation of the
+sanctioned infeasibility, never a silent release. Every dropped-group
+deviation message reads:
 `SEC course: N of C classes outside dominant period P1 (alignment infeasible — documented exception)`.
 
 ### 9.3 Engines
 
-- cp_solver.build_from_context: `coh_off` parameter skips a group's
-  hard floor (soft charge stays). generate_context runs the cascade.
+- cp_solver.build_from_context: BS (sec, course) groups never get hard
+  floors — only bonus soft steering at `periodConsistency3` weight, and
+  checkers never flag them. Inter groups keep hard floors; `coh_off`
+  skips a group's hard floor (soft charge stays); generate_context runs
+  the 2-tier cascade and stamps `context._cohExempt`.
 - context_model.period_coherence_findings: shared by evaluate() and
   analyze_structured(); computes the same structural `attain` (lazy
   import of cp_solver's domain helpers) and applies the same floor

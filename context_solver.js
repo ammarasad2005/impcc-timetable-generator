@@ -789,12 +789,14 @@
 
   function periodCoherenceFindings(grids, model) {
     // Mirror of context_model.period_coherence_findings (spec §9) — byte-identical msgs.
+    // Inter-level only: BS coherence is a silent objective bonus, never a rule (§9 scope).
     const D = model.days, P = model.periods;
     const pen = model.penalties;
     const issues = [], violations = [];
     const byId = {};
     for (const u of model.units) byId[u.id] = u;
     for (const section of model.sections) {
+      if ((section.level || "inter") !== "inter") continue;   // BS: bonus only, no findings
       const key = section.key;
       const g = grids[key];
       if (!g) continue;

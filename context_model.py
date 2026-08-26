@@ -689,8 +689,11 @@ def teacher_rule_findings(code, entry, my_units, cells, pop_of, D, P, pen):
 
 
 def period_coherence_findings(grids, model):
-    """Course period-coherence (spec §9): a course taught 3+ times a week in a
-    section should sit at ONE dominant period. Returns (issues, violations):
+    """Course period-coherence (spec §9): a course taught 3+ times a week in an
+    INTERMEDIATE-level section should sit at ONE dominant period. BS sections
+    are entirely out of scope here — for them coherence is a silent objective
+    bonus only ("if it can be done, that's a plus; never a requirement"),
+    so they produce no issues and no documented violations.
       count 5   -> >=4 aligned; deviations >= 2 hard, deviation 1 documented soft
       count 4   -> >=3 aligned; same structure
       count 3   -> soft only, every deviation documented at 65% of rule base
@@ -702,6 +705,8 @@ def period_coherence_findings(grids, model):
     issues, violations = [], []
     by_id = {u["id"]: u for u in model["units"]}
     for section in model["sections"]:
+        if (section.get("level") or "inter") != "inter":
+            continue                     # BS: coherence is a bonus, never a rule (§9 scope)
         key = section["key"]
         g = grids.get(key)
         if not g:

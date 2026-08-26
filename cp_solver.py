@@ -1227,7 +1227,9 @@ def build_from_context(model, objective="default", collect=None, coh_off=None):
                 continue
             _coh_groups.setdefault((sec, c), set()).add(u["id"])
     build_from_context._last_coh_keys = []
+    _lvl_of_sec = {s["key"]: (s.get("level") or "inter") for s in model["sections"]}
     for (sec, course), uids in sorted(_coh_groups.items()):
+        is_inter = _lvl_of_sec.get(sec, "inter") == "inter"
         members = [u for u in model["units"] if u["id"] in sorted(uids)]
         pieces = [(u["id"], p) for u in members for p in range(u["count"])]
         cnt = len(pieces)
@@ -1256,11 +1258,16 @@ def build_from_context(model, objective="default", collect=None, coh_off=None):
         dev = m.NewIntVar(0, cnt, f"cohdev_{sec}_{course}")
         m.Add(dev == cnt - sum(sames))
         if cnt >= 4:
-            if (sec, course) not in coh_off_set:
-                m.Add(sum(sames) >= floor)   # hard floor: at most (cnt-floor) deviations
-            ch = m.NewIntVar(0, cnt, f"cohch_{sec}_{course}")
-            m.Add(ch >= dev - forced)        # charge only deviations beyond the forced floor
-            soft_terms.append((int(pen["periodConsistency45"]), ch))
+            if is_inter and (sec, course) not in coh_off_set:
+                m.Add(sum(sames) >= floor)   # hard floor (inter only): at most (cnt-floor) deviations
+            if is_inter:
+                ch = m.NewIntVar(0, cnt, f"cohch_{sec}_{course}")
+                m.Add(ch >= dev - forced)    # charge only deviations beyond the forced floor
+                soft_terms.append((int(pen["periodConsistency45"]), ch))
+            else:
+                # BS: bonus alignment only — soft steer at the count-3 rate, no
+                # hard floor, nothing documented (§9 scope: "a plus, never a requirement")
+                soft_terms.append((int(pen["periodConsistency3"]), dev))
         else:
             soft_terms.append((int(pen["periodConsistency3"]), dev))
 
@@ -1449,19 +1456,12 @@ def generate_context(context, n_seeds=2, time_per_seed=45, max_solutions=0):
     any_optimal = False
 
     # ==========================================================
-    # Coherence tier cascade (spec §9 structural exemption): the
-    # (sec, course) hard floors can be JOINTLY infeasible under teacher
-    # personal rules across linked sections. Walk a deterministic cascade —
-    # first feasible tier keeps its floors; later tiers demote more groups
-    # to soft-steered documented mode. Cached per section signature.
+    # Coherence demotion (spec §9.2): run with all INTERMEDIATE floors hard;
+    # BS groups never carry floors. If CP-SAT proves INFEASIBLE for a seed
+    # (the sanctioned infeasibility case), demote that pack's floors to soft,
+    # persist it as context._cohExempt + data-signature cache, and re-solve.
     # ==========================================================
     model.setdefault("_coh_exempt", set())
-
-    def _build_probe():
-        built0 = build_from_context(model)
-        if built0 is None:
-            return None, None
-        return built0, getattr(build_from_context, "_last_coh_keys", [])
 
     import hashlib, json as _json
     _sig_j = _json.dumps(
@@ -1474,62 +1474,21 @@ def generate_context(context, n_seeds=2, time_per_seed=45, max_solutions=0):
         sort_keys=True, default=str)
     _popsig = (tuple(sorted(s["key"] for s in model["sections"])),
                hashlib.sha1(_sig_j.encode()).hexdigest()[:12])
-    active_off = _COH_TIER_CACHE.get(_popsig)
-    _probe_grids = []
-    if active_off is None:
-        class _FindOne(cp_model.CpSolverSolutionCallback):
-            def __init__(sself):
-                super().__init__()
-                sself.hit = False
-                sself.grids_found = []          # decoded grids kept for post-cascade merge
-            def on_solution_callback(sself):
-                sself.hit = True
-                try:
-                    sself.grids_found.append(
-                        decode_context(sself, model, builtT[1], builtT[2]))
-                except Exception:
-                    pass
-                sself.StopSearch()
-        built0, all_keys0 = _build_probe()
-        if built0 is None:
-            return [], False
-        # deterministic tier cascade: all floors → inter only → bs only → none.
-        _lvl_of = {s["key"]: s.get("level") for s in model["sections"]}
-        inter_keys = [k for k in all_keys0 if _lvl_of.get(k[0]) == "inter"]
-        bs_keys = [k for k in all_keys0 if _lvl_of.get(k[0]) != "inter"]
-        tiers = [frozenset(), frozenset(bs_keys), frozenset(inter_keys),
-                 frozenset(all_keys0)]
-        active_off = None
-        _probe_grids = []
-        for offset in tiers:
-            builtT = build_from_context(model, coh_off=offset) if offset else built0
-            if builtT is None:
-                return [], False
-            _fo = _FindOne()
-            probe = cp_model.CpSolver()
-            probe.parameters.max_time_in_seconds = float(time_per_seed)
-            probe.parameters.num_search_workers = int(os.environ.get("CP_SAT_WORKERS", "8"))
-            probe.Solve(builtT[0], _fo)
-            if _fo.hit:
-                active_off = frozenset(offset)
-                _probe_grids = _fo.grids_found
-                break
-        if active_off is None:
-            active_off = frozenset(all_keys0)   # absolutely nothing floors hard
-        _COH_TIER_CACHE[_popsig] = active_off
+    active_off = frozenset(_COH_TIER_CACHE.get(_popsig, ()))
+    _all_inter_keys = frozenset(
+        k for k in getattr(build_from_context, "_last_coh_keys", [])
+        if {s["key"]: (s.get("level") or "inter") for s in model["sections"]}.get(k[0], "inter") == "inter")
+    # pre-populate: _last_coh_keys only fills on build — build once cheaply
+    if active_off or True:
+        _ = build_from_context(model)
+        _all_inter_keys = frozenset(
+            k for k in getattr(build_from_context, "_last_coh_keys", [])
+            if (model_sections_lvl := {s["key"]: (s.get("level") or "inter")
+                                       for s in model["sections"]}).get(k[0], "inter") == "inter")
     for k in active_off:
         model["_coh_exempt"].add(k)
-    context["_cohExempt"] = sorted(map(list, active_off))   # persist with the solution context
-
-    for pg in _probe_grids:
-        ev = CM.evaluate(pg, model)
-        if not ev["issues"]:
-            key = _json_key(pg)
-            if key not in results:
-                sc = CM.shuffle_score(pg, model)
-                results[key] = {"grids": pg, "score": sc, "penalty": ev["penalty"],
-                                "violations": ev["violations"],
-                                "total": sc + ev["penalty"]}
+    if active_off:
+        context["_cohExempt"] = sorted(map(list, active_off))
 
     for seed in range(n_seeds):
         built = build_from_context(model, coh_off=active_off)
@@ -1565,6 +1524,23 @@ def generate_context(context, n_seeds=2, time_per_seed=45, max_solutions=0):
         solver.parameters.max_time_in_seconds = time_per_seed
         solver.parameters.num_search_workers = int(os.environ.get("CP_SAT_WORKERS", "8"))
         status = solver.Solve(m, cb)
+        if status == cp_model.INFEASIBLE and not active_off and _all_inter_keys:
+            # sanctioned infeasibility (spec §9.2): inter floors cannot all hold
+            # jointly — demote them to documented-soft and re-solve this seed once.
+            active_off = _all_inter_keys
+            for k in active_off:
+                model["_coh_exempt"].add(k)
+            context["_cohExempt"] = sorted(map(list, active_off))
+            _COH_TIER_CACHE[_popsig] = active_off
+            rebuilt = build_from_context(model, coh_off=active_off)
+            if rebuilt is not None:
+                m, piece_slots, piece_days, piece_keys = rebuilt
+                cb = Collect()
+                solver = cp_model.CpSolver()
+                solver.parameters.random_seed = 1000 + seed
+                solver.parameters.max_time_in_seconds = time_per_seed
+                solver.parameters.num_search_workers = int(os.environ.get("CP_SAT_WORKERS", "8"))
+                status = solver.Solve(m, cb)
         if status == cp_model.OPTIMAL:
             any_optimal = True
 
