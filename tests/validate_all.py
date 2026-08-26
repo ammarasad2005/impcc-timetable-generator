@@ -1364,6 +1364,40 @@ j0 = _run_js_mirror({"forbidden_slots": 0}, [])
 check("C3-p JS walker h=0: silent", j0.get("soft") is False and j0.get("issues") == 0)
 j100 = _run_js_mirror({}, [])
 check("C3-q JS walker default h=100: hard issue", j100.get("issues", 0) >= 1)
+# ---- F24: unknown teacher display names in the admin allocation ----
+# (an allocation published with teachers outside the canonical faculty
+#  registry used to produce teacher=None units, crashing CP-SAT's
+#  teacher-keyed soft-spread loop with AttributeError: NoneType.startswith)
+try:
+    import canonical as _CN24, context_model as _CM24, cp_solver as _CS24
+    check("F24a known display name still resolves to its canonical code",
+          _CM24._resolve_teacher('Prof. Zair Ahmad') == 'Zair')
+    check("F24b unknown display name resolves to itself (JS-solver parity), not None",
+          _CM24._resolve_teacher('Prof. Not In Registry') == 'Prof. Not In Registry')
+    _ov24 = {'allocation': {'inter-1': {
+        'ICS-I-A': {'subjects': [
+            {'subject': 'English', 'teacher': 'Prof. Zair Ahmad', 'periods': 4},
+            {'subject': 'Urdu', 'teacher': 'Prof. Abdur Rauf', 'periods': 4},
+            {'subject': 'Tarjama-tul-Quran', 'teacher': 'Prof. Not In Registry', 'periods': 2},
+            {'subject': 'Islamic Education', 'teacher': 'Prof. Also Unknown', 'periods': 2},
+            {'subject': 'Computer Science', 'teacher': 'Prof. Babar Jahangir', 'periods': 3},
+            {'subject': 'Mathematics', 'teacher': 'Prof. Syed Assad Abbas', 'periods': 5},
+            {'subject': 'Physics', 'teacher': 'Visiting-3', 'periods': 5}]}}}}
+    _ctx24 = _CN24.solver_context(['inter-1', 'bs-1'], overrides=_ov24)
+    _m24 = _CM24.context_to_model(_ctx24)
+    _unk24 = [u for u in _m24['units']
+              if (u['courseBySec'] or {}).get('ICS-I-A') in ('Tarjama-tul-Quran', 'Islamic Education')]
+    check("F24c unknown-teacher allocation yields name-as-code units (zero None teachers)",
+          bool(_unk24) and all(u['teacher'] in ('Prof. Not In Registry', 'Prof. Also Unknown')
+                               for u in _unk24)
+          and not any(u['teacher'] is None for u in _m24['units']))
+    try:
+        _CS24.build_from_context(_m24)   # AttributeError pre-fix (soft-spread loop)
+        check("F24d CP-SAT model builds with unknown-teacher units", True)
+    except Exception as e:
+        check("F24d CP-SAT model builds with unknown-teacher units", False, str(e)[:120])
+except Exception as e:
+    check("F24 unknown-teacher allocation wiring", False, str(e)[:160])
 
 total = passed + failures
 print("RESULT: %d/%d checks passed%s" %
