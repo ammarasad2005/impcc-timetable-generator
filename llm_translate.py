@@ -454,6 +454,7 @@ RULE TYPES (use EXACTLY these):
 - "non_overriding" params {"sections": ["I.COM-I-A",...], "subjects": ["Subject A", "Subject B"]} — each listed section must have a period of subject A where the OTHER sections do NOT have subject B
 - "consecutive_days_for_2pw" params {} — subjects with 2 classes/week sit on consecutive days
 - "subject_forbidden_days" params {"subject": "<name>", "days": ["FRI"], "scope": "I.COM"|"ICS"|null} — a subject must not be scheduled on those days (scope optional)
+- "subject_forbidden_slots_on_days" params {"subject": "<name>", "days": ["FRI"], "slots": ["P4","P5"], "scope": "I.COM"|"ICS"|null} — a subject must not be scheduled in those SPECIFIC periods on those days (scope optional). Prefer this over a full-day ban whenever the statement mentions specific periods ("last two periods", "P1", "first period").
 - "section_off_days" params {"sections": ["BSAF-SEM-VII",...], "days": ["FRI"]} — whole sections have no classes those days
 - "first_last_period_occupied" params {"libraryWorkLabel": "Library Work"} — free boundary periods not allowed; free middle periods become library work
 - "combined_classes" params {"groups": ["<id>"]} — co-taught section pairs at identical slots (admin links groups in the data)
@@ -472,13 +473,16 @@ Output: {"type":"section_off_days","params":{"sections":["BSAF-SEM-VII","BSCM-SE
 
 Input: "Business Mathematics in I.Com must not be set on Friday"
 Output: {"type":"subject_forbidden_days","params":{"subject":"Business Mathematics","days":["FRI"],"scope":"I.COM"},"natural":"Business Mathematics in I.Com must not be set on Friday","confidence":0.95,"notes":"Scoped to I.Com sections.","unmapped":[]}
+
+Input: "Physics must not be scheduled in the last two periods on Friday"
+Output: {"type":"subject_forbidden_slots_on_days","params":{"subject":"Physics","days":["FRI"],"slots":["P4","P5"],"scope":null},"natural":"Physics must not be scheduled in the last two periods on Friday","confidence":0.95,"notes":"Last two periods of a 5-period day are P4 and P5.","unmapped":[]}
 """
 
 GI_RULE_TYPES = {
     "no_same_subject_same_day", "same_subject_same_day_allowed", "avoid_shuffling",
     "non_overriding", "consecutive_days_for_2pw", "subject_forbidden_days",
     "section_off_days", "first_last_period_occupied", "combined_classes",
-    "soft_individual_spread",
+    "soft_individual_spread", "subject_forbidden_slots_on_days",
 }
 
 

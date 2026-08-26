@@ -2117,6 +2117,9 @@ function cpsatOverrides(){
     if(a&&Object.keys(a).length) alloc[p]=a;
   }
   if(Object.keys(alloc).length) out.allocation=alloc;
+  const instr={};
+  for(const p of pops){ const lst=giList(p); if(lst.length) instr[p]=lst; }
+  if(Object.keys(instr).length) out.general_instructions=instr;
   return Object.keys(out).length?out:null;
 }
 function runCpsat(){
@@ -4881,6 +4884,10 @@ function dslRenderRule(rule, pop, shift){
       const scope = p.scope ? ' (scope: ' + p.scope + ')' : '';
       return pre + "subject '" + (p.subject || '?') + "' forbidden on " + (p.days || []).join(',') + scope;
     }
+    case 'subject_forbidden_slots_on_days':{
+      const scope2 = p.scope ? ' (scope: ' + p.scope + ')' : '';
+      return pre + "subject '" + (p.subject || '?') + "' forbidden on " + (p.days || []).join(',') + ' at ' + (p.slots || []).join(',') + scope2;
+    }
     case 'section_off_days':               return pre + 'sections ' + (p.sections || []).join(',') + ' off on ' + (p.days || []).join(',');
     case 'first_last_period_occupied':
       return pre + (p.libraryWorkLabel ? ("first & last period occupied, free gaps as '" + p.libraryWorkLabel + "'") : 'first & last period occupied');
@@ -4944,6 +4951,13 @@ function dslCompile(expr, shift){
       pushSched(pops, 'dayStartOverrides', (function(){ const o = {}; o[dslNormDay(m[1])] = m[2]; return o; })());
       continue;
     }
+    if((m = s.match(/^subject\s+'([^']+)'\s+forbidden\s+on\s+([A-Za-z ,]+?)\s+at\s+([Pp0-9 ,]+?)(?:\s+\(scope:\s*(.+)\))?$/i))){
+      const days = m[2].split(',').map(dslNormDay); if(days.some(function(d){ return !d; })) throw new Error("bad day in: " + raw);
+      const slots = m[3].split(',').map(function(x){ x = x.trim().toUpperCase(); if(/^P[1-8]$/.test(x)) return x; });
+      if(slots.some(function(x){ return !x; })) throw new Error("bad period in: " + raw);
+      const p = { subject: m[1].trim(), days: days, slots: slots }; if(m[4]) p.scope = m[4].trim();
+      pushRule(pops, 'subject_forbidden_slots_on_days', p); continue;
+    }
     if((m = s.match(/^subject\s+'([^']+)'\s+forbidden\s+on\s+([A-Za-z ,]+?)(?:\s+\(scope:\s*(.+)\))?$/i))){
       const days = m[2].split(',').map(dslNormDay); if(days.some(function(d){ return !d; })) throw new Error("bad day in: " + raw);
       const p = { subject: m[1].trim(), days: days }; if(m[3]) p.scope = m[3].trim();
@@ -4989,6 +5003,16 @@ function dslHeuristic(detail){
     if((m = d.match(rx))){ return day + ' starts ' + m[1] + ':' + m[2]; }
   }
   if((m = d.match(/(?:starts?|begins?)[^0-9]{0,8}(\d{1,2})[:.](\d{2})/))){ return 'day starts ' + m[1] + ':' + m[2]; }
+  if((m = d.match(/([a-z][a-z .&-]{2,40}?)\s+(?:must|should) not be (?:set |scheduled |held |taught )?(?:in|during|at|on)?[^.]*?(mon|tue|wed|thu|fri|sat|sun)[a-z]*[^.]*?(first|last)\s+(one|two|1|2)\s+periods?/))
+      || (m = d.match(/([a-z][a-z .&-]{2,40}?)\s+(?:must|should) not be (?:set |scheduled |held |taught )?on (mon|tue|wed|thu|fri|sat|sun)[a-z]*[^.]*?(first|last)\s+(one|two|1|2)\s+periods?/))){
+    const day = dslNormDay(m[2]);
+    const n = (m[4] === 'two' || m[4] === '2') ? 2 : 1;
+    const last = m[3] === 'last';
+    const P = (POP().periods) || 5;
+    const slots = [];
+    for(let k = 0; k < n; k++) slots.push('P' + (last ? (P - n + 1 + k) : (1 + k)));
+    if(day) return "subject '" + m[1].trim().replace(/\b\w/g, function(c){ return c.toUpperCase(); }) + "' forbidden on " + day + ' at ' + slots.join(',');
+  }
   if((m = d.match(/([a-z][a-z .&-]{2,40}?)\s+(?:must|should) not be (?:set |scheduled |held )?on (mon|tue|wed|thu|fri|sat|sun)[a-z]*/))){
     const day = dslNormDay(m[2]);
     if(day) return "subject '" + m[1].trim().replace(/\b\w/g, function(c){ return c.toUpperCase(); }) + "' forbidden on " + day;
@@ -5154,7 +5178,7 @@ function sheetHtml(shift){
     + '<code>period length = 40 min</code> · <code>day starts 08:30</code> · <code>FRI starts 14:00</code><br>'
     + '<p><b>Rule clauses</b>:</p>'
     + '<code>no same subject twice on one day</code> · <code>same-subject repeats allowed</code> · <code>avoid shuffling</code> · '
-    + "<code>subject 'Business Mathematics' forbidden on FRI (scope: I.COM)</code> · <code>sections BSAF-SEM-VII,BBA-SEM-VII off on FRI</code> · "
+    + "<code>subject 'Business Mathematics' forbidden on FRI (scope: I.COM)</code> · <code>sections BSAF-SEM-VII,BBA-SEM-VII off on FRI</code> · <code>subject 'Physics' forbidden on FRI at P4,P5</code> · "
     + "<code>first & last period occupied, free gaps as 'Library Work'</code> · <code>2/week subjects on consecutive days</code> · "
     + '<code>combined classes: cc-fr1, cc-psa</code> · <code>non-overriding weekly: I.COM-I-A,I.COM-I-B: \'X\' vs \'Y\'</code><br>'
     + '<p>Multiple clauses separated by <code> ; </code>. Scope prefixes: <code>[bs]</code> / <code>[inter]</code> / <code>[inter2]</code>. '
@@ -5497,7 +5521,7 @@ function buildShiftContext(){
     const adminLists = shiftPopulations().map(function(pid){ return (state.giByPop || {})[pid] || null; });
     const typeHasAdmin = {};
     for(const lst of adminLists){ if(lst){ for(const g of lst){ typeHasAdmin[g.type] = true; } } }
-    const unionSFD = [], seenSFD = {}, unionNO = [];
+    const unionSFD = [], seenSFD = {}, unionNO = [], unionSFSD = [];
     for(let pi = 0; pi < shiftPopulations().length; pi++){
       const pid = shiftPopulations()[pi];
       const adminList = adminLists[pi];
@@ -5517,6 +5541,10 @@ function buildShiftContext(){
           const k = r.subject + '|' + (r.scope || '');
           if(!seenSFD[k]){ seenSFD[k] = true; unionSFD.push(r); }
         }
+        for(const g of (byType.subject_forbidden_slots_on_days || [])){
+          unionSFSD.push({ subject: (g.params||{}).subject, days: (g.params||{}).days||[],
+                           slots: (g.params||{}).slots||[], scope: (g.params||{}).scope });
+        }
         for(const g of (byType.non_overriding || [])){
           unionNO.push({ sections: (g.params||{}).sections||[], subjects: (g.params||{}).subjects||[] });
         }
@@ -5532,6 +5560,7 @@ function buildShiftContext(){
       }
     }
     if(typeHasAdmin['subject_forbidden_days']) giCtx.instructions.subjectForbiddenDays = unionSFD;
+    if(typeHasAdmin['subject_forbidden_slots_on_days']) giCtx.instructions.subjectForbiddenSlotDays = unionSFSD;
     if(typeHasAdmin['non_overriding']) giCtx.instructions.nonOverriding = unionNO;
     ctx.instructions = giCtx.instructions;
     ctx.sectionMeta = giCtx.sectionMeta;

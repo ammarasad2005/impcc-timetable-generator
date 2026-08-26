@@ -438,6 +438,7 @@ def _unit_day_domain(u, R, model):
 
 
 def build_from_context(model, objective="default", collect=None):
+    from solver import _slotset, _dayset, SLOT_OF, DAY_OF  # local (mirrors soft_raise)
     """CP-SAT model for a context model (context_model.context_to_model output).
 
     objective="default" sets the classic shuffle+soft objective. objective="none"
@@ -692,6 +693,23 @@ def build_from_context(model, objective="default", collect=None):
                     cell_ok.append(ok)
             if cell_ok:
                 m.Add(sum(cell_ok) >= 1)
+
+    # ---- subject x day x slot forbidden windows (institution rule, e.g.
+    # "Physics must not be scheduled in the last two periods on Friday"):
+    # a hard ban — the unit's pieces may never sit in those exact cells.
+    for e in ((model.get("instructions") or {}).get("subjectForbiddenSlotDays") or []):
+        dset = _dayset(e.get("days") or [])
+        sset = _slotset(e.get("slots") or [])
+        for u in model["units"]:
+            secs = [sec for sec in u["secs"]
+                    if u["courseBySec"].get(sec) == e.get("subject")
+                    and (not e.get("scope") or _sec_stream(sec) == e["scope"])]
+            if not secs:
+                continue
+            for p in range(u["count"]):
+                for d in dset:
+                    for sl in sset:
+                        m.Add(piece_keys[u["id"]][p] != sl * Dg + d)
 
     # ---- soft: individual spread + even distribution
     if model["instructions"].get("softIndividualSpread"):

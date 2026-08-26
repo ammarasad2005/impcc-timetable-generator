@@ -193,6 +193,10 @@ def context_to_model(ctx):
         "instructions": instr,
         "constraints": ctx.get("constraints") or {},
         "penalties": dict(PENALTIES, **(ctx.get("softPenalties") or {})),
+        # parallel-group definitions (cp_solver._unit_slot_domain consumes them
+        # via model["_parallel"] — without this the member availability shrinks
+        # silently no-op for PG:* units)
+        "_parallel": rel.get("parallelGroups") or [],
     }
 
 
@@ -511,6 +515,24 @@ def evaluate(grids, model):
                     for s in range(P):
                         if g[d][s] == u["id"] and d in dset:
                             issues.append(f"{sec} {e['subject']} on forbidden day {_solver.DAYS[d]}")
+
+    for e in (model["instructions"].get("subjectForbiddenSlotDays") or []):
+        for u in units:
+            for sec in u["secs"]:
+                if course_of(u, sec) != e["subject"]:
+                    continue
+                scope = e.get("scope")
+                if scope and _sec_stream(sec) != scope:
+                    continue
+                g = grids.get(sec)
+                if not g:
+                    continue
+                dset = _dayset(e["days"])
+                sset = _slotset(e["slots"])
+                for d in range(D):
+                    for s in range(P):
+                        if g[d][s] == u["id"] and d in dset and s in sset:
+                            issues.append(f"{sec} {e['subject']} at forbidden window {_solver.DAYS[d]} {_solver.SLOTS[s]}")
     for e in (model["instructions"].get("nonOverriding") or []):
         secs = e["sections"]
         subs = e["subjects"]
@@ -1106,6 +1128,26 @@ def analyze_structured(grids, model):
                 for (d, s) in bad_cells:
                     _issue(f"{sec} {e['subject']} on forbidden day {_solver.DAYS[d]}",
                            f"gi_sfbd@{e['subject']}|{scope}", [u["id"]],
+                           [C(sec, d, s)])
+
+    for e in (model["instructions"].get("subjectForbiddenSlotDays") or []):
+        for u in units:
+            for sec in u["secs"]:
+                if course_of(u, sec) != e["subject"]:
+                    continue
+                scope = e.get("scope")
+                if scope and _sec_stream(sec) != scope:
+                    continue
+                g = grids.get(sec)
+                if not g:
+                    continue
+                dset = _dayset(e["days"])
+                sset = _slotset(e["slots"])
+                bad_cells = [(d, s) for d in range(D) for s in range(P)
+                             if g[d][s] == u["id"] and d in dset and s in sset]
+                for (d, s) in bad_cells:
+                    _issue(f"{sec} {e['subject']} at forbidden window {_solver.DAYS[d]} {_solver.SLOTS[s]}",
+                           f"gi_sfsd@{e['subject']}|{scope}", [u["id"]],
                            [C(sec, d, s)])
     for e in (model["instructions"].get("nonOverriding") or []):
         secs = e["sections"]

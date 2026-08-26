@@ -722,6 +722,23 @@
         }
       }
     }
+    for (const e of ((model.instructions.subjectForbiddenSlotDays) || [])) {
+      for (const u of units) {
+        for (const sec of u.secs) {
+          if (courseOf(u, sec) !== e.subject) continue;
+          if (e.scope && secStream(sec) !== e.scope) continue;
+          const g = grids[sec];
+          if (!g) continue;
+          const ds = daySet(e.days);
+          const ss = slotSet(e.slots);
+          for (let d = 0; d < D; d++) for (let s = 0; s < P; s++) {
+            if (g[d][s] === u.id && ds.has(d) && ss.has(s)) {
+              issues.push(sec + " " + e.subject + " at forbidden window " + DAY_NAMES[d] + " " + PERIOD_LABELS[s]);
+            }
+          }
+        }
+      }
+    }
     for (const e of ((model.instructions.nonOverriding) || [])) {
       const secs = e.sections, subs = e.subjects;
       for (const x of secs) {

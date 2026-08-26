@@ -308,6 +308,8 @@
           sections: e.params.sections, subjects: e.params.subjects })),
         subjectForbiddenDays: (gi.subject_forbidden_days || []).filter(e => e.params).map(e => ({
           subject: e.params.subject, days: e.params.days || [], scope: e.params.scope })),
+        subjectForbiddenSlotDays: (gi.subject_forbidden_slots_on_days || []).filter(e => e.params).map(e => ({
+          subject: e.params.subject, days: e.params.days || [], slots: e.params.slots || [], scope: e.params.scope })),
         softIndividualSpread: !!gi.soft_individual_spread
       },
       constraints: solverConstraints(),

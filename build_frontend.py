@@ -6264,5 +6264,86 @@ rep("const pure={}; for(const kk in pub.timetable_config){ if(kk!=='sectionsAdde
 # 3) styles
 rep("/* theme picker control (masthead) */", f21_css.strip() + "\n/* theme picker control (masthead) */")
 
+# ---- 54) F22a: new rule type subject_forbidden_slots_on_days + CP-SAT gi overrides --
+
+# (a) JS admin-merge: union the new type like subject_forbidden_days
+rep("""        for(const g of (byType.subject_forbidden_days || [])){
+          const r = { subject: (g.params||{}).subject, days: (g.params||{}).days||[], scope: (g.params||{}).scope };
+          const k = r.subject + '|' + (r.scope || '');
+          if(!seenSFD[k]){ seenSFD[k] = true; unionSFD.push(r); }
+        }""",
+    """        for(const g of (byType.subject_forbidden_days || [])){
+          const r = { subject: (g.params||{}).subject, days: (g.params||{}).days||[], scope: (g.params||{}).scope };
+          const k = r.subject + '|' + (r.scope || '');
+          if(!seenSFD[k]){ seenSFD[k] = true; unionSFD.push(r); }
+        }
+        for(const g of (byType.subject_forbidden_slots_on_days || [])){
+          unionSFSD.push({ subject: (g.params||{}).subject, days: (g.params||{}).days||[],
+                           slots: (g.params||{}).slots||[], scope: (g.params||{}).scope });
+        }""")
+rep("const unionSFD = [], seenSFD = {}, unionNO = [];",
+    "const unionSFD = [], seenSFD = {}, unionNO = [], unionSFSD = [];")
+rep("""    if(typeHasAdmin['subject_forbidden_days']) giCtx.instructions.subjectForbiddenDays = unionSFD;
+    if(typeHasAdmin['non_overriding']) giCtx.instructions.nonOverriding = unionNO;""",
+    """    if(typeHasAdmin['subject_forbidden_days']) giCtx.instructions.subjectForbiddenDays = unionSFD;
+    if(typeHasAdmin['subject_forbidden_slots_on_days']) giCtx.instructions.subjectForbiddenSlotDays = unionSFSD;
+    if(typeHasAdmin['non_overriding']) giCtx.instructions.nonOverriding = unionNO;""")
+
+# (b) cpsatOverrides now carries the admin general-instruction lists too, so
+# the cloud engine enforces exactly what the admin staged (replace-per-pop
+# semantics on the backend, validated + capped there)
+rep("""  const alloc={};
+  for(const p of pops){
+    const a=(p==='inter-1'&&state.allocation)?state.allocation:(state.allocByPop[p]||(CANON?getPopAllocation(p):null));
+    if(a&&Object.keys(a).length) alloc[p]=a;
+  }
+  if(Object.keys(alloc).length) out.allocation=alloc;
+  return Object.keys(out).length?out:null;""",
+    """  const alloc={};
+  for(const p of pops){
+    const a=(p==='inter-1'&&state.allocation)?state.allocation:(state.allocByPop[p]||(CANON?getPopAllocation(p):null));
+    if(a&&Object.keys(a).length) alloc[p]=a;
+  }
+  if(Object.keys(alloc).length) out.allocation=alloc;
+  const instr={};
+  for(const p of pops){ const lst=giList(p); if(lst.length) instr[p]=lst; }
+  if(Object.keys(instr).length) out.general_instructions=instr;
+  return Object.keys(out).length?out:null;""")
+
+# (c) sheet DSL: render + parse the new rule type
+rep("""    case 'section_off_days':               return pre + 'sections ' + (p.sections || []).join(',') + ' off on ' + (p.days || []).join(',');""",
+    """    case 'subject_forbidden_slots_on_days':{
+      const scope2 = p.scope ? ' (scope: ' + p.scope + ')' : '';
+      return pre + "subject '" + (p.subject || '?') + "' forbidden on " + (p.days || []).join(',') + ' at ' + (p.slots || []).join(',') + scope2;
+    }
+    case 'section_off_days':               return pre + 'sections ' + (p.sections || []).join(',') + ' off on ' + (p.days || []).join(',');""")
+rep("""    if((m = s.match(/^subject\\s+'([^']+)'\\s+forbidden\\s+on\\s+([A-Za-z ,]+?)(?:\\s+\\(scope:\\s*(.+)\\))?$/i))){""",
+    """    if((m = s.match(/^subject\\s+'([^']+)'\\s+forbidden\\s+on\\s+([A-Za-z ,]+?)\\s+at\\s+([Pp0-9 ,]+?)(?:\\s+\\(scope:\\s*(.+)\\))?$/i))){
+      const days = m[2].split(',').map(dslNormDay); if(days.some(function(d){ return !d; })) throw new Error("bad day in: " + raw);
+      const slots = m[3].split(',').map(function(x){ x = x.trim().toUpperCase(); if(/^P[1-8]$/.test(x)) return x; });
+      if(slots.some(function(x){ return !x; })) throw new Error("bad period in: " + raw);
+      const p = { subject: m[1].trim(), days: days, slots: slots }; if(m[4]) p.scope = m[4].trim();
+      pushRule(pops, 'subject_forbidden_slots_on_days', p); continue;
+    }
+    if((m = s.match(/^subject\\s+'([^']+)'\\s+forbidden\\s+on\\s+([A-Za-z ,]+?)(?:\\s+\\(scope:\\s*(.+)\\))?$/i))){""")
+
+# (d) pattern-first translator: subject + specific periods phrasing
+rep("""  if((m = d.match(/([a-z][a-z .&-]{2,40}?)\\s+(?:must|should) not be (?:set |scheduled |held )?on (mon|tue|wed|thu|fri|sat|sun)[a-z]*/))){""",
+    """  if((m = d.match(/([a-z][a-z .&-]{2,40}?)\\s+(?:must|should) not be (?:set |scheduled |held |taught )?(?:in|during|at|on)?[^.]*?(mon|tue|wed|thu|fri|sat|sun)[a-z]*[^.]*?(first|last)\\s+(one|two|1|2)\\s+periods?/))
+      || (m = d.match(/([a-z][a-z .&-]{2,40}?)\\s+(?:must|should) not be (?:set |scheduled |held |taught )?on (mon|tue|wed|thu|fri|sat|sun)[a-z]*[^.]*?(first|last)\\s+(one|two|1|2)\\s+periods?/))){
+    const day = dslNormDay(m[2]);
+    const n = (m[4] === 'two' || m[4] === '2') ? 2 : 1;
+    const last = m[3] === 'last';
+    const P = (POP().periods) || 5;
+    const slots = [];
+    for(let k = 0; k < n; k++) slots.push('P' + (last ? (P - n + 1 + k) : (1 + k)));
+    if(day) return "subject '" + m[1].trim().replace(/\\b\\w/g, function(c){ return c.toUpperCase(); }) + "' forbidden on " + day + ' at ' + slots.join(',');
+  }
+  if((m = d.match(/([a-z][a-z .&-]{2,40}?)\\s+(?:must|should) not be (?:set |scheduled |held )?on (mon|tue|wed|thu|fri|sat|sun)[a-z]*/))){""")
+
+# (e) help text gets the new clause
+rep("<code>sections BSAF-SEM-VII,BBA-SEM-VII off on FRI</code> · ",
+    "<code>sections BSAF-SEM-VII,BBA-SEM-VII off on FRI</code> · <code>subject 'Physics' forbidden on FRI at P4,P5</code> · ")
+
 io.open(DST, "w", encoding="utf-8").write(src)
 print("OK → wrote", DST, "(", len(src), "bytes )")

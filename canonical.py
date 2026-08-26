@@ -258,6 +258,31 @@ def solver_context(population_ids, overrides=None):
 
     gi = _gi_rules(pids)
 
+    # the admin's CURRENT per-population general-instruction lists override the
+    # bundled canonical rules, per TYPE (an admin type replaces every canonical
+    # entry of that type across the whole context — mirrors buildShiftContext)
+    if isinstance(ov.get("general_instructions"), dict):
+        # a passed population's admin list is AUTHORITATIVE for that population
+        # (full replacement of its canonical rules); populations not passed keep
+        # the bundled canonical set. (Mirrors what the frontend sends back         # from giByPop.)
+        per_pop_gi = {pid: _gi_rules([pid]) for pid in pids}
+        admin_map = {}
+        for pid in pids:
+            raw_list = ov["general_instructions"].get(pid)
+            if isinstance(raw_list, list):
+                admin_map[pid] = [dict(e) for e in raw_list
+                                  if isinstance(e, dict) and e.get("type") and e.get("enabled", True)]
+        if admin_map:
+            merged = {}
+            for pid in pids:
+                if pid in admin_map:
+                    for e in admin_map[pid]:
+                        merged.setdefault(e["type"], []).append(e)
+                else:
+                    for t, entries in per_pop_gi[pid].items():
+                        merged.setdefault(t, []).extend(entries)
+            gi = merged
+
     sections = {}
     section_meta = {}
     pop_keys = {}
@@ -309,6 +334,11 @@ def solver_context(population_ids, overrides=None):
             {"subject": e["params"].get("subject"), "days": e["params"].get("days", []),
              "scope": e["params"].get("scope")}
             for e in gi.get("subject_forbidden_days", []) if e.get("params")
+        ],
+        "subjectForbiddenSlotDays": [
+            {"subject": e["params"].get("subject"), "days": e["params"].get("days", []),
+             "slots": e["params"].get("slots", []), "scope": e["params"].get("scope")}
+            for e in gi.get("subject_forbidden_slots_on_days", []) if e.get("params")
         ],
         "softIndividualSpread": bool(gi.get("soft_individual_spread")),
     }

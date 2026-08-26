@@ -873,6 +873,66 @@ try:
 except Exception as e:
     check("R9/R10 API override flow (accept + validate)", False, str(e)[:120])
 
+# ---- F22: subject_forbidden_slots_on_days + general-instruction overrides ----
+try:
+    import canonical as _CN22
+    try:
+        import sys as _sys22; _sys22.path.insert(0, 'api')
+        import index as _API22
+        import llm_translate as _LT22
+        check("F22a new GI type is whitelisted (catalog + api validator share it)",
+              "subject_forbidden_slots_on_days" in _LT22.GI_RULE_TYPES)
+        _cl22 = _API22._clean_overrides(['inter-1'], {'general_instructions': {'inter-1': [
+            {'type': 'subject_forbidden_slots_on_days', 'params': {'subject': 'Physics', 'days': ['FRI'], 'slots': ['P4', 'P5']}},
+            {'type': 'bogus_type', 'params': {}}]}})
+        check("F22b _clean_overrides drops unknown types, keeps the new one (+ fills id/enabled)",
+              _cl22 and _cl22['general_instructions']['inter-1'] == [
+                  {'id': '', 'type': 'subject_forbidden_slots_on_days',
+                   'params': {'subject': 'Physics', 'days': ['FRI'], 'slots': ['P4', 'P5']}, 'enabled': True}])
+    except Exception as e:
+        check("F22a/F22b api surface (whitelist + clean)", False, str(e)[:120])
+    _i22 = _CN22.solver_context(['inter-1'], overrides={'general_instructions': {'inter-1': [
+        {'type': 'avoid_shuffling', 'params': {}, 'enabled': True},
+        {'type': 'no_same_subject_same_day', 'params': {}, 'enabled': True},
+        {'type': 'consecutive_days_for_2pw', 'params': {}, 'enabled': True},
+        {'type': 'soft_individual_spread', 'params': {}, 'enabled': True},
+        {'type': 'subject_forbidden_slots_on_days', 'params': {'subject': 'Physics', 'days': ['FRI'], 'slots': ['P4', 'P5'], 'scope': 'ICS'}, 'enabled': True},
+    ]}})['instructions']
+    check("F22c admin instruction list replaces pop rules per type + emits subjectForbiddenSlotDays",
+          _i22['subjectForbiddenSlotDays'] == [{'subject': 'Physics', 'days': ['FRI'], 'slots': ['P4', 'P5'], 'scope': 'ICS'}]
+          and _i22['subjectForbiddenDays'] == []
+          and _i22['noSameSubjectSameDay']['inter'] is True)
+    _i22b = _i22 = None
+    _i22b = _CN22.solver_context(['inter-1'], overrides={'general_instructions': {'inter-1': [
+        {'type': 'avoid_shuffling', 'params': {}, 'enabled': True},
+    ]}})['instructions']
+    check("F22d dropping a canonical rule from the admin list removes it (no_same gone)",
+          _i22b['noSameSubjectSameDay']['inter'] is False)
+    _i22c = _CN22.solver_context(['inter-1'])['instructions']
+    check("F22e canonical context unchanged (no overrides -> noSame kept, no slot-day bans)",
+          _i22c['noSameSubjectSameDay']['inter'] is True and _i22c.get('subjectForbiddenSlotDays') == [])
+    import context_model as _CM22
+    _m22 = _CM22.context_to_model(_CN22.solver_context(['inter-1'], overrides={'general_instructions': {'inter-1': [
+        {'type': 'subject_forbidden_slots_on_days', 'params': {'subject': 'Physics', 'days': ['FRI'], 'slots': ['P4', 'P5']}, 'enabled': True},
+        {'type': 'avoid_shuffling', 'params': {}, 'enabled': True},
+        {'type': 'no_same_subject_same_day', 'params': {}, 'enabled': True},
+        {'type': 'consecutive_days_for_2pw', 'params': {}, 'enabled': True},
+        {'type': 'soft_individual_spread', 'params': {}, 'enabled': True},
+    ]}}))
+    _u22 = next(u for u in _m22['units'] if 'Physics' in (u['courseBySec'] or {}).values())
+    _sec22 = _u22['secs'][0]
+    _g22 = {_sec22: [[None] * _m22['periods'] for _ in range(_m22['days'])]}
+    _g22[_sec22][4][3] = _u22['id']
+    _ev22 = _CM22.evaluate(_g22, _m22)
+    check("F22f context checker flags the forbidden window",
+          any('forbidden window' in x and 'FRI' in x for x in _ev22['issues']))
+    _g22b = {_sec22: [[None] * _m22['periods'] for _ in range(_m22['days'])]}
+    _g22b[_sec22][4][1] = _u22['id']
+    _ev22b = _CM22.evaluate(_g22b, _m22)
+    check("F22g context checker clean outside the window", not any('forbidden window' in x for x in _ev22b['issues']))
+except Exception as e:
+    check("F22 new-rule-type backend wiring", False, str(e)[:160])
+
 total = passed + failures
 print("RESULT: %d/%d checks passed%s" %
       (passed, total, "  —  ALL TESTS PASSED ✓" if failures == 0 else

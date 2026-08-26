@@ -358,6 +358,39 @@ def _clean_overrides(populations, raw):
                 a = None
         except Exception:
             a = None
+    g = raw.get("general_instructions")
+    if isinstance(g, dict):
+        try:
+            import llm_translate as _lt
+            _types = _lt.GI_RULE_TYPES
+        except Exception:
+            _types = {"no_same_subject_same_day", "same_subject_same_day_allowed", "avoid_shuffling",
+                      "non_overriding", "consecutive_days_for_2pw", "subject_forbidden_days",
+                      "section_off_days", "first_last_period_occupied", "combined_classes",
+                      "soft_individual_spread", "subject_forbidden_slots_on_days"}
+        good_gi = {}
+        for pid, entries in g.items():
+            if pid not in populations or not isinstance(entries, list) or len(entries) > 64:
+                continue
+            kept = []
+            for e in entries:
+                if not isinstance(e, dict) or e.get("type") not in _types:
+                    continue
+                p = e.get("params") or {}
+                if not isinstance(p, dict):
+                    continue
+                ok = True
+                for v in p.values():
+                    vals = v if isinstance(v, list) else [v]
+                    if len(vals) > 40 or not all(isinstance(x, (str, int, float, bool, type(None))) and len(str(x)) <= 80 for x in vals):
+                        ok = False
+                        break
+                if ok:
+                    kept.append({"id": str(e.get("id") or "")[:64], "type": e["type"], "params": p, "enabled": True})
+            if kept:
+                good_gi[pid] = kept
+        if good_gi:
+            out["general_instructions"] = good_gi
     clean = {}
     if isinstance(a, dict):
         for pid, secs in a.items():
