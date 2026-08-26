@@ -127,3 +127,34 @@ scope signature. Per-entry `scope = {populations?, streams?, sections?, days?}`
 intersects with the entry's own `days`. Multi-section (combined) units use
 the conservative all-sections-match reading for section/stream scope;
 single-section units match the checker exactly.
+
+## 8\. Hardness metric (per rule, per teacher) — v2.1
+
+Every rule row carries an edit hardness `h ∈ {0..100}` that the admin can
+slide; the AI translator infers the default from the statement's rigidity
+keywords ("only" / "never" → 100; "preferably" → 30; "as much as
+possible" → 20; "try to avoid" → 40 …).
+
+| h | engine semantics |
+| --- | --- |
+| 100 | HARD: violating solutions are rejected (CP-SAT hard constraint; checker `issues`). |
+| 1..99 | SOFT: violations are documented with penalty `base_penalty × h / 100` (rationale: halving hardness halves the cost of disobeying). |
+| 0 | INACTIVE: kept as an annotation; engines skip it entirely (UI shows "off"). |
+
+Wire format: a per-teacher `hardness` object maps rule key → int:
+
+```json
+"Tanveer": { "rules": { "allowed_days": ["THU","FRI"], "subject_slots": [{"subject":"Economics","slots":["P3"]}] },
+             "hardness": { "allowed_days": 100, "subject_slots": 60 } }
+```
+
+Backward compatibility: a teacher entry with the legacy `soft: [keys]`
+list and no `hardness` map behaves as if each listed key had hardness 50
+and every other key hardness 100. `hardness` always wins when both are
+present. All four engines (`cp_solver`, `context_model`, `context_solver.js`,
+`solver.js`) read one shared helper semantics: `hardness_of(entry, key)`.
+
+Soft-penalty bases: `rule`=5000, `preferFreeSlot`=500 (per hit),
+`evenDistribution`=100 (per excess), mirroring the existing soft layer.
+The bool soft kinds keep their bases; hard kinds demoted to h<100 report
+against the `rule` base by default.
