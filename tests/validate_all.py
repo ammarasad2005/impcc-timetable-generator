@@ -775,14 +775,15 @@ print("=" * 72)
 built19 = open('index.html', encoding='utf-8').read()
 check("Q1 GI nav button + setView('gi') binding",
       'id="viewGI"' in built19 and "setView('gi')" in built19)
-check("Q2 schedule facts card: editable grid/length/day-start/break fields + Friday override",
-      'data-sched="days"' in built19 and 'data-sched="periods"' in built19 and
-      'data-sched="breakAfterPeriod"' in built19 and 'data-sched-ov="Fri"' in built19)
+check("Q2 GI page is now two linear sheets (topic / detail / expression)",
+      'function sheetHtml(' in built19 and 'function bindSheet(' in built19 and
+      'data-rowsfield="expr"' in built19 and 'data-rowsfield="detail"' in built19)
 check("Q3 staging model kept: draft staged -> ☁ Publish applies into POPS",
       'impcc-ttcfg-' in built19 and 'applies them everywhere' in built19 and
       'function applyScheduleCfg(' in built19 and 'function schedStage(' in built19)
-check("Q4 rules grouped by area (GI_GROUPS + rule-cards + group headers)",
-      'var GI_GROUPS' in built19 and 'giRuleCard(' in built19 and 'gi-group-h' in built19)
+check("Q4 sheets are shift-scoped: shift-1 = inter-1 + bs-1, shift-2 = inter-2",
+      '"shift-1": ["inter-1", "bs-1"]' in built19 and '"shift-2": ["inter-2"]' in built19 and
+      'Shift 1 — Intermediate' in built19 and 'Shift 2 — Intermediate' in built19)
 check("Q5 publish carries schedule + section structure via timetableConfig",
       'ttConfigFor(' in built19 and 'sectionsAdded' in built19 and 'sectionsRemoved' in built19)
 check("Q6 syncFromCloud restores staging (schedule facts + per-day overrides)",
@@ -818,6 +819,25 @@ try:
     check("R7 build_frontend.py remains valid Python", True)
 except SyntaxError:
     check("R7 build_frontend.py remains valid Python", False)
+
+# ---- S-series: F21 sheet mechanics ------------------------------------
+check("S1 seeded rows render canonical rules into scoped pseudocode clauses",
+      'function seedSheet(' in built19 and 'function dslRenderRule(' in built19 and 'sourceIds' in built19 and
+      'no same subject twice on one day' in built19 and 'same-subject repeats allowed' in built19)
+check("S2 dslCompile covers schedule assignments + all canonical rule types",
+      'function dslCompile(' in built19 and 'breakAfterPeriod' in built19 and 'dayStartOverrides' in built19 and
+      'subject_forbidden_days' in built19 and 'section_off_days' in built19 and 'consecutive_days_for_2pw' in built19 and
+      'first_last_period_occupied' in built19 and 'combined_classes' in built19 and 'non_overriding' in built19)
+check("S3 pattern-first translation of detail (heuristics before AI)",
+      'function dslHeuristic(' in built19 and "'break after P'" in built19 and "'working days = '" in built19 and
+      "'/translate-gi'" in built19)
+check("S4 apply is idempotent upsert; delete strips exactly what a row derived",
+      'function giApplyRow(' in built19 and 'function giStripRowEntry(' in built19 and 'sheetRowId' in built19 and
+      'function sheetDeleteRow(' in built19 and "id: 'gs-' + row.id" in built19)
+check("S5 per-shift publish: sheet rides timetable_config.sheet on the primary pop",
+      'function giPublishShift(' in built19 and 'cfg.sheet' in built19 and 'GI_SHIFT_PRIMARY' in built19)
+check("S6 sync restores sheets; pure schedule config excludes the sheet blob",
+      "kk!=='sheet'" in built19 and 'impcc-gisheet-' in built19 and 'function schedStageData(' in built19)
 
 # backend override semantics (fast: context only, no solve)
 try:
