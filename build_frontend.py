@@ -5893,7 +5893,7 @@ function dslRenderRule(rule, pop, shift){
     }
     case 'section_off_days':               return pre + 'sections ' + (p.sections || []).join(',') + ' off on ' + (p.days || []).join(',');
     case 'first_last_period_occupied':
-      return p.libraryWorkLabel ? ("first & last period occupied, free gaps as '" + p.libraryWorkLabel + "'") : 'first & last period occupied';
+      return pre + (p.libraryWorkLabel ? ("first & last period occupied, free gaps as '" + p.libraryWorkLabel + "'") : 'first & last period occupied');
     case 'combined_classes':               return pre + 'combined classes: ' + (p.groups || []).join(',');
     case 'non_overriding':
       return pre + 'non-overriding weekly: ' + (p.sections || []).join(',') + ': ' + (p.subjects || []).map(function(s){ return "'" + s + "'"; }).join(' vs ');
@@ -5912,7 +5912,7 @@ function seedSheet(shift){
         rows.push(byNatural[key]);
       }
       const clause = dslRenderRule(r, pop, shift);
-      if(clause){ byNatural[key].expr += (byNatural[key].expr ? ' ; ' : '') + clause; }
+      if(clause && byNatural[key].expr.split(' ; ').indexOf(clause) < 0){ byNatural[key].expr += (byNatural[key].expr ? ' ; ' : '') + clause; }
       (byNatural[key].sourceIds[pop] = byNatural[key].sourceIds[pop] || []).push(r.id);
     }
   }
