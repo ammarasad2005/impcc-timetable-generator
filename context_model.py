@@ -169,6 +169,7 @@ def context_to_model(ctx):
         sections.append({
             "key": sec_key, "level": level, "offDays": off_days,
             "firstLast": first_last, "effDays": eff_days, "subs": subs,
+            "pop": m.get("pop"),
         })
 
     # link day-exclusive pairs to unit ids — PER SECTION (the pair rule applies
@@ -240,6 +241,406 @@ def _dyn_label(e):
     if e.get("sections"): bits.append(",".join(map(str, e["sections"])))
     if e.get("teachers"): bits.append(",".join(map(str, e["teachers"])))
     return " ".join(bits) or "cells"
+
+def _sorted_slots(bad):
+    return [(_solver.DAYS[d] + " " + _solver.SLOTS[s]) for (d, s) in sorted(set(bad))]
+
+
+def _scope_signature(e):
+    sc = (e.get("scope") if isinstance(e, dict) else None) or {}
+    return (tuple(sorted(sc.get("populations") or [])),
+            tuple(sorted(sc.get("streams") or [])),
+            tuple(sorted(sc.get("sections") or [])))
+
+
+def teacher_rule_findings(code, entry, my_units, cells, pop_of, D, P, pen):
+    """Shared deterministic walk over ONE teacher's taught cells against the
+    full personal-constraint taxonomy (personal_constraints_model.md).
+
+    `entry` = the teacher's record {rules:{...}, soft:[...], hardness:{...}};
+    hardness 100 = hard mask, 1..99 = soft (penalty × h/100), 0 = inactive (§8).
+    `cells` = list of (d, s, sec, u) — the teacher's occupied cells (ints d,s).
+    Returns finding dicts: {rule_key, msg, soft, uids, cells, pen}.
+    evaluate() AND the repair analyzer both consume this — one implementation
+    of every personal rule kind, so semantics can never drift apart."""
+    from solver import scope_cell_applies, hardness_of
+    entry = entry or {}
+    rules = entry.get("rules") or {}
+    soft = set(entry.get("soft") or [])
+    findings = []
+
+    def course(u, sec):
+        return u["courseBySec"].get(sec) or list(u["courseBySec"].values())[0]
+
+    def _label(d):
+        return _solver.DAYS[d]
+
+    def scoped_days(e):
+        sc = (e.get("scope") if isinstance(e, dict) else None) or {}
+        return _dayset(sc.get("days") or [])
+
+    def applies(e, d, s, sec, u):
+        return scope_cell_applies(e, sec=sec, day=_label(d),
+                                  pop=pop_of.get(sec), stream=_sec_stream(sec))
+
+    def _cl(pred):
+        """(sec, d, s)-cells matching a (d, s, sec, u) predicate."""
+        return [(sec, d, s) for (d, s, sec, u) in cells if pred(d, s, sec, u)]
+
+    def _uids(pred):
+        return sorted({u["id"] for (d, s, sec, u) in cells if pred(d, s, sec, u)})
+
+    def add(rule_key, msg, clist=None, uids=None, is_soft=None, pen_=None):
+        h = hardness_of(entry, rule_key)
+        if h == 0:
+            return   # inactive: kept as an admin annotation only
+        is_soft_ = (rule_key in soft) if is_soft is None else bool(is_soft)
+        if not is_soft_ and h < 100:
+            is_soft_ = True                       # demoted to a soft finding
+            if pen_ is None:
+                pen_ = int(pen["rule"] * h / 100)
+        elif is_soft_ and h < 100:
+            # native soft (in `soft` list) or soft_* kind: scale the penalty too —
+            # legacy soft list behaves like explicit h=50 (spec §8)
+            pen_ = int((pen_ if pen_ is not None else pen["rule"]) * h / 100)
+        findings.append({
+            "rule_key": rule_key, "msg": msg,
+            "soft": is_soft_,
+            "uids": uids if uids is not None else sorted({u["id"] for u in my_units}),
+            "cells": list(clist or []), "pen": pen_})
+
+    # ---------------- day-slot presence summaries used by several kinds
+    per_day = {}
+    occ_slots_per_day = {}
+    for (d, s, sec, u) in cells:
+        per_day[d] = per_day.get(d, 0) + 1
+        occ_slots_per_day.setdefault(d, set()).add(s)
+
+    # ================================ HARD masks ================================
+    fs = _slotset(rules.get("forbidden_slots")) if rules.get("forbidden_slots") is not None else None
+    if fs is not None:
+        pred = lambda d, s, sec, u: s in fs
+        bad = sorted({s for (d, s, sec, u) in cells if s in fs})
+        if bad:
+            add("forbidden_slots", f"teaches in forbidden slot(s) {[_solver.SLOTS[s] for s in bad]}",
+                _cl(pred), _uids(pred))
+    asl = _slotset(rules.get("allowed_slots")) if rules.get("allowed_slots") is not None else None
+    if asl is not None:
+        pred = lambda d, s, sec, u: s not in asl
+        bad = sorted({s for (d, s, sec, u) in cells if s not in asl})
+        if bad:
+            add("allowed_slots", f"teaches outside allowed slots {[_solver.SLOTS[s] for s in bad]}",
+                _cl(pred), _uids(pred))
+    fd = _dayset(rules.get("forbidden_days")) if rules.get("forbidden_days") is not None else None
+    if fd is not None:
+        pred = lambda d, s, sec, u: d in fd
+        bad = sorted({d for (d, s, sec, u) in cells if d in fd})
+        if bad:
+            add("forbidden_days", f"teaches on forbidden day(s) {[_label(d) for d in bad]}",
+                _cl(pred), _uids(pred))
+    ad = _dayset(rules.get("allowed_days")) if rules.get("allowed_days") is not None else None
+    if ad is not None:
+        pred = lambda d, s, sec, u: d not in ad
+        bad = sorted({d for (d, s, sec, u) in cells if d not in ad})
+        if bad:
+            add("allowed_days", f"teaches on non-allowed day(s) {[_label(d) for d in bad]}",
+                _cl(pred), _uids(pred))
+    for e in (rules.get("forbidden_slots_on_days") or []):
+        dset = _dayset(e["days"]) & scoped_days(e) if scoped_days(e) else _dayset(e["days"])
+        sset = _slotset(e["slots"])
+        pred = lambda d, s, sec, u: d in dset and s in sset and applies(e, d, s, sec, u)
+        bad = sorted({(d, s) for (d, s, sec, u) in cells if pred(d, s, sec, u)})
+        if bad:
+            add("forbidden_slots_on_days", f"teaches in forbidden day/slot {_sorted_slots(bad)}",
+                _cl(pred), _uids(pred))
+    if rules.get("allowed_slots_days"):          # positive union-allow windows
+        groups = {}
+        for e in rules["allowed_slots_days"]:
+            sig = _scope_signature(e)
+            groups.setdefault(sig, []).append(e)
+        for sig, es in groups.items():
+            win = {}
+            for e in es:
+                sd = scoped_days(e)
+                ds = (_dayset(e.get("days") or []) or set(range(D))) & (sd or set(range(D)))
+                for d in ds:
+                    win.setdefault(d, set()).update(_slotset(e.get("slots") or []))
+            e0 = es[0]
+            pred = lambda d, s, sec, u, w=win, e=e0: (d not in w or s not in w[d]) and applies(e, d, s, sec, u)
+            bad = sorted({(d, s) for (d, s, sec, u) in cells if pred(d, s, sec, u)})
+            if bad:
+                add("allowed_slots_days", f"teaches outside the allowed day/slot window {_sorted_slots(bad)}",
+                    _cl(pred), _uids(pred))
+    for e in (rules.get("allowed_slots_in_stream") or []):
+        sset = _slotset(e["slots"])
+        sd = scoped_days(e)
+        pred = lambda d, s, sec, u: (_sec_stream(sec) == e["stream"] and s not in sset
+                                     and (not sd or d in sd) and applies(e, d, s, sec, u))
+        bad = sorted({(d, s) for (d, s, sec, u) in cells if pred(d, s, sec, u)})
+        if bad:
+            add("allowed_slots_in_stream", f"{e['stream']} classes outside allowed slots {_sorted_slots(bad)}",
+                _cl(pred), _uids(pred))
+    for e in (rules.get("allowed_days_in_stream") or []):
+        dset = _dayset(e["days"])
+        pred = lambda d, s, sec, u: (_sec_stream(sec) == e["stream"] and d not in dset
+                                     and applies(e, d, s, sec, u))
+        bad = sorted({d for (d, s, sec, u) in cells if pred(d, s, sec, u)})
+        if bad:
+            add("allowed_days_in_stream", f"{e['stream']} classes on non-allowed day(s) {[_label(d) for d in bad]}",
+                _cl(pred), _uids(pred))
+    for e in (rules.get("stream_forbidden_days") or []):
+        dset = _dayset(e["days"]) - (set(range(D)) - scoped_days(e) if scoped_days(e) else set())
+        pred = lambda d, s, sec, u: (_sec_stream(sec) == e["stream"] and d in dset
+                                     and applies(e, d, s, sec, u))
+        bad = sorted({d for (d, s, sec, u) in cells if pred(d, s, sec, u)})
+        if bad:
+            add("stream_forbidden_days", f"{e['stream']} classes on forbidden day(s) {[_label(d) for d in bad]}",
+                _cl(pred), _uids(pred))
+    for e in (rules.get("allowed_slots_in_sections") or []):
+        sset = _slotset(e.get("slots") or [])
+        secs = e.get("sections") or []
+        sd = scoped_days(e)
+        pred = lambda d, s, sec, u: (sec in secs and s not in sset and (not sd or d in sd)
+                                     and applies(e, d, s, sec, u))
+        bad = sorted({(d, s) for (d, s, sec, u) in cells if pred(d, s, sec, u)})
+        if bad:
+            add("allowed_slots_in_sections",
+                f"classes in {','.join(secs)} outside allowed slots {_sorted_slots(bad)}",
+                _cl(pred), _uids(pred))
+    for e in (rules.get("allowed_days_in_sections") or []):
+        dset = _dayset(e["days"])
+        secs = e.get("sections") or []
+        pred = lambda d, s, sec, u: (sec in secs and d not in dset and applies(e, d, s, sec, u))
+        bad = sorted({d for (d, s, sec, u) in cells if pred(d, s, sec, u)})
+        if bad:
+            add("allowed_days_in_sections",
+                f"classes in {','.join(secs)} on non-allowed day(s) {[_label(d) for d in bad]}",
+                _cl(pred), _uids(pred))
+    asx = set(rules.get("allowed_sections") or [])
+    if asx:
+        pred = lambda d, s, sec, u: sec not in asx
+        bad = sorted({sec for (d, s, sec, u) in cells if sec not in asx})
+        if bad:
+            add("allowed_sections", f"teaches outside allowed sections {bad}", _cl(pred), _uids(pred))
+    fsx = set(rules.get("forbidden_sections") or [])
+    if fsx:
+        pred = lambda d, s, sec, u: sec in fsx
+        bad = sorted({sec for (d, s, sec, u) in cells if sec in fsx})
+        if bad:
+            add("forbidden_sections", f"teaches in forbidden sections {bad}", _cl(pred), _uids(pred))
+    if rules.get("subject_slots"):               # per-subject slot allows (union by subject)
+        by_subj = {}
+        for e in rules["subject_slots"]:
+            sd = scoped_days(e)
+            by_subj.setdefault(e["subject"], {}).setdefault("win", {})
+            ds = _dayset(e.get("days") or []) or (sd or set(range(D)))
+            sset = _slotset(e.get("slots") or [])
+            by_subj[e["subject"]].setdefault("e", e)
+            for d in ds:
+                by_subj[e["subject"]]["win"].setdefault(d, set()).update(sset)
+        for subj, wn in by_subj.items():
+            win, e = wn["win"], wn["e"]
+            pred = lambda d, s, sec, u, sub=subj, w=win, e=e: (course(u, sec) == sub and s not in w.get(d, set())
+                                         and applies(e, d, s, sec, u))
+            bad = sorted({(d, s) for (d, s, sec, u) in cells if pred(d, s, sec, u)})
+            if bad:
+                add("subject_slots", f"{subj} not in allowed slots {_sorted_slots(bad)}",
+                    _cl(pred), _uids(pred))
+    for e in (rules.get("subject_forbidden_days") or []):
+        dset = _dayset(e["days"]) - (set(range(D)) - scoped_days(e) if scoped_days(e) else set())
+        pred = lambda d, s, sec, u: (course(u, sec) == e["subject"] and d in dset
+                                     and applies(e, d, s, sec, u))
+        bad = sorted({d for (d, s, sec, u) in cells if pred(d, s, sec, u)})
+        if bad:
+            add("subject_forbidden_days", f"{e['subject']} on forbidden day(s) {[_label(d) for d in bad]}",
+                _cl(pred), _uids(pred))
+    if rules.get("subject_days_allowed"):
+        by_subj = {}
+        for e in rules["subject_days_allowed"]:
+            by_subj.setdefault(e["subject"], set()).update(_dayset(e["days"]))
+        for subj, dset in by_subj.items():
+            pred = lambda d, s, sec, u, sub=subj, ds=dset: course(u, sec) == sub and d not in ds
+            bad = sorted({d for (d, s, sec, u) in cells if pred(d, s, sec, u)})
+            if bad:
+                add("subject_days_allowed", f"{subj} outside allowed day(s) {[_label(d) for d in bad]}",
+                    _cl(pred), _uids(pred))
+    # subject pins — singular legacy + plural windows, unioned per subject
+    pins = {}
+    for e in (rules.get("subject_slot_days") or []):
+        pins.setdefault(e["subject"], set()).update(
+            (d, s) for d in _dayset(e["days"]) for s in _slotset([e["slot"]]))
+    for e in (rules.get("subject_slots_days") or []):
+        pins.setdefault(e["subject"], set()).update(
+            (d, s) for d in _dayset(e.get("days") or []) for s in _slotset(e.get("slots") or []))
+    for subj, win in pins.items():
+        pred = lambda d, s, sec, u, w=win, sub=subj: course(u, sec) == sub and (d, s) not in w
+        bad = sorted({(d, s) for (d, s, sec, u) in cells if pred(d, s, sec, u)})
+        if bad:
+            add("subject_slot_days" if any(x.get("slot") for x in (rules.get("subject_slot_days") or []) if x.get("subject") == subj)
+                else "subject_slots_days",
+                f"{subj} outside pinned day/slot window {_sorted_slots(bad)}",
+                _cl(pred), _uids(pred))
+
+    # ================================ Deterministic counts ================================
+    for e in (rules.get("min_days_in_slot") or []):
+        si = SLOT_OF[e["slot"]]
+        days = {d for (d, s, sec, u) in cells if s == si and applies(e, d, s, sec, u)}
+        if len(days) < (e.get("min_days") or 1):
+            add("min_days_in_slot", f"{e['slot']} engaged only {len(days)} days (<{e.get('min_days')})",
+                clist=[(sec, d, s) for (d, s, sec, u) in cells if s == si and applies(e, d, s, sec, u)])
+    for e in (rules.get("max_days_in_slot") or []):
+        si = SLOT_OF[e["slot"]]
+        days = {d for (d, s, sec, u) in cells if s == si and applies(e, d, s, sec, u)}
+        if len(days) > (e.get("max_days") or 0):
+            add("max_days_in_slot", f"{e['slot']} straight into {len(days)} days (>{e.get('max_days')})",
+                clist=[(sec, d, s) for (d, s, sec, u) in cells if s == si and applies(e, d, s, sec, u)])
+    if rules.get("min_days_engaged"):
+        if len(per_day) < rules["min_days_engaged"]:
+            add("min_days_engaged", f"engaged only {len(per_day)} days (<{rules['min_days_engaged']})",
+                clist=[(sec, d, s) for (d, s, sec, u) in cells])
+    mppd = rules.get("max_periods_per_day")
+    if isinstance(mppd, int):
+        for d, c in per_day.items():
+            if c > mppd:
+                add("max_periods_per_day", f"{c} periods on {_label(d)} (>{mppd})",
+                    clist=[(sec, d2, s) for (d2, s, sec, u) in cells if d2 == d])
+    for e in (mppd if isinstance(mppd, list) else []):
+        cap = e.get("max")
+        sd = scoped_days(e)
+        for d, c in per_day.items():
+            if sd and d not in sd:
+                continue
+            if e.get("days") and d not in _dayset(e["days"]):
+                continue
+            def _mpred(d2, s, sec, u, d=d, e=e):
+                if d2 != d:
+                    return False
+                if e.get("stream") and _sec_stream(sec) != e["stream"]:
+                    return False
+                if e.get("sections") and sec not in (e.get("sections") or []):
+                    return False
+                return applies(e, d2, s, sec, u)
+            n = sum(1 for (d2, s, sec, u) in cells if _mpred(d2, s, sec, u))
+            if cap is not None and n > cap:
+                add("max_periods_per_day", f"{n} scoped periods on {_label(d)} (>{cap})",
+                    clist=[(sec, d2, s) for (d2, s, sec, u) in cells if _mpred(d2, s, sec, u)])
+    mppd_min = rules.get("min_periods_per_day")
+    min_list = ([{"min": mppd_min}] if isinstance(mppd_min, int)
+                else (mppd_min if isinstance(mppd_min, list) else []))
+    for e in min_list:
+        floor = e.get("min")
+        if floor is None:
+            continue
+        sd = scoped_days(e)
+        for d, c in per_day.items():
+            if sd and d not in sd:
+                continue
+            if e.get("days") and d not in _dayset(e["days"]):
+                continue
+            def _npred(d2, s, sec, u, d=d, e=e):
+                if d2 != d:
+                    return False
+                if e.get("stream") and _sec_stream(sec) != e["stream"]:
+                    return False
+                if e.get("sections") and sec not in (e.get("sections") or []):
+                    return False
+                return applies(e, d2, s, sec, u)
+            n = sum(1 for (d2, s, sec, u) in cells if _npred(d2, s, sec, u))
+            if per_day.get(d, 0) > 0 and n < floor:
+                add("min_periods_per_day", f"only {n} scoped periods on {_label(d)} (<{floor})",
+                    clist=[(sec, d2, s) for (d2, s, sec, u) in cells if _npred(d2, s, sec, u)])
+
+    # ---- distribution quotas (max/min pieces matching a selector)
+    def _quota_matches(e, d, s, sec, u):
+        if e.get("subject") and course(u, sec) != e["subject"]:
+            return False
+        if e.get("subjects") and course(u, sec) not in (e["subjects"] or []):
+            return False
+        if e.get("stream") and _sec_stream(sec) != e["stream"]:
+            return False
+        if e.get("sections") and sec not in (e.get("sections") or []):
+            return False
+        if e.get("slot") and SLOT_OF.get(e["slot"]) != s:
+            return False
+        if e.get("days") and d not in _dayset(e["days"]):
+            return False
+        return applies(e, d, s, sec, u)
+
+    for key, cmp_dir in (("max_pieces_match", "max"), ("min_pieces_match", "min")):
+        for e in (rules.get(key) or []):
+            bound = e.get("max" if cmp_dir == "max" else "min")
+            if bound is None:
+                continue
+            n = sum(1 for (d, s, sec, u) in cells if _quota_matches(e, d, s, sec, u))
+            hit = (n > bound) if cmp_dir == "max" else (n < bound)
+            if hit:
+                sel = ", ".join(f"{k}={v}" for k, v in e.items() if k not in ("scope", "max", "min"))
+                add(key, f"{n} matching pieces [{sel}] ({cmp_dir} {bound})",
+                    clist=[(sec, d, s) for (d, s, sec, u) in cells if _quota_matches(e, d, s, sec, u)])
+
+    # ---- engagement requirements
+    for e in (rules.get("stream_slots_required") or []):
+        # the stream must exist for this teacher — otherwise vacuous
+        if not any(_sec_stream(sec) == e["stream"] for u in my_units for sec in u["secs"]):
+            continue
+        sd = scoped_days(e)
+        for sl in e["slots"]:
+            si = SLOT_OF[sl]
+            days = {d for (d, s, sec, u) in cells
+                    if s == si and _sec_stream(sec) == e["stream"]
+                    and (not sd or d in sd) and applies(e, d, s, sec, u)}
+            floor = 4 if not e.get("min_days") else e["min_days"]
+            if len(days) < floor:
+                add("stream_slots_required", f"{e['stream']} {sl} engaged only {len(days)} days (<{floor})",
+                    clist=[(sec, d, s) for (d, s, sec, u) in cells
+                           if s == si and _sec_stream(sec) == e["stream"] and applies(e, d, s, sec, u)])
+
+    # ---- structure: no free holes inside a teaching day
+    if rules.get("no_daily_gaps"):
+        for d, sset in sorted(occ_slots_per_day.items()):
+            if len(sset) < 2:
+                continue
+            lo, hi = min(sset), max(sset)
+            gaps = (hi - lo + 1) - len(sset)
+            if gaps:
+                add("no_daily_gaps", f"{gaps} gap(s) inside {_label(d)}'s teaching run "
+                    f"(P{lo+1}–P{hi+1})",
+                    clist=[(sec, d2, s) for (d2, s, sec, u) in cells if d2 == d])
+
+    # ================================ SOFT preferences ================================
+    if rules.get("soft_prefer_free_slots"):
+        sset = _slotset(rules["soft_prefer_free_slots"])
+        n = sum(1 for (d, s, sec, u) in cells if s in sset)
+        if n:
+            add("soft_prefer_free_slots", f"{n} period(s) in preferred-free slots "
+                f"{rules['soft_prefer_free_slots']}", is_soft=True, pen_=pen["preferFreeSlot"] * n,
+                clist=[(sec, d, s) for (d, s, sec, u) in cells if s in sset])
+    for e in (rules.get("soft_prefer_free_slots_days") or []):
+        dset = _dayset(e["days"])
+        sset = _slotset(e["slots"])
+        n = sum(1 for (d, s, sec, u) in cells if d in dset and s in sset and applies(e, d, s, sec, u))
+        if n:
+            add("soft_prefer_free_slots_days", f"{n} period(s) in preferred-free windows "
+                f"{'/'.join(e['days'])} {','.join(e['slots'])}", is_soft=True, pen_=pen["preferFreeSlot"] * n,
+                clist=[(sec, d, s) for (d, s, sec, u) in cells if d in dset and s in sset and applies(e, d, s, sec, u)])
+    if rules.get("soft_even_distribution"):
+        total = len(cells)
+        used = max(1, len(per_day) or 1)
+        cap = -(-total // used)
+        excess = sum(max(0, c - cap) for c in per_day.values())
+        if excess:
+            add("soft_even_distribution", f"{excess} period(s) above the even per-day share",
+                is_soft=True, pen_=pen["evenDistribution"] * excess)
+    if rules.get("soft_compact_days"):
+        gaps = 0
+        for d, sset in sorted(occ_slots_per_day.items()):
+            if len(sset) >= 2:
+                lo, hi = min(sset), max(sset)
+                gaps += (hi - lo + 1) - len(sset)
+        if gaps:
+            add("soft_compact_days", f"{gaps} gap(s) inside teaching days (moves toward compact days)",
+                is_soft=True, pen_=pen["rule"] * gaps)
+    return findings
 
 
 def evaluate(grids, model):
@@ -398,15 +799,14 @@ def evaluate(grids, model):
                 issues.append(f"{u['secs'][0]} {course_of(u, u['secs'][0])}: "
                               f"2/wk on non-consecutive days {_solver.DAYS[d0]},{_solver.DAYS[d1]}")
 
-    # ---- faculty constraints (person-level; soft rules -> violations)
+    # ---- faculty constraints (person-level; soft rules -> violations) —
+    # the same shared walker as evaluate(): repair tickets come from identical logic.
     R = model["constraints"]
+    pop_of = {s["key"]: s.get("pop") for s in model.get("sections", [])}
     for code, entry in R.items():
-        rules = (entry or {}).get("rules") or {}
-        soft = set((entry or {}).get("soft") or [])
         my_units = [u for u in units if u["teacher"] == code or (u["members"] and code in u["members"])]
         if not my_units:
             continue
-        # collect this teacher's cells (own name; parallel group cells count for members too)
         cells = []
         for u in my_units:
             for sec in u["secs"]:
@@ -417,118 +817,13 @@ def evaluate(grids, model):
                     for s in range(P):
                         if g[d][s] == u["id"]:
                             cells.append((d, s, sec, u))
-        seen_ds = set()
-        per_day = {}
-        for (d, s, sec, u) in cells:
-            seen_ds.add((d, s))
-            per_day[d] = per_day.get(d, 0) + 1
 
-        def flag(msg, rule_key, is_soft):
-            if is_soft:
-                violations.append({"rule": f"{code}:{rule_key}", "detail": msg,
-                                   "penalty": pen["rule"]})
+        for f in teacher_rule_findings(code, entry, my_units, cells, pop_of, D, P, pen):
+            if f["soft"]:
+                violations.append({"rule": f"{code}:{f['rule_key']}", "detail": f["msg"],
+                                   "penalty": f["pen"] if f["pen"] is not None else pen["rule"]})
             else:
-                issues.append(f"{code} {msg}")
-
-        # availability
-        fs = _slotset(rules.get("forbidden_slots")) if rules.get("forbidden_slots") is not None else None
-        if fs is not None:
-            bad = sorted({s for (d, s, sec, u) in cells if s in fs})
-            if bad:
-                flag(f"teaches in forbidden slot(s) {[_solver.SLOTS[s] for s in bad]}", "forbidden_slots", "forbidden_slots" in soft)
-        as_ = _slotset(rules.get("allowed_slots")) if rules.get("allowed_slots") is not None else None
-        if as_ is not None:
-            bad = sorted({s for (d, s, sec, u) in cells if s not in as_})
-            if bad:
-                flag(f"teaches outside allowed slots {[_solver.SLOTS[s] for s in bad]}", "allowed_slots", "allowed_slots" in soft)
-        fd = _dayset(rules.get("forbidden_days")) if rules.get("forbidden_days") is not None else None
-        if fd is not None:
-            bad = sorted({d for (d, s, sec, u) in cells if d in fd})
-            if bad:
-                flag(f"teaches on forbidden day(s) {[_solver.DAYS[d] for d in bad]}", "forbidden_days", "forbidden_days" in soft)
-        ad = _dayset(rules.get("allowed_days")) if rules.get("allowed_days") is not None else None
-        if ad is not None:
-            bad = sorted({d for (d, s, sec, u) in cells if d not in ad})
-            if bad:
-                flag(f"teaches on non-allowed day(s) {[_solver.DAYS[d] for d in bad]}", "allowed_days", "allowed_days" in soft)
-        for e in (rules.get("forbidden_slots_on_days") or []):
-            dset, sset = _dayset(e["days"]), _slotset(e["slots"])
-            bad = sorted({(d, s) for (d, s, sec, u) in cells if d in dset and s in sset})
-            if bad:
-                flag(f"teaches in forbidden day/slot {[_solver.DAYS[d] + ' ' + _solver.SLOTS[s] for (d, s) in bad]}",
-                     "forbidden_slots_on_days", "forbidden_slots_on_days" in soft)
-        # stream-scoped availability (only the units in that stream)
-        for e in (rules.get("allowed_slots_in_stream") or []):
-            sset = _slotset(e["slots"])
-            bad = sorted({s for (d, s, sec, u) in cells
-                          if _sec_stream(sec) == e["stream"] and s not in sset})
-            if bad:
-                flag(f"{e['stream']} classes outside allowed slots {[_solver.SLOTS[s] for s in bad]}",
-                     "allowed_slots_in_stream", "allowed_slots_in_stream" in soft)
-        for e in (rules.get("allowed_days_in_stream") or []):
-            dset = _dayset(e["days"])
-            bad = sorted({d for (d, s, sec, u) in cells
-                          if _sec_stream(sec) == e["stream"] and d not in dset})
-            if bad:
-                flag(f"{e['stream']} classes on non-allowed day(s) {[_solver.DAYS[d] for d in bad]}",
-                     "allowed_days_in_stream", "allowed_days_in_stream" in soft)
-        # engagement requirements
-        for e in (rules.get("min_days_in_slot") or []):
-            si = SLOT_OF[e["slot"]]
-            days = {d for (d, s, sec, u) in cells if s == si}
-            if len(days) < (e.get("min_days") or 1):
-                flag(f"{e['slot']} engaged only {len(days)} days (<{e.get('min_days')})",
-                     "min_days_in_slot", "min_days_in_slot" in soft)
-        if rules.get("min_days_engaged"):
-            if len(per_day) < rules["min_days_engaged"]:
-                flag(f"engaged only {len(per_day)} days (<{rules['min_days_engaged']})",
-                     "min_days_engaged", "min_days_engaged" in soft)
-        for e in (rules.get("stream_slots_required") or []):
-            # the stream must exist in this context — otherwise vacuous
-            if not any(_sec_stream(sec) == e["stream"]
-                       for u in my_units for sec in u["secs"]):
-                continue
-            for sl in e["slots"]:
-                si = SLOT_OF[sl]
-                days = {d for (d, s, sec, u) in cells
-                        if s == si and _sec_stream(sec) == e["stream"]}
-                if len(days) < 4:
-                    flag(f"{e['stream']} {sl} engaged only {len(days)} days (<4)",
-                         "stream_slots_required", "stream_slots_required" in soft)
-        # subject placement (per unit, by course)
-        for e in (rules.get("subject_slots") or []):
-            for (d, s, sec, u) in cells:
-                if course_of(u, sec) == e["subject"] and s not in _slotset(e["slots"]):
-                    flag(f"{e['subject']} not in {e['slots']} ({sec})", "subject_slots", "subject_slots" in soft)
-        for e in (rules.get("subject_forbidden_days") or []):
-            for (d, s, sec, u) in cells:
-                if course_of(u, sec) == e["subject"] and d in _dayset(e["days"]):
-                    flag(f"{e['subject']} on {_solver.DAYS[d]} ({sec})", "subject_forbidden_days",
-                         "subject_forbidden_days" in soft)
-        for e in (rules.get("subject_slot_days") or []):
-            sset = _slotset([e["slot"]])
-            dset = _dayset(e["days"])
-            for (d, s, sec, u) in cells:
-                if course_of(u, sec) == e["subject"] and (s not in sset or d not in dset):
-                    flag(f"{e['subject']} must be {e['slot']} on {'/'.join(e['days'])} ({sec})",
-                         "subject_slot_days", "subject_slot_days" in soft)
-        # soft-only rules
-        if rules.get("soft_prefer_free_slots"):
-            sset = _slotset(rules["soft_prefer_free_slots"])
-            n = sum(1 for (d, s, sec, u) in cells if s in sset)
-            if n:
-                violations.append({"rule": f"{code}:soft_prefer_free_slots",
-                                   "detail": f"{n} period(s) in preferred-free slots "
-                                             f"{rules['soft_prefer_free_slots']}",
-                                   "penalty": pen["preferFreeSlot"] * n})
-        if rules.get("soft_even_distribution"):
-            total = len(cells)
-            cap = -(-total // max(1, len(per_day) or 1))   # ceil(total / days used)
-            excess = sum(max(0, c - cap) for c in per_day.values())
-            if excess:
-                violations.append({"rule": f"{code}:soft_even_distribution",
-                                   "detail": f"{excess} period(s) above the even per-day share",
-                                   "penalty": pen["evenDistribution"] * excess})
+                issues.append(f"{code} {f['msg']}")
 
     # ---- general instructions (institution-level)
     for e in (model["instructions"].get("subjectForbiddenDays") or []):
@@ -979,11 +1274,11 @@ def analyze_structured(grids, model):
                        f"twopw@{u['id']}", [u["id"]],
                        [C(*t) for t in _unit_cells(u)])
 
-    # ---- faculty constraints (person-level; soft rules -> violations)
+    # ---- faculty constraints (person-level; soft rules -> violations) —
+    # same shared walker as evaluate(): repair tickets come from identical logic.
     R = model["constraints"]
+    pop_of = {s["key"]: s.get("pop") for s in model.get("sections", [])}
     for code, entry in R.items():
-        rules = (entry or {}).get("rules") or {}
-        soft = set((entry or {}).get("soft") or [])
         my_units = [u for u in units if u["teacher"] == code or (u["members"] and code in u["members"])]
         if not my_units:
             continue
@@ -997,147 +1292,16 @@ def analyze_structured(grids, model):
                     for s in range(P):
                         if g[d][s] == u["id"]:
                             cells.append((d, s, sec, u))
-        seen_ds = set()
-        per_day = {}
-        for (d, s, sec, u) in cells:
-            seen_ds.add((d, s))
-            per_day[d] = per_day.get(d, 0) + 1
-
-        def flag(msg, rule_key, is_soft, uids=None, clist=None):
-            if is_soft:
-                violations.append({"rule": f"{code}:{rule_key}", "detail": msg,
-                                   "penalty": pen["rule"],
-                                   "sig": f"facrule@{code}:{rule_key}",
-                                   "units": list(uids or [u2["id"] for u2 in my_units]),
-                                   "cells": list(clist or [])})
+        for f in teacher_rule_findings(code, entry, my_units, cells, pop_of, D, P, pen):
+            uids = f["uids"]
+            clist = [C(sec, d, s) for (sec, d, s) in f["cells"]]
+            if f["soft"]:
+                violations.append({"rule": f"{code}:{f['rule_key']}", "detail": f["msg"],
+                                   "penalty": f["pen"] if f["pen"] is not None else pen["rule"],
+                                   "sig": f"facrule@{code}:{f['rule_key']}",
+                                   "units": uids, "cells": clist})
             else:
-                _issue(f"{code} {msg}", f"facrule@{code}:{rule_key}",
-                       uids if uids is not None else [u2["id"] for u2 in my_units],
-                       clist or [])
-
-        fs = _slotset(rules.get("forbidden_slots")) if rules.get("forbidden_slots") is not None else None
-        if fs is not None:
-            bad = sorted({s for (d, s, sec, u) in cells if s in fs})
-            if bad:
-                uids = sorted({u["id"] for (d, s, sec, u) in cells if s in fs})
-                flag(f"teaches in forbidden slot(s) {[_solver.SLOTS[s] for s in bad]}", "forbidden_slots",
-                     "forbidden_slots" in soft, uids,
-                     [C(sec, d, s) for (d, s, sec, u) in cells if s in fs])
-        as_ = _slotset(rules.get("allowed_slots")) if rules.get("allowed_slots") is not None else None
-        if as_ is not None:
-            bad = sorted({s for (d, s, sec, u) in cells if s not in as_})
-            if bad:
-                uids = sorted({u["id"] for (d, s, sec, u) in cells if s not in as_})
-                flag(f"teaches outside allowed slots {[_solver.SLOTS[s] for s in bad]}", "allowed_slots",
-                     "allowed_slots" in soft, uids,
-                     [C(sec, d, s) for (d, s, sec, u) in cells if s not in as_])
-        fd = _dayset(rules.get("forbidden_days")) if rules.get("forbidden_days") is not None else None
-        if fd is not None:
-            bad = sorted({d for (d, s, sec, u) in cells if d in fd})
-            if bad:
-                uids = sorted({u["id"] for (d, s, sec, u) in cells if d in fd})
-                flag(f"teaches on forbidden day(s) {[_solver.DAYS[d] for d in bad]}", "forbidden_days",
-                     "forbidden_days" in soft, uids,
-                     [C(sec, d, s) for (d, s, sec, u) in cells if d in fd])
-        ad = _dayset(rules.get("allowed_days")) if rules.get("allowed_days") is not None else None
-        if ad is not None:
-            bad = sorted({d for (d, s, sec, u) in cells if d not in ad})
-            if bad:
-                uids = sorted({u["id"] for (d, s, sec, u) in cells if d not in ad})
-                flag(f"teaches on non-allowed day(s) {[_solver.DAYS[d] for d in bad]}", "allowed_days",
-                     "allowed_days" in soft, uids,
-                     [C(sec, d, s) for (d, s, sec, u) in cells if d not in ad])
-        for e in (rules.get("forbidden_slots_on_days") or []):
-            dset, sset = _dayset(e["days"]), _slotset(e["slots"])
-            bad = sorted({(d, s) for (d, s, sec, u) in cells if d in dset and s in sset})
-            if bad:
-                uids = sorted({u["id"] for (d, s, sec, u) in cells if d in dset and s in sset})
-                flag(f"teaches in forbidden day/slot {[_solver.DAYS[d] + ' ' + _solver.SLOTS[s] for (d, s) in bad]}",
-                     "forbidden_slots_on_days", "forbidden_slots_on_days" in soft, uids,
-                     [C(sec, d, s) for (d, s, sec, u) in cells if d in dset and s in sset])
-        for e in (rules.get("allowed_slots_in_stream") or []):
-            sset = _slotset(e["slots"])
-            bad = sorted({s for (d, s, sec, u) in cells
-                          if _sec_stream(sec) == e["stream"] and s not in sset})
-            if bad:
-                uids = sorted({u["id"] for (d, s, sec, u) in cells
-                               if _sec_stream(sec) == e["stream"] and s not in sset})
-                flag(f"{e['stream']} classes outside allowed slots {[_solver.SLOTS[s] for s in bad]}",
-                     "allowed_slots_in_stream", "allowed_slots_in_stream" in soft, uids,
-                     [C(sec, d, s) for (d, s, sec, u) in cells
-                      if _sec_stream(sec) == e["stream"] and s not in sset])
-        for e in (rules.get("allowed_days_in_stream") or []):
-            dset = _dayset(e["days"])
-            bad = sorted({d for (d, s, sec, u) in cells
-                          if _sec_stream(sec) == e["stream"] and d not in dset})
-            if bad:
-                uids = sorted({u["id"] for (d, s, sec, u) in cells
-                               if _sec_stream(sec) == e["stream"] and d not in dset})
-                flag(f"{e['stream']} classes on non-allowed day(s) {[_solver.DAYS[d] for d in bad]}",
-                     "allowed_days_in_stream", "allowed_days_in_stream" in soft, uids,
-                     [C(sec, d, s) for (d, s, sec, u) in cells
-                      if _sec_stream(sec) == e["stream"] and d not in dset])
-        for e in (rules.get("min_days_in_slot") or []):
-            si = SLOT_OF[e["slot"]]
-            days = {d for (d, s, sec, u) in cells if s == si}
-            if len(days) < (e.get("min_days") or 1):
-                flag(f"{e['slot']} engaged only {len(days)} days (<{e.get('min_days')})",
-                     "min_days_in_slot", "min_days_in_slot" in soft)
-        if rules.get("min_days_engaged"):
-            if len(per_day) < rules["min_days_engaged"]:
-                flag(f"engaged only {len(per_day)} days (<{rules['min_days_engaged']})",
-                     "min_days_engaged", "min_days_engaged" in soft)
-        for e in (rules.get("stream_slots_required") or []):
-            if not any(_sec_stream(sec) == e["stream"]
-                       for u in my_units for sec in u["secs"]):
-                continue
-            for sl in e["slots"]:
-                si = SLOT_OF[sl]
-                days = {d for (d, s, sec, u) in cells
-                        if s == si and _sec_stream(sec) == e["stream"]}
-                if len(days) < 4:
-                    flag(f"{e['stream']} {sl} engaged only {len(days)} days (<4)",
-                         "stream_slots_required", "stream_slots_required" in soft)
-        for e in (rules.get("subject_slots") or []):
-            for (d, s, sec, u) in cells:
-                if course_of(u, sec) == e["subject"] and s not in _slotset(e["slots"]):
-                    flag(f"{e['subject']} not in {e['slots']} ({sec})", "subject_slots",
-                         "subject_slots" in soft, [u["id"]], [C(sec, d, s)])
-        for e in (rules.get("subject_forbidden_days") or []):
-            for (d, s, sec, u) in cells:
-                if course_of(u, sec) == e["subject"] and d in _dayset(e["days"]):
-                    flag(f"{e['subject']} on {_solver.DAYS[d]} ({sec})", "subject_forbidden_days",
-                         "subject_forbidden_days" in soft, [u["id"]], [C(sec, d, s)])
-        for e in (rules.get("subject_slot_days") or []):
-            sset = _slotset([e["slot"]])
-            dset = _dayset(e["days"])
-            for (d, s, sec, u) in cells:
-                if course_of(u, sec) == e["subject"] and (s not in sset or d not in dset):
-                    flag(f"{e['subject']} must be {e['slot']} on {'/'.join(e['days'])} ({sec})",
-                         "subject_slot_days", "subject_slot_days" in soft,
-                         [u["id"]], [C(sec, d, s)])
-        if rules.get("soft_prefer_free_slots"):
-            sset = _slotset(rules["soft_prefer_free_slots"])
-            n = sum(1 for (d, s, sec, u) in cells if s in sset)
-            if n:
-                violations.append({"rule": f"{code}:soft_prefer_free_slots",
-                                   "detail": f"{n} period(s) in preferred-free slots "
-                                             f"{rules['soft_prefer_free_slots']}",
-                                   "penalty": pen["preferFreeSlot"] * n,
-                                   "sig": f"softpref@{code}",
-                                   "units": sorted({u["id"] for (d, s, sec, u) in cells if s in sset}),
-                                   "cells": [C(sec, d, s) for (d, s, sec, u) in cells if s in sset]})
-        if rules.get("soft_even_distribution"):
-            total = len(cells)
-            cap = -(-total // max(1, len(per_day) or 1))
-            excess = sum(max(0, c - cap) for c in per_day.values())
-            if excess:
-                violations.append({"rule": f"{code}:soft_even_distribution",
-                                   "detail": f"{excess} period(s) above the even per-day share",
-                                   "penalty": pen["evenDistribution"] * excess,
-                                   "sig": f"softeven@{code}",
-                                   "units": [u2["id"] for u2 in my_units],
-                                   "cells": [C(*t) for u2 in my_units for t in _unit_cells(u2)]})
+                _issue(f"{code} {f['msg']}", f"facrule@{code}:{f['rule_key']}", uids, clist)
 
     # ---- general instructions (institution-level)
     for e in (model["instructions"].get("subjectForbiddenDays") or []):

@@ -354,12 +354,13 @@ def generate_ranked(n_seeds=2, time_per_seed=45, max_solutions=0, constraints=No
 def _teacher_slot_domain(teacher, R, default=None):
     """Hard slot domain for a teacher code (soft rules EXCLUDED — they become
     penalties). Returns None = unrestricted."""
-    r = ((R or {}).get(teacher) or {}).get("rules") or {}
-    soft = set(((R or {}).get(teacher) or {}).get("soft") or [])
+    ent = (R or {}).get(teacher) or {}
+    r = ent.get("rules") or {}
+    from solver import hardness_of as _h
     dom = set(range(_solver.P)) if default is None else set(default)
-    if "allowed_slots" in r and "allowed_slots" not in soft:
+    if "allowed_slots" in r and _h(ent, "allowed_slots") == 100:
         dom &= {SLOT_OF[x] for x in r["allowed_slots"]}
-    if "forbidden_slots" in r and "forbidden_slots" not in soft:
+    if "forbidden_slots" in r and _h(ent, "forbidden_slots") == 100:
         dom -= {SLOT_OF[x] for x in r["forbidden_slots"]}
     return sorted(dom)
 
@@ -383,15 +384,24 @@ def _unit_slot_domain(u, R, model):
                     gdom &= set(md)
             dom &= gdom
     else:
+        _ss_by_subj = {}
         for e in (rules.get("subject_slots") or []):
+            if e.get("days"):
+                continue   # day-scoped pins are encoded at the cell level
+            _ss_by_subj.setdefault(e["subject"], set()).update({SLOT_OF[x] for x in e["slots"]})
+        for subj, sset in _ss_by_subj.items():
             for sec in u["secs"]:
-                if u["courseBySec"].get(sec) == e["subject"]:
-                    dom &= {SLOT_OF[x] for x in e["slots"]}
+                if u["courseBySec"].get(sec) == subj:
+                    dom &= sset
         for e in (rules.get("subject_slot_days") or []):
+            if e.get("days"):
+                continue   # day-scoped pin handled cell-level
             for sec in u["secs"]:
                 if u["courseBySec"].get(sec) == e["subject"]:
                     dom &= {SLOT_OF[e["slot"]]}
         for e in (rules.get("allowed_slots_in_stream") or []):
+            if e.get("days"):
+                continue
             for sec in u["secs"]:
                 if _sec_stream(sec) == e["stream"]:
                     dom &= {SLOT_OF[x] for x in e["slots"]}
@@ -403,15 +413,16 @@ def _unit_day_domain(u, R, model):
     stream-scoped days + GI subject-forbidden days)."""
     D = _solver.D
     dom = set(range(D))
-    rules = ((R.get(u["teacher"]) or {}).get("rules") or {}) if not u["group"] else {}
-    soft = set(((R.get(u["teacher"]) or {}).get("soft") or [])) if not u["group"] else set()
+    _ent = (R.get(u["teacher"]) or {})
+    rules = (_ent.get("rules") or {}) if not u["group"] else {}
+    from solver import hardness_of as _h_
     for sec in u["secs"]:
         m = (model.get("_meta") or {}).get(sec) or {}
         dom -= set(m.get("offDays") or [])
     if not u["group"]:
-        if "allowed_days" in rules and "allowed_days" not in soft:
+        if "allowed_days" in rules and _h_(_ent, "allowed_days") == 100:
             dom &= {DAY_OF[x] for x in rules["allowed_days"]}
-        if "forbidden_days" in rules and "forbidden_days" not in soft:
+        if "forbidden_days" in rules and _h_(_ent, "forbidden_days") == 100:
             dom -= {DAY_OF[x] for x in rules["forbidden_days"]}
         for e in (rules.get("allowed_days_in_stream") or []):
             for sec in u["secs"]:
@@ -423,11 +434,12 @@ def _unit_day_domain(u, R, model):
                     dom -= {DAY_OF[x] for x in e["days"]}
     else:
         for mem in u["members"]:
-            mr = ((R.get(mem) or {}).get("rules") or {})
-            msoft = set(((R.get(mem) or {}).get("soft") or []))
-            if "allowed_days" in mr and "allowed_days" not in msoft:
+            from solver import hardness_of as _hm
+            ment = (R.get(mem) or {})
+            mr = (ment.get("rules") or {})
+            if "allowed_days" in mr and _hm(ment, "allowed_days") == 100:
                 dom &= {DAY_OF[x] for x in mr["allowed_days"]}
-            if "forbidden_days" in mr and "forbidden_days" not in msoft:
+            if "forbidden_days" in mr and _hm(ment, "forbidden_days") == 100:
                 dom -= {DAY_OF[x] for x in mr["forbidden_days"]}
     for e in ((model.get("instructions") or {}).get("subjectForbiddenDays") or []):
         for sec in u["secs"]:
@@ -438,7 +450,7 @@ def _unit_day_domain(u, R, model):
 
 
 def build_from_context(model, objective="default", collect=None):
-    from solver import _slotset, _dayset, SLOT_OF, DAY_OF  # local (mirrors soft_raise)
+    from solver import _slotset, _dayset, SLOT_OF, DAY_OF, hardness_of  # local (mirrors soft_raise)
     """CP-SAT model for a context model (context_model.context_to_model output).
 
     objective="default" sets the classic shuffle+soft objective. objective="none"
@@ -515,47 +527,56 @@ def build_from_context(model, objective="default", collect=None):
         # ---- day+slot combination bans and pinned subject-days (model-level)
         for t in teachers:
             entry = R.get(t) or {}
-            tsoft = set(entry.get("soft") or [])
             trules = entry.get("rules") or {}
             for e in (trules.get("forbidden_slots_on_days") or []):
-                if "forbidden_slots_on_days" in tsoft:
+                h = hardness_of(entry, "forbidden_slots_on_days")
+                if h == 0:
+                    continue
+                sc = e.get("scope") or {}
+                if sc.get("streams") and not any(_sec_stream(sec) in sc["streams"] for sec in u["secs"]):
+                    continue
+                if sc.get("sections") and not any(sec in sc["sections"] for sec in u["secs"]):
+                    continue
+                if sc.get("populations") and not any(((model.get("_meta") or {}).get(sec) or {}).get("pop") in sc["populations"] for sec in u["secs"]):
                     continue
                 dset = {DAY_OF[x] for x in e["days"]}
+                if sc.get("days"):
+                    dset &= _dayset(sc["days"])
                 sset = {SLOT_OF[x] for x in e["slots"]}
                 for p in range(c):
                     for d in sorted(dset):
                         for s_ in sorted(sset):
-                            m.Add(piece_keys[i][p] != s_ * Dg + d)
-            if t == u["teacher"] and not u["group"]:
-                for e in (trules.get("subject_slot_days") or []):
-                    if "subject_slot_days" in tsoft:
-                        continue
-                    if any(u["courseBySec"].get(sec) == e["subject"] for sec in u["secs"]):
-                        dset = {DAY_OF[x] for x in e["days"]}
-                        for p in range(c):
-                            for d in range(Dg):
-                                if d not in dset:
-                                    m.Add(piece_days[i][p] != d)
+                            if h == 100:
+                                m.Add(piece_keys[i][p] != s_ * Dg + d)
+                            else:
+                                soft_terms.append((int(pen["rule"] * h / 100),
+                                                   _eq_bool(m, piece_keys[i][p], s_ * Dg + d,
+                                                            f"fsod_soft_{i}_{p}_{d}_{s_}")))
 
         # ---- soft slot rules (excluded from domains; penalized here)
         if not u["group"]:
             entry = R.get(u["teacher"]) or {}
             soft = set(entry.get("soft") or [])
             rules = entry.get("rules") or {}
-            if "forbidden_slots" in soft and rules.get("forbidden_slots"):
-                fset = {SLOT_OF[x] for x in rules["forbidden_slots"]}
-                bools = [_eq_bool(m, slots[p], s_, f"sf_{i}_{p}_{s_}")
-                         for p in range(c) for s_ in sorted(fset)]
-                if bools:
-                    anyb = m.NewBoolVar(f"sfany_{i}")
-                    m.AddMaxEquality(anyb, bools)
-                    soft_terms.append((pen["rule"], anyb))
+            if rules.get("forbidden_slots"):
+                hfs = hardness_of(entry, "forbidden_slots")
+                if 0 < hfs < 100:
+                    fset = {SLOT_OF[x] for x in rules["forbidden_slots"]}
+                    bools = [_eq_bool(m, slots[p], s_, f"sf_{i}_{p}_{s_}")
+                             for p in range(c) for s_ in sorted(fset)]
+                    if bools:
+                        anyb = m.NewBoolVar(f"sfany_{i}")
+                        m.AddMaxEquality(anyb, bools)
+                        soft_terms.append((int(pen["rule"] * hfs / 100), anyb))
             if rules.get("soft_prefer_free_slots"):
-                fset = {SLOT_OF[x] for x in rules["soft_prefer_free_slots"]}
-                for p in range(c):
-                    for s_ in sorted(fset):
-                        soft_terms.append((pen["preferFreeSlot"],
-                                           _eq_bool(m, slots[p], s_, f"spf_{i}_{p}_{s_}")))
+                hspf = hardness_of(entry, "soft_prefer_free_slots")
+                if hspf > 0:
+                    w = int(pen["preferFreeSlot"] * hspf / 100)
+                    fset = {SLOT_OF[x] for x in rules["soft_prefer_free_slots"]}
+                    for p in range(c):
+                        for s_ in sorted(fset):
+                            soft_terms.append((w,
+                                               _eq_bool(m, slots[p], s_, f"spf_{i}_{p}_{s_}")))
 
     for sec, keys in section_keys.items():
         if len(keys) >= 2:
@@ -595,7 +616,16 @@ def build_from_context(model, objective="default", collect=None):
                     m.Add(ab == 1).OnlyEnforceIf(nb.Not())
                     soft_terms.append((pen["nonConsecutive"], nb))
 
-    # ---- engagement requirements (distinct-DAY semantics via piece keys)
+        # hardness gate: 100 = hard mask, 1..99 = demote to a scaled soft term,
+    # 0 = inactive (personal_constraints_model.md §8)
+    def _h100(entry, kind):
+        return hardness_of(entry, kind) == 100
+    def _hoff(entry, kind):
+        return hardness_of(entry, kind) == 0
+    def _hval(entry, kind):
+        return hardness_of(entry, kind)
+
+# ---- engagement requirements (distinct-DAY semantics via piece keys)
     for code, entry in R.items():
         rules = (entry or {}).get("rules") or {}
         units_of = [u for u in model["units"] if u["teacher"] == code]
@@ -729,6 +759,451 @@ def build_from_context(model, objective="default", collect=None):
                     for sl in sset:
                         m.Add(piece_keys[u["id"]][p] != sl * Dg + d)
 
+    # =================================================================
+    # EXTENDED PERSONAL RULES (personal_constraints_model.md v2): every
+    # taxonomy-v2 kind not expressible in the legacy slot/day domains lands
+    # here — day×slot windows, section/stream-scoped masks, distribution
+    # quotas, per-day count bounds, gap structure, and the new soft kinds.
+    # Units with multiple sections SHARE piece vars across sections, so a
+    # section-scoped test uses the conservative all-sections-match reading
+    # (scope_unit_applies); single-section units match the checker exactly.
+    # =================================================================
+    from solver import scope_unit_applies as _sua
+    pop_map = {s["key"]: s.get("pop") for s in model.get("sections", [])}
+    _pop_of = lambda sec: pop_map.get(sec)
+
+    def _e_days(e, Dg_=Dg):
+        """Entry day set with scope.days intersecting literal days; empty = all."""
+        days = _dayset(e.get("days") or [])
+        scd = _dayset(((e.get("scope") or {}).get("days")) or [])
+        if days and scd:
+            days &= scd
+        elif scd:
+            days = scd
+        return days if days else set(range(Dg_))
+
+    def _unit_in_scope(e, u):
+        return _sua(e, u, _pop_of, _sec_stream)
+
+    for code, entry in R.items():
+        trules = (entry or {}).get("rules") or {}
+        units_of = [u for u in model["units"]
+                    if u["teacher"] == code or (u["group"] and code in (u["members"] or []))]
+        own_units = [u for u in model["units"] if u["teacher"] == code]
+        if not units_of:
+            continue
+
+        def _ban_keys(u, keys):
+            for p in range(u["count"]):
+                for kval in keys:
+                    m.Add(piece_keys[u["id"]][p] != kval)
+
+        # ---- positive day×slot window: only these (day,slot) cells allowed
+        # (cover-all: pieces must land INSIDE the union of same-scope windows)
+        if _h100(entry, "allowed_slots_days"):
+            wgroups = {}
+            for e in (trules.get("allowed_slots_days") or []):
+                sc = e.get("scope") or {}
+                sig = (tuple(sorted(sc.get("populations") or [])),
+                       tuple(sorted(sc.get("streams") or [])),
+                       tuple(sorted(sc.get("sections") or [])))
+                wgroups.setdefault(sig, []).append(e)
+            for sig, es in wgroups.items():
+                win = set()
+                for e in es:
+                    for d in _e_days(e):
+                        for sl in _slotset(e.get("slots") or []):
+                            win.add((d, sl))
+                for u in units_of:
+                    if _unit_in_scope(es[0], u):
+                        _ban_keys(u, [sl * Dg + d for d in range(Dg) for sl in range(Pg)
+                                      if (d, sl) not in win])
+
+        # ---- windows/allow-days restricted to given sections
+        for e in (trules.get("allowed_slots_in_sections") or []):
+            if not _h100(entry, "allowed_slots_in_sections"):
+                continue
+            secset = set(e.get("sections") or [])
+            dset = _e_days(e)
+            sset = _slotset(e.get("slots") or [])
+            for u in units_of:
+                if all(sec in secset for sec in u["secs"]):
+                    _ban_keys(u, [sl * Dg + d for d in dset for sl in range(Pg) if sl not in sset])
+        for e in (trules.get("allowed_days_in_sections") or []):
+            if not _h100(entry, "allowed_days_in_sections"):
+                continue
+            secset = set(e.get("sections") or [])
+            dset = _e_days(e)
+            for u in units_of:
+                if all(sec in secset for sec in u["secs"]):
+                    _ban_keys(u, [sl * Dg + d for d in range(Dg) if d not in dset
+                                  for sl in range(Pg)])
+
+        # ---- stream-scoped day bans (new kind)
+        for e in (trules.get("stream_forbidden_days") or []):
+            if not _h100(entry, "stream_forbidden_days"):
+                continue
+            dset = _e_days(e) if e.get("days") else _dayset(e.get("days") or [])
+            if not dset:
+                dset = set(range(Dg))
+            for u in units_of:
+                if all(_sec_stream(sec) == e["stream"] for sec in u["secs"]):
+                    _ban_keys(u, [sl * Dg + d for d in dset for sl in range(Pg)])
+
+        # ---- subject × days allowed (union per subject across entries)
+        subj_days_allow = {}
+        for e in (trules.get("subject_days_allowed") or []):
+            subj_days_allow.setdefault(e["subject"], set()).update(_dayset(e.get("days") or []))
+        if _h100(entry, "subject_days_allowed"):
+            for subj, dset in subj_days_allow.items():
+                for u in units_of:
+                    if any(u["courseBySec"].get(sec) == subj for sec in u["secs"]):
+                        _ban_keys(u, [sl * Dg + d for d in range(Dg) if d not in dset
+                                      for sl in range(Pg)])
+
+        # ---- subject day×slot pins (union per subject across both pin kinds)
+        pins = {}
+        if _h100(entry, "subject_slot_days"):
+            for e in (trules.get("subject_slot_days") or []):
+                days = _e_days(e) if e.get("days") else set(range(Dg))
+                pins.setdefault(e["subject"], set()).update(
+                    (d, SLOT_OF[e["slot"]]) for d in days)
+        if _h100(entry, "subject_slots_days"):
+            for e in (trules.get("subject_slots_days") or []):
+                days = _e_days(e) if e.get("days") else set(range(Dg))
+                pins.setdefault(e["subject"], set()).update(
+                    (d, sl) for d in days for sl in _slotset(e.get("slots") or []))
+        if pins:
+            for subj, win in pins.items():
+                for u in units_of:
+                    if any(u["courseBySec"].get(sec) == subj for sec in u["secs"]):
+                        _ban_keys(u, [sl * Dg + d for d in range(Dg) for sl in range(Pg)
+                                      if (d, sl) not in win])
+        # ---- subject_slots entries that carry day scoping
+        pins2 = {}
+        for e in (trules.get("subject_slots") or []):
+            if e.get("days"):
+                pins2.setdefault(e["subject"], set()).update(
+                    (d, sl) for d in _dayset(e["days"]) for sl in _slotset(e.get("slots") or []))
+        for subj, win in pins2.items():
+            for u in units_of:
+                if any(u["courseBySec"].get(sec) == subj for sec in u["secs"]):
+                    dayset = {d for (d, _) in win}
+                    _ban_keys(u, [sl * Dg + d for d in dayset for sl in range(Pg)
+                                  if (d, sl) not in win])
+        # ---- allowed_slots_in_stream entries carrying day scoping
+        for e in (trules.get("allowed_slots_in_stream") or []):
+            if not e.get("days") or not _h100(entry, "allowed_slots_in_stream"):
+                continue   # pure-slot form already handled by the slot domain
+            dset = _dayset(e["days"])
+            sset = _slotset(e.get("slots") or [])
+            for u in units_of:
+                if all(_sec_stream(sec) == e["stream"] for sec in u["secs"]):
+                    _ban_keys(u, [sl * Dg + d for d in dset for sl in range(Pg) if sl not in sset])
+
+        # ---- section allow/deny (unit-level; conservative for joint units)
+        if _h100(entry, "allowed_sections") and isinstance(trules.get("allowed_sections"), list) \
+                and trules["allowed_sections"]:
+            allow = set(trules["allowed_sections"])
+            for u in units_of:
+                if any(sec not in allow for sec in u["secs"]):
+                    return None   # unit needs a section the teacher may not teach
+        if _h100(entry, "forbidden_sections") and isinstance(trules.get("forbidden_sections"), list) \
+                and trules["forbidden_sections"]:
+            deny = set(trules["forbidden_sections"])
+            for u in units_of:
+                if any(sec in deny for sec in u["secs"]):
+                    return None
+
+        # ================= count / engagement channels =================
+        def _day_count_terms(us, d, slot=None):
+            terms = []
+            for u in us:
+                for p in range(u["count"]):
+                    if slot is None:
+                        terms.append(_eq_bool(m, piece_days[u["id"]][p], d,
+                                              f"dcnt_{code}_{d}_{u['id']}_{p}"))
+                    else:
+                        terms.append(_eq_bool(m, piece_keys[u["id"]][p], slot * Dg + d,
+                                              f"dcnts_{code}_{d}_{slot}_{u['id']}_{p}"))
+            return terms
+
+        # max_periods_per_day: int or [{max, days?, stream?, sections?, scope?}]
+        mppd = trules.get("max_periods_per_day")
+        mppd_list = ([{"max": mppd}] if isinstance(mppd, int)
+                     else (mppd if isinstance(mppd, list) else []))
+        if _h100(entry, "max_periods_per_day"):
+            for e in mppd_list:
+                cap = e.get("max")
+                if cap is None:
+                    continue
+                us = ([u for u in own_units if _unit_in_scope(e, u)]
+                      if any(e.get(k) for k in ("stream", "sections", "scope")) else own_units)
+                for d in sorted(_e_days(e)):
+                    terms = _day_count_terms(us, d)
+                    if terms:
+                        m.Add(sum(terms) <= cap)
+
+        # =========================================================
+        # DEMOTED KINDS (1 <= hardness < 100): charge the checker-visible
+        # breach magnitude with a hardness-scaled penalty (the ranked total
+        # in generate_context re-derives the exact penalty via evaluate();
+        # these terms only steer the search).
+        # =========================================================
+        def _soft_w(kind, base="rule"):
+            return int(pen[base] * _hval(entry, kind) / 100)
+
+        if 0 < _hval(entry, "max_periods_per_day") < 100:
+            for e in ([{"max": mppd}] if isinstance(trules.get("max_periods_per_day"), int)
+                      else (trules.get("max_periods_per_day") or [])):
+                cap = e.get("max")
+                if cap is None:
+                    continue
+                for d in sorted(_e_days(e)):
+                    terms = _day_count_terms(own_units, d)
+                    if not terms:
+                        continue
+                    ex = m.NewIntVar(0, len(terms), f"mppdx_{code}_{d}")
+                    m.Add(ex >= sum(terms) - cap)
+                    m.Add(ex >= 0)
+                    soft_terms.append((_soft_w("max_periods_per_day"), ex))
+        if 0 < _hval(entry, "min_periods_per_day") < 100:
+            for e in ([{"min": trules.get("min_periods_per_day")}] if isinstance(trules.get("min_periods_per_day"), int)
+                      else (trules.get("min_periods_per_day") or [])):
+                floor = e.get("min")
+                if floor is None:
+                    continue
+                for d in sorted(_e_days(e)):
+                    terms = _day_count_terms(own_units, d)
+                    if not terms:
+                        continue
+                    cnt = m.NewIntVar(0, len(terms), f"minpdx_c_{code}_{d}")
+                    m.Add(cnt == sum(terms))
+                    work = m.NewBoolVar(f"minpdx_w_{code}_{d}")
+                    m.Add(cnt >= 1).OnlyEnforceIf(work)
+                    m.Add(cnt == 0).OnlyEnforceIf(work.Not())
+                    sh = m.NewIntVar(0, 8, f"minpdx_s_{code}_{d}")
+                    m.Add(sh >= floor - cnt)
+                    m.Add(sh >= 0)
+                    m.Add(sh == 0).OnlyEnforceIf(work.Not())
+                    soft_terms.append((_soft_w("min_periods_per_day"), sh))
+        if 0 < _hval(entry, "max_days_in_slot") < 100:
+            for e in (trules.get("max_days_in_slot") or []):
+                si = SLOT_OF[e["slot"]]
+                cap = e.get("max_days")
+                if cap is None:
+                    continue
+                dbs = []
+                for d in sorted(_e_days(e)):
+                    terms = _day_count_terms(units_of, d, slot=si)
+                    if not terms:
+                        continue
+                    db = m.NewBoolVar(f"mdslx_{code}_{si}_{d}")
+                    m.Add(sum(terms) >= 1).OnlyEnforceIf(db)
+                    m.Add(sum(terms) == 0).OnlyEnforceIf(db.Not())
+                    dbs.append(db)
+                if dbs:
+                    ex = m.NewIntVar(0, len(dbs), f"mdslx_{code}_{si}")
+                    m.Add(ex >= sum(dbs) - cap)
+                    m.Add(ex >= 0)
+                    soft_terms.append((_soft_w("max_days_in_slot"), ex))
+        if 0 < _hval(entry, "allowed_slots_days") < 100:
+            wgroups = {}
+            for e2 in (trules.get("allowed_slots_days") or []):
+                sc = e2.get("scope") or {}
+                sig = (tuple(sorted(sc.get("populations") or [])),
+                       tuple(sorted(sc.get("streams") or [])),
+                       tuple(sorted(sc.get("sections") or [])))
+                wgroups.setdefault(sig, []).append(e2)
+            for sig, es in wgroups.items():
+                win = set()
+                for e2 in es:
+                    for d in _e_days(e2):
+                        for sl in _slotset(e2.get("slots") or []):
+                            win.add((d, sl))
+                for u in units_of:
+                    if not _unit_in_scope(es[0], u):
+                        continue
+                    for p in range(u["count"]):
+                        for d in range(Dg):
+                            for sl in range(Pg):
+                                if (d, sl) not in win:
+                                    soft_terms.append((_soft_w("allowed_slots_days"),
+                                                     _eq_bool(m, piece_keys[u["id"]][p], sl * Dg + d,
+                                                              f"asdx_{code}_{u['id']}_{p}_{d}_{sl}")))
+        for key, is_max in (("max_pieces_match", True), ("min_pieces_match", False)):
+            hv = _hval(entry, key)
+            if not (0 < hv < 100):
+                continue
+            for e in (trules.get(key) or []):
+                bnd = e.get("max" if is_max else "min")
+                if bnd is None:
+                    continue
+                us = _quota_units(e)
+                if e.get("slot") or e.get("days"):
+                    dset = _e_days(e)
+                    sls = _slotset([e["slot"]]) if e.get("slot") else set(range(Pg))
+                    terms = []
+                    for u in us:
+                        for p in range(u["count"]):
+                            ors = [_eq_bool(m, piece_keys[u["id"]][p], sl * Dg + d,
+                                            f"quox_{code}_{key}_{u['id']}_{p}_{d}_{sl}")
+                                   for d in sorted(dset) for sl in sorted(sls)]
+                            b = m.NewBoolVar(f"quoxb_{code}_{key}_{u['id']}_{p}")
+                            m.AddMaxEquality(b, ors)
+                            terms.append(b)
+                    expr = sum(terms)
+                else:
+                    expr = sum(u["count"] for u in us)
+                if is_max:
+                    ex = m.NewIntVar(0, 99, f"quox_{code}_{key}")
+                    m.Add(ex >= expr - bnd)
+                    m.Add(ex >= 0)
+                else:
+                    ex = m.NewIntVar(0, 99, f"quox_{code}_{key}")
+                    m.Add(ex >= bnd - expr)
+                    m.Add(ex >= 0)
+                soft_terms.append((_soft_w(key), ex))
+
+        # min_periods_per_day gated by actually engaged that day
+        minpd = trules.get("min_periods_per_day")
+        minpd_list = ([{"min": minpd}] if isinstance(minpd, int)
+                      else (minpd if isinstance(minpd, list) else []))
+        if _h100(entry, "min_periods_per_day"):
+            for e in minpd_list:
+                floor = e.get("min")
+                if floor is None:
+                    continue
+                us = ([u for u in own_units if _unit_in_scope(e, u)]
+                      if any(e.get(k) for k in ("stream", "sections", "scope")) else own_units)
+                for d in sorted(_e_days(e)):
+                    terms = _day_count_terms(us, d)
+                    if not terms:
+                        continue
+                    cnt = m.NewIntVar(0, len(terms), f"minpd_c_{code}_{d}")
+                    m.Add(cnt == sum(terms))
+                    work = m.NewBoolVar(f"minpd_w_{code}_{d}")
+                    m.Add(cnt >= 1).OnlyEnforceIf(work)
+                    m.Add(cnt == 0).OnlyEnforceIf(work.Not())
+                    m.Add(cnt >= floor).OnlyEnforceIf(work)
+
+        # max_days_in_slot: [{slot, max_days, days?, scope?}]
+        if _h100(entry, "max_days_in_slot"):
+            for e in (trules.get("max_days_in_slot") or []):
+                si = SLOT_OF[e["slot"]]
+                cap = e.get("max_days")
+                if cap is None:
+                    continue
+                daybools = []
+                for d in sorted(_e_days(e)):
+                    terms = _day_count_terms(units_of, d, slot=si)
+                    if not terms:
+                        continue
+                    db = m.NewBoolVar(f"mdsl_{code}_{si}_{d}")
+                    m.Add(sum(terms) >= 1).OnlyEnforceIf(db)
+                    m.Add(sum(terms) == 0).OnlyEnforceIf(db.Not())
+                    daybools.append(db)
+                if daybools:
+                    m.Add(sum(daybools) <= cap)
+
+        # ---- distribution quotas over the teacher's week
+        def _quota_units(e):
+            out = []
+            for u in own_units:
+                subs = {u["courseBySec"].get(sec) for sec in u["secs"]}
+                if e.get("subject") and e["subject"] not in subs:
+                    continue
+                if e.get("subjects") and not subs.intersection(e["subjects"]):
+                    continue
+                if e.get("stream") and not all(_sec_stream(sec) == e["stream"] for sec in u["secs"]):
+                    continue
+                if e.get("sections") and not all(sec in (e["sections"] or []) for sec in u["secs"]):
+                    continue
+                if not _unit_in_scope(e, u):
+                    continue
+                out.append(u)
+            return out
+
+        for key, is_max in (("max_pieces_match", True), ("min_pieces_match", False)):
+            if not _h100(entry, key):
+                continue
+            for e in (trules.get(key) or []):
+                bnd = e.get("max" if is_max else "min")
+                if bnd is None:
+                    continue
+                us = _quota_units(e)
+                if e.get("slot") or e.get("days"):
+                    dset = _e_days(e)
+                    sls = _slotset([e["slot"]]) if e.get("slot") else set(range(Pg))
+                    terms = []
+                    for u in us:
+                        for p in range(u["count"]):
+                            ors = [_eq_bool(m, piece_keys[u["id"]][p], sl * Dg + d,
+                                            f"quo_{code}_{key}_{u['id']}_{p}_{d}_{sl}")
+                                   for d in sorted(dset) for sl in sorted(sls)]
+                            b = m.NewBoolVar(f"quob_{code}_{key}_{u['id']}_{p}")
+                            m.AddMaxEquality(b, ors)
+                            terms.append(b)
+                    expr = sum(terms)
+                else:
+                    expr = sum(u["count"] for u in us)   # fully static count
+                m.Add(expr <= bnd) if is_max else m.Add(expr >= bnd)
+
+        # ---- no free holes inside a teaching day (rare; bigger encoding)
+        if trules.get("no_daily_gaps") and _h100(entry, "no_daily_gaps"):
+            for d in range(Dg):
+                occ = {}
+                for sl in range(Pg):
+                    terms = [_eq_bool(m, piece_keys[u["id"]][p], sl * Dg + d,
+                                      f"ng_{code}_{d}_{sl}_{u['id']}_{p}")
+                             for u in own_units for p in range(u["count"])]
+                    if terms:
+                        b = m.NewBoolVar(f"ngb_{code}_{d}_{sl}")
+                        m.AddMaxEquality(b, terms)
+                        occ[sl] = b
+                for a in range(Pg):
+                    for c in range(a + 2, Pg):
+                        if a not in occ or c not in occ:
+                            continue
+                        both = m.NewBoolVar(f"ngboth_{code}_{d}_{a}_{c}")
+                        m.AddBoolAnd([occ[a], occ[c]]).OnlyEnforceIf(both)
+                        m.AddBoolOr([occ[a].Not(), occ[c].Not()]).OnlyEnforceIf(both.Not())
+                        for bslot in range(a + 1, c):
+                            if bslot in occ:
+                                m.AddImplication(both, occ[bslot])
+
+        # no_daily_gaps demoted to soft -> same gap-sum encoding as soft_compact_days
+        if trules.get("no_daily_gaps") and 0 < _hval(entry, "no_daily_gaps") < 100:
+            wng = _soft_w("no_daily_gaps")
+            for d in range(Dg):
+                occ = {}
+                for sl in range(Pg):
+                    terms = [_eq_bool(m, piece_keys[u["id"]][p], sl * Dg + d,
+                                      f"ngx_{code}_{d}_{sl}_{u['id']}_{p}")
+                             for u in own_units for p in range(u["count"])]
+                    if terms:
+                        b = m.NewBoolVar(f"ngxb_{code}_{d}_{sl}")
+                        m.AddMaxEquality(b, terms)
+                        occ[sl] = b
+                if not occ:
+                    continue
+                cnt_d = m.NewIntVar(0, Pg, f"ngxn_{code}_{d}")
+                m.Add(cnt_d == sum(occ.values()))
+                work = m.NewBoolVar(f"ngxw_{code}_{d}")
+                m.Add(cnt_d >= 1).OnlyEnforceIf(work)
+                m.Add(cnt_d == 0).OnlyEnforceIf(work.Not())
+                lo = m.NewIntVar(0, Pg - 1, f"ngxl_{code}_{d}")
+                hi = m.NewIntVar(0, Pg - 1, f"ngxh_{code}_{d}")
+                for sl, b in occ.items():
+                    m.Add(lo <= sl).OnlyEnforceIf(b)
+                    m.Add(hi >= sl).OnlyEnforceIf(b)
+                m.Add(lo == 0).OnlyEnforceIf(work.Not())
+                m.Add(hi == 0).OnlyEnforceIf(work.Not())
+                gap = m.NewIntVar(0, Pg, f"ngxg_{code}_{d}")
+                m.Add(gap >= hi - lo + 1 - cnt_d)
+                m.Add(gap >= 0)
+                soft_terms.append((wng, gap))
+
     # ---- soft: individual spread + even distribution
     if model["instructions"].get("softIndividualSpread"):
         for t, keys in teacher_keys.items():
@@ -751,11 +1226,15 @@ def build_from_context(model, objective="default", collect=None):
         rules = (entry or {}).get("rules") or {}
         if not rules.get("soft_even_distribution"):
             continue
+        hsed = hardness_of(entry, "soft_even_distribution")
+        if hsed == 0:
+            continue
         units_of = [u for u in model["units"] if u["teacher"] == code]
         if not units_of:
             continue
         total = sum(u["count"] for u in units_of)
         cap = -(-total // max(1, Dg))
+        vw = int(pen["evenDistribution"] * hsed / 100)
         for d in range(Dg):
             terms = [_eq_bool(m, dv, d, f"sed_{code}_{d}_{u['id']}_{p}")
                      for u in units_of for p, dv in enumerate(piece_days[u["id"]])]
@@ -763,7 +1242,64 @@ def build_from_context(model, objective="default", collect=None):
                 continue
             ex = m.NewIntVar(0, total, f"sede_{code}_{d}")
             m.Add(ex >= sum(terms) - cap)
-            soft_terms.append((pen["evenDistribution"], ex))
+            soft_terms.append((vw, ex))
+
+    # ---- new soft kinds (taxonomy v2)
+    for code, entry in R.items():
+        rules = (entry or {}).get("rules") or {}
+        units_of = [u for u in model["units"] if u["teacher"] == code
+                    or (u["group"] and code in (u["members"] or []))]
+        if not units_of:
+            continue
+        for e in (rules.get("soft_prefer_free_slots_days") or []):
+            hspfd = hardness_of(entry, "soft_prefer_free_slots_days")
+            if hspfd == 0:
+                continue
+            w = int(pen["preferFreeSlot"] * hspfd / 100)
+            dset = _dayset(e.get("days") or [])
+            sset = _slotset(e.get("slots") or [])
+            for u in units_of:
+                for p in range(u["count"]):
+                    for d in sorted(dset):
+                        for sl in sorted(sset):
+                            soft_terms.append((w,
+                                               _eq_bool(m, piece_keys[u["id"]][p], sl * Dg + d,
+                                                        f"spfd_{code}_{u['id']}_{p}_{d}_{sl}")))
+        if rules.get("soft_compact_days"):
+            hsccd = hardness_of(entry, "soft_compact_days")
+            if hsccd == 0:
+                continue
+            wcd = int(pen["rule"] * hsccd / 100)
+            # penalise interior holes per worked day (checker reports the exact
+            # gap count; the optimiser uses the same width-minus-count proxy)
+            for d in range(Dg):
+                occ = {}
+                for sl in range(Pg):
+                    terms = [_eq_bool(m, piece_keys[u["id"]][p], sl * Dg + d,
+                                      f"sccd_{code}_{d}_{sl}_{u['id']}_{p}")
+                             for u in units_of for p in range(u["count"])]
+                    if terms:
+                        b = m.NewBoolVar(f"sccb_{code}_{d}_{sl}")
+                        m.AddMaxEquality(b, terms)
+                        occ[sl] = b
+                if not occ:
+                    continue
+                cnt_d = m.NewIntVar(0, Pg, f"sccn_{code}_{d}")
+                m.Add(cnt_d == sum(occ.values()))
+                work = m.NewBoolVar(f"sccw_{code}_{d}")
+                m.Add(cnt_d >= 1).OnlyEnforceIf(work)
+                m.Add(cnt_d == 0).OnlyEnforceIf(work.Not())
+                lo = m.NewIntVar(0, Pg - 1, f"sccl_{code}_{d}")
+                hi = m.NewIntVar(0, Pg - 1, f"scch_{code}_{d}")
+                for sl, b in occ.items():
+                    m.Add(lo <= sl).OnlyEnforceIf(b)
+                    m.Add(hi >= sl).OnlyEnforceIf(b)
+                m.Add(lo == 0).OnlyEnforceIf(work.Not())
+                m.Add(hi == 0).OnlyEnforceIf(work.Not())
+                gap = m.NewIntVar(0, Pg, f"sccg_{code}_{d}")
+                m.Add(gap >= hi - lo + 1 - cnt_d)
+                m.Add(gap >= 0)
+                soft_terms.append((wcd, gap))
 
     # ---- objective: shuffle + soft penalties
     obj = []

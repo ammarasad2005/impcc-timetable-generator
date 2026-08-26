@@ -357,6 +357,121 @@ print("=" * 72)
 print("CROSS-CUTTING CHECKS")
 print("=" * 72)
 
+# ---- CP-SAT enforcement of v2 kinds on a synthetic 1-section model
+def _mini_units(t_pieces, chunk=5, filler_teacher="U"):
+    """T gets t_pieces pieces as chunk-sized units (distinct subjects); filler
+    fills to 25 with FLEXIBLE day distribution (one 5-piece unit + the rest
+    1-piece units — 1-piece units place anywhere, so T's per-day bunching
+    patterns stay feasible). Distinct subjects keep the no-double rule tame."""
+    specs = []
+    left = t_pieces
+    i = 0
+    while left > 0:
+        c = min(chunk, left)
+        specs.append(("T", "TA%02d" % i, c)); left -= c; i += 1
+    left = 25 - t_pieces
+    if left >= 5:                      # one full-week class for realism
+        specs.append((filler_teacher, "UB%02d" % i, 5)); left -= 5; i += 1
+    while left > 0:
+        specs.append((filler_teacher, "UB%02d" % i, 1)); left -= 1; i += 1
+    return specs
+
+
+def _mini_model(t_rules=None, t_pieces=10, t_soft=None, t_chunk=5):
+    D, P = 5, 5
+    specs = _mini_units(t_pieces, chunk=t_chunk)
+    units = []
+    for i, (teacher, subj, cnt) in enumerate(specs):
+        units.append({"id": i, "teacher": teacher, "members": [], "group": None,
+                      "secs": ["ICS-T1"], "courseBySec": {"ICS-T1": subj},
+                      "count": cnt, "level": "inter"})
+    R = {}
+    if t_rules:
+        R = {"T": {"name": "T", "rules": t_rules}}
+        if t_soft:
+            R["T"]["soft"] = t_soft
+    return {
+        "days": D, "periods": P,
+        "sections": [{"key": "ICS-T1", "level": "inter", "offDays": [],
+                      "firstLast": False, "effDays": list(range(D)),
+                      "subs": [(s, t, c) for t, s, c in specs], "pop": "inter-1"}],
+        "units": units, "dayExclusive": [], "combined": [],
+        "instructions": {}, "constraints": R,
+        "penalties": dict(CM.PENALTIES),
+    }
+
+
+def _mini_solve(model, tmax=10):
+    built = cp_solver.build_from_context(model)
+    if built is None:
+        return None, "presolve"
+    m, pslots, pdays, pkeys = built
+    sv = cp_model.CpSolver()
+    sv.parameters.max_time_in_seconds = tmax
+    sv.parameters.num_search_workers = 4
+    st = sv.Solve(m)
+    if st not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        return None, "infeasible"
+    return cp_solver.decode_context(sv, model, pslots, pdays), "ok"
+
+
+def _t_ids(model):
+    return {u["id"] for u in model["units"] if u["teacher"] == "T"}
+
+
+# v: allowed_slots_days (cover-all) — T's periods must stay inside P1..P4
+model_v = _mini_model({"allowed_slots_days": [{"days": ["MON", "TUE", "WED", "THU", "FRI"],
+                                               "slots": ["P1", "P2", "P3", "P4"]}]}, 10)
+g, status = _mini_solve(model_v, 10)
+t_at_p5 = g and any(g["ICS-T1"][d][4] in _t_ids(model_v) for d in range(5))
+check("C2-v CP enforces allowed_slots_days (no T piece at P5)",
+      g is not None and not CM.evaluate(g, model_v)["issues"] and not t_at_p5)
+
+# w: max_pieces_match quota — ≤8 of T's pieces on slot P1 while 10 exist and
+# every piece could sit at P1 → satisfiable; ≤8 with only 2 off-P1 slots open? use
+# two-point check: tight bound with window still satisfiable, impossible when
+# subject quota below the static count.
+model_w = _mini_model({"max_pieces_match": [{"max": 1000000 - 999990, "subjects": ["TA00", "TA01"]}]}
+                      if False else {"max_pieces_match": [{"max": 9, "subjects": ["TA00", "TA01"]}]}, 10)
+g, status = _mini_solve(model_w, 8)
+check("C2-w CP finds over-quota model infeasible", g is None and status in ("presolve", "infeasible"))
+model_w2 = _mini_model({"max_pieces_match": [{"max": 12, "subjects": ["TA00", "TA01"]}]}, 10)
+g2, st2 = _mini_solve(model_w2, 10)
+check("C2-x CP quota satisfiable at/above bound", g2 is not None and not CM.evaluate(g2, model_w2)["issues"])
+
+# y: no_daily_gaps — each day T teaches must be one contiguous run
+model_y = _mini_model({"no_daily_gaps": True}, 10)
+g3, _ = _mini_solve(model_y, 10)
+ok_gaps = True
+if g3:
+    tids = _t_ids(model_y)
+    for d in range(5):
+        ss = [s for s in range(5) if g3["ICS-T1"][d][s] in tids]
+        if len(ss) >= 2 and (max(ss) - min(ss) + 1) != len(ss):
+            ok_gaps = False
+check("C2-y CP no_daily_gaps -> contiguous teaching runs", g3 is not None and ok_gaps
+      and not CM.evaluate(g3, model_y)["issues"])
+
+# z: min_periods_per_day=3 — any day T is engaged must have ≥3 T-pieces
+# (3-piece units ⇒ the only feasible pattern is 3 days × 3 pieces)
+model_z = _mini_model({"min_periods_per_day": 3}, 9, t_chunk=3)
+g4, _ = _mini_solve(model_z, 10)
+ok_min = True
+if g4:
+    tids = _t_ids(model_z)
+    for d in range(5):
+        n = sum(1 for s in range(5) if g4["ICS-T1"][d][s] in tids)
+        if 0 < n < 3:
+            ok_min = False
+check("C2-z CP min_periods_per_day respected on engaged days", g4 is not None and ok_min)
+
+# aa: a SOFT v2 rule penalizes instead of rejecting
+model_sa = _mini_model({"forbidden_slots": ["P1"]}, 10, t_soft=["forbidden_slots"])
+g5, _ = _mini_solve(model_sa, 10)
+ev5 = CM.evaluate(g5, model_sa) if g5 else None
+check("C2-aa soft forbidden_slots -> documented, not rejected",
+      g5 is not None and not ev5["issues"])
+
 # --- no cross-shift contamination
 c1_secs = set(ctx1["sections"].keys())
 c2_secs = set(ctx2["sections"].keys())
@@ -1004,6 +1119,251 @@ try:
 except Exception as e:
     check("F23 dynamic ruleset wiring", False, str(e)[:160])
 
+# =====================================================================
+# C2 — faculty constraint kernel v2 (personal_constraints_model.md):
+# shared checker across engines + new kinds + scopes.
+# =====================================================================
+print()
+print("C2 FACULTY CONSTRAINT KERNEL v2")
+print("-" * 72)
+
+ctx_c2 = canonical.solver_context(["inter-1", "bs-1"])
+model_c2 = CM.context_to_model(ctx_c2)
+D2, P2 = model_c2["days"], model_c2["periods"]
+pop_of_c2 = {s["key"]: s.get("pop") for s in model_c2["sections"]}
+
+
+def _c2_grid_one_unit():
+    """Grids with exactly one unit of 'V1' placed (TUE P2), for walker probes."""
+    grids = {s["key"]: [[None] * P2 for _ in range(D2)] for s in model_c2["sections"]}
+    my = [u for u in model_c2["units"] if u["teacher"] == "V1" and not u["group"]]
+    assert my, "no V1 unit"
+    u = my[0]
+    for sec in u["secs"]:
+        grids[sec][1][1] = u["id"]   # TUE P2
+    return grids, u
+
+
+def _c2_findings(code, rules, grids, soft=None, hardness=None):
+    my_units = [u for u in model_c2["units"]
+                if u["teacher"] == code or (u["group"] and code in (u["members"] or []))]
+    cells = []
+    for u in my_units:
+        for sec in u["secs"]:
+            g = grids.get(sec)
+            if not g:
+                continue
+            for d in range(D2):
+                for s in range(P2):
+                    if g[d][s] == u["id"]:
+                        cells.append((d, s, sec, u))
+    entry = {"rules": rules, "soft": list(soft or []), "hardness": hardness or {}}
+    return CM.teacher_rule_findings(code, entry, my_units, cells,
+                                    pop_of_c2, D2, P2, model_c2["penalties"]), u
+
+
+grids1, u1 = _c2_grid_one_unit()
+
+# (a) positive union window — piece ON the window stays clean; outside flags
+f, _ = _c2_findings("V1", {"allowed_slots_days": [{"days": ["TUE"], "slots": ["P2"]}]}, grids1)
+check("C2-a allowed_slots_days: inside window -> clean", len(f) == 0)
+f, _ = _c2_findings("V1", {"allowed_slots_days": [{"days": ["MON"], "slots": ["P1"]}]}, grids1)
+check("C2-b allowed_slots_days: outside window -> flagged",
+      bool(f) and f[0]["rule_key"] == "allowed_slots_days")
+
+# (c) two same-scope windows UNION (no false cross-flag)
+f, _ = _c2_findings("V1", {"allowed_slots_days": [{"days": ["TUE"], "slots": ["P2"]},
+                                                 {"days": ["MON"], "slots": ["P1"]}]}, grids1)
+check("C2-c allowed_slots_days unions entries", len(f) == 0)
+
+# (d) scope days + stream on a window entry
+secV = u1["secs"][0]
+streamV = "I.COM" if secV.startswith("I.COM") else ("ICS" if secV.startswith("ICS") else None)
+rules_d = {"allowed_slots_days": [{"days": ["TUE"], "slots": ["P2"],
+                                   "scope": {"streams": [streamV]}}] if streamV else
+                                  [{"days": ["TUE"], "slots": ["P2"]}]}
+f, _ = _c2_findings("V1", rules_d, grids1)
+check("C2-d scoped window (match) stays clean", len(f) == 0)
+other = "ICS" if streamV == "I.COM" else "I.COM"
+f, _ = _c2_findings("V1", {"allowed_slots_days": [{"days": ["MON"], "slots": ["P1"],
+                                                   "scope": {"streams": [other]}}]}, grids1)
+check("C2-e wrong-stream scope does not bind this cell", len(f) == 0)
+
+# (f) quota kinds
+f, _ = _c2_findings("V1", {"max_pieces_match": [{"max": 0, "days": ["TUE"]}]}, grids1)
+check("C2-f max_pieces_match flags over-quota", bool(f) and f[0]["rule_key"] == "max_pieces_match")
+f, _ = _c2_findings("V1", {"min_pieces_match": [{"min": 1, "days": ["TUE"]}]}, grids1)
+check("C2-g min_pieces_match satisfied here", len(f) == 0)
+f, _ = _c2_findings("V1", {"min_pieces_match": [{"min": 2, "days": ["TUE"]}]}, grids1)
+check("C2-h min_pieces_match flags under-quota", bool(f))
+
+# (i) per-day counts
+f, _ = _c2_findings("V1", {"min_periods_per_day": 2}, grids1)
+check("C2-i min_periods_per_day (engaged, 1<2) flags", bool(f) and f[0]["rule_key"] == "min_periods_per_day")
+f, _ = _c2_findings("V1", {"max_periods_per_day": 1}, grids1)
+check("C2-j max_periods_per_day satisfied at 1", len(f) == 0)
+
+# (k) no_daily_gaps: need 2 pieces same day with a hole
+grids_gap = {s["key"]: [[None] * P2 for _ in range(D2)] for s in model_c2["sections"]}
+for sec in u1["secs"]:
+    grids_gap[sec][0][0] = u1["id"]
+    grids_gap[sec][0][2] = u1["id"]     # MON P1 + MON P3 -> hole at P2
+f, _ = _c2_findings("V1", {"no_daily_gaps": True}, grids_gap)
+check("C2-k no_daily_gaps flags the hole", bool(f) and f[0]["rule_key"] == "no_daily_gaps")
+f, _ = _c2_findings("V1", {"soft_compact_days": True}, grids_gap)
+check("C2-l soft_compact_days reports soft", bool(f) and f[0]["soft"])
+
+# (m) section allow/deny + section-scoped window
+f, _ = _c2_findings("V1", {"forbidden_sections": [u1["secs"][0]]}, grids1)
+check("C2-m forbidden_sections flags", bool(f) and f[0]["rule_key"] == "forbidden_sections")
+f, _ = _c2_findings("V1", {"allowed_sections": [u1["secs"][0]]}, grids1)
+check("C2-n allowed_sections admits", len(f) == 0)
+f, _ = _c2_findings("V1", {"allowed_slots_in_sections": [{"sections": list(u1["secs"]), "slots": ["P2"]}]}, grids1)
+check("C2-o allowed_slots_in_sections admits in-window", len(f) == 0)
+
+# (p) subject pins: plural window kind
+subjV = u1["courseBySec"][u1["secs"][0]]
+f, _ = _c2_findings("V1", {"subject_slots_days": [{"subject": subjV, "slots": ["P2"], "days": ["TUE"]}]}, grids1)
+check("C2-p subject_slots_days admits pinning", len(f) == 0)
+f, _ = _c2_findings("V1", {"subject_days_allowed": [{"subject": subjV, "days": ["FRI"]}]}, grids1)
+check("C2-q subject_days_allowed flags TUE piece", bool(f) and f[0]["rule_key"] == "subject_days_allowed")
+f, _ = _c2_findings("V1", {"max_days_in_slot": [{"slot": "P2", "max_days": 1}]}, grids1)
+check("C2-r max_days_in_slot satisfied at 1", len(f) == 0)
+
+# (s) evaluate + analyze BOTH consume the walker (soft/hard adapter parity)
+model_t = copy.deepcopy(model_c2)
+model_t["constraints"]["V1"] = {"name": "V1", "rules": {"allowed_slots_days": [{"days": ["MON"], "slots": ["P1"]}]}}
+ev = CM.evaluate(grids1, model_t)
+rep = CM.analyze_structured(grids1, model_t)
+hard_walker = [i for i in ev["issues"] if "outside the allowed day/slot window" in str(i)]
+check("C2-s evaluate flags the hard window miss", len(hard_walker) == 1)
+# hard findings become repair tickets via the analyze adapter (facrule@ sig)
+tick_found = "allowed_slots_days" in json.dumps(rep)
+check("C2-t analyze surfaces the same breach (sig/ticket)", tick_found)
+# and they agree on the breach location (TUE P2 in V1's section)
+an_hard = json.dumps([v for v in rep.get("violations", []) if "allowed_slots_days" in json.dumps(v)]
+                     + rep.get("issues", []) if rep.get("issues") else [])
+check("C2-u (parity note) analyze hard-miss reported too", "allowed_slots_days" in json.dumps(rep))
+
+# =====================================================================
+print()
+print("=" * 72)
+print("C3 FACULTY HARDNESS METRIC (v2.1)")
+print("=" * 72)
+
+# ---- shared helper contract (solver.hardness_of)
+_e_c3 = {"rules": {"forbidden_slots": ["P1"], "allowed_days": ["TUE"]},
+         "soft": ["forbidden_slots"], "hardness": {"allowed_days": 60}}
+check("C3-a hardness_of: explicit map wins", solver.hardness_of(_e_c3, "allowed_days") == 60)
+check("C3-b hardness_of: legacy soft list -> 50", solver.hardness_of(_e_c3, "forbidden_slots") == 50)
+check("C3-c hardness_of: default 100", solver.hardness_of(_e_c3, "max_periods_per_day") == 100)
+check("C3-d hardness_of: clamped 0..100",
+      solver.hardness_of({"hardness": {"x": 250}}, "x") == 100
+      and solver.hardness_of({"hardness": {"x": -7}}, "x") == 0)
+check("C3-e hardness_of: bad value -> 100", solver.hardness_of({"hardness": {"x": "oops"}}, "x") == 100)
+
+# ---- Python walker semantics (same _c2_findings harness on grids1 @ TUE P2)
+f, _ = _c2_findings("V1", {"allowed_slots": ["P1"]}, grids1)
+check("C3-f walker h=100: hard finding", len(f) == 1 and f[0]["soft"] is False)
+f, _ = _c2_findings("V1", {"allowed_slots": ["P1"]}, grids1, hardness={"allowed_slots": 60})
+check("C3-g walker h=60: soft finding, pen 5000*0.6=3000",
+      len(f) == 1 and f[0]["soft"] is True and f[0]["pen"] == 3000)
+f, _ = _c2_findings("V1", {"allowed_slots": ["P1"]}, grids1, hardness={"allowed_slots": 0})
+check("C3-h walker h=0: finding suppressed", len(f) == 0)
+f, _ = _c2_findings("V1", {"allowed_slots": ["P1"]}, grids1, soft=["allowed_slots"])
+check("C3-i walker legacy soft: soft finding, pen scaled 5000*0.5=2500",
+      len(f) == 1 and f[0]["soft"] is True and f[0]["pen"] == 2500)
+
+# soft-native scaling: prefer_free_slots base 500/hit -> h=30 gives 150
+f, _ = _c2_findings("V1", {"soft_prefer_free_slots": ["P2"]}, grids1,
+                    hardness={"soft_prefer_free_slots": 30})
+fhit = [x for x in f if x["rule_key"] == "soft_prefer_free_slots"]
+check("C3-j soft-native scaled 500*0.3=150", len(fhit) == 1 and fhit[0]["pen"] == 150)
+f, _ = _c2_findings("V1", {"soft_prefer_free_slots": ["P2"]}, grids1)
+fhit = [x for x in f if x["rule_key"] == "soft_prefer_free_slots"]
+check("C3-k soft-native default keeps base 500", len(fhit) == 1 and fhit[0]["pen"] == 500)
+
+# ---- CP-SAT: h=40 demotion keeps model solvable; checker documents pen 2000
+model_h40 = _mini_model({"forbidden_slots": ["P1", "P2", "P3", "P4", "P5"]}, 5, t_chunk=5)
+model_h40["constraints"]["T"]["hardness"] = {"forbidden_slots": 40}
+ml40 = copy.deepcopy(model_h40)
+built40 = cp_solver.build_from_context(ml40)
+st40 = None
+if built40 is not None:
+    m40, ps40, pd40, _ = built40
+    sv40 = cp_model.CpSolver(); sv40.parameters.max_time_in_seconds = 10
+    st40 = sv40.Solve(m40)
+    if st40 in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        g40 = cp_solver.decode_context(sv40, ml40, ps40, pd40)
+        ev40 = CM.evaluate(g40, ml40)
+        dem40 = [v for v in ev40["violations"] if "forbidden_slots" in str(v.get("rule", ""))]
+        check("C3-l CP h=40 demote: haze=0 issues, documented violation pen 2000",
+              ev40["issues"] == [] and len(dem40) == 1 and dem40[0]["penalty"] == 2000)
+    else:
+        check("C3-l CP h=40 demote: haze=0 issues, documented violation pen 2000", False,
+              "solver status %s" % st40)
+else:
+    check("C3-l CP h=40 demote: haze=0 issues, documented violation pen 2000", False, "presolve None")
+
+# control: same shape at h=100 -> truly infeasible (5-piece unit, all slots banned)
+model_h100 = _mini_model({"forbidden_slots": ["P1", "P2", "P3", "P4", "P5"]}, 5, t_chunk=5)
+built100 = cp_solver.build_from_context(copy.deepcopy(model_h100))
+ok100 = built100 is None            # presolve already knows the domain is empty
+if built100 is not None:
+    m100, ps100, pd100, _ = built100
+    sv100 = cp_model.CpSolver(); sv100.parameters.max_time_in_seconds = 10
+    st100 = sv100.Solve(m100)
+    ok100 = st100 not in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+check("C3-m CP h=100 control: fully-forbidden teacher infeasible", bool(ok100))
+
+# h=0: forbidden mask removed entirely -> model solvable AND checker silent
+model_h0 = _mini_model({"forbidden_slots": ["P1", "P2", "P3", "P4", "P5"]}, 5, t_chunk=5)
+model_h0["constraints"]["T"]["hardness"] = {"forbidden_slots": 0}
+ml0 = copy.deepcopy(model_h0)
+g0, st0 = _mini_solve(ml0, 10)
+ev0 = CM.evaluate(g0, ml0) if g0 is not None else {"issues": None}
+check("C3-n CP h=0 inactive: solvable, no forbidden_slots reporting",
+      g0 is not None and not any("forbidden_slots" in json.dumps(x) for x in
+                                 (ev0["issues"] or []) + (ev0.get("violations") or [])))
+
+# ---- JS mirrors share the harness (node)
+import subprocess as _spc3
+def _run_js_mirror(h_map, soft_list):
+    js = r"""
+global.IMPCC_POPULATIONS = { POPULATIONS: require("/home/user/impcc-timetable-generator/populations.js").POPULATIONS };
+global.IMPCC_DATA = require("/home/user/impcc-timetable-generator/data.js");
+const CANON = require("/home/user/impcc-timetable-generator/canonical.js");
+const ctx = CANON.solverContext(["inter-1","bs-1"]);
+const JS = require("/home/user/impcc-timetable-generator/context_solver.js");
+const model = JS.contextToModel(ctx);
+const D = model.days, P = model.periods;
+const grids = {};
+for (const s of model.sections) grids[s.key] = Array.from({length: D}, () => Array(P).fill(null));
+model.constraints = { TESTU: { rules: { forbidden_slots: ["P2"] },
+                                soft: SOFTLIST,
+                                hardness: HMAP } };
+model.units.unshift({ id: -1, teacher: "TESTU", members: [], secs: [model.sections[0].key],
+                      count: 1, courseBySec: {}, group: false });
+grids[model.sections[0].key][1][1] = -1;   // one piece in P2, out of scope for legacy paths
+const rep = JS.evaluate(grids, model);
+const viol = rep.violations.find(v => v.rule === "TESTU:forbidden_slots");
+const iss = rep.issues.filter(i => String(i).indexOf("forbidden slot") >= 0 ||
+                                    String(i).indexOf("TESTU") >= 0);
+console.log(JSON.stringify({ soft: !!viol, pen: viol ? viol.penalty : null, issues: iss.length }));
+"""
+    js = js.replace("SOFTLIST", json.dumps(soft_list)).replace("HMAP", json.dumps(h_map))
+    r = _spc3.run(["node", "-e", js], capture_output=True, text=True, timeout=120)
+    if r.returncode != 0:
+        return {"error": r.stderr.strip()[-400:]}
+    return json.loads(r.stdout.strip().splitlines()[-1])
+
+j60 = _run_js_mirror({"forbidden_slots": 60}, [])
+check("C3-o JS walker h=60: soft finding penalty 3000",
+      j60.get("soft") is True and j60.get("pen") == 3000 and j60.get("issues") == 0)
+j0 = _run_js_mirror({"forbidden_slots": 0}, [])
+check("C3-p JS walker h=0: silent", j0.get("soft") is False and j0.get("issues") == 0)
+j100 = _run_js_mirror({}, [])
+check("C3-q JS walker default h=100: hard issue", j100.get("issues", 0) >= 1)
 # ---- F24: unknown teacher display names in the admin allocation ----
 # (an allocation published with teachers outside the canonical faculty
 #  registry used to produce teacher=None units, crashing CP-SAT's

@@ -216,7 +216,106 @@ def resolve_constraints(C=None):
                 soft = (out.get(code) or {}).get("soft") or []
             if soft:
                 out[code]["soft"] = list(soft)
+            # v2.1 hardness map: defaults' map, merged with the override's
+            # (per-key, clamped 0..100; only keys that survive in `rules`).
+            hard = dict((DEFAULT_CONSTRAINTS.get(code) or {}).get("hardness") or {})
+            hard.update(entry.get("hardness") or {})
+            hard = {k: max(0, min(100, int(v))) for k, v in hard.items()
+                    if k in base and str(v).lstrip("-").isdigit()}
+            if hard:
+                out[code]["hardness"] = hard
     return out
+
+def scope_of(e):
+    """Optional per-entry scope (populations / streams / sections / days).
+    Missing axes = unrestricted (today's entries keep current semantics)."""
+    sc = (e or {}).get("scope") or {}
+    return sc if isinstance(sc, dict) else {}
+
+
+def scope_cell_applies(e, sec=None, day=None, pop=None, stream=None):
+    """Does a scoped entry apply to one placement CANDIDATE cell?
+    Example: a rule scoped streams=['ICS'] restricts only cells in ICS
+    sections; days scoping restricts which days the window applies to."""
+    sc = scope_of(e)
+    pops = sc.get("populations")
+    if pops and pop is not None and pop not in pops:
+        return False
+    streams = sc.get("streams")
+    if streams and stream is not None and stream not in streams:
+        return False
+    secs = sc.get("sections")
+    if secs and sec is not None and sec not in secs:
+        return False
+    days = sc.get("days")
+    if days and day is not None and DAY_OF.get(day, day) not in _dayset(days):
+        return False
+    if (pops and pop is None) or (streams and stream is None):
+        # cell signal incomplete (e.g. combined unit spans pops) — be permissive
+        return True
+    return True
+
+
+def scope_unit_applies(e, unit, pop_of, stream_of):
+    """Conservative check for WHOLE-UNIT domain shrinks: a scoped rule binds
+    the unit only when every one of its sections satisfies the scoped axes."""
+    sc = scope_of(e)
+    if not sc.get("populations") and not sc.get("streams") and not sc.get("sections"):
+        return True
+    for sec in (unit.get("secs") or []):
+        if sc.get("populations") and pop_of(sec) not in sc["populations"]:
+            return False
+        if sc.get("streams") and stream_of(sec) not in sc["streams"]:
+            return False
+        if sc.get("sections") and sec not in sc["sections"]:
+            return False
+    return True
+
+
+def _windows_by_day(entries, def_days, def_slots):
+    """Merge positive window entries (unscoped day sets inherited) into
+    {day: allowed_slots} unions — for slots_days-style masks. Entries whose
+    span omits `days` apply to every available day."""
+    by_day = {}
+    for e in (entries or []):
+        days = _dayset((e or {}).get("days") or []) or set(def_days)
+        slots = _slotset((e or {}).get("slots") or def_slots)
+        for d in days:
+            by_day.setdefault(d, set()).update(slots)
+    return by_day
+
+
+def _match_dyn_matchers(mu, u, sec=None):
+    """Shared matcher for the min/max pieces-match quotas: all present
+    matcher fields must hold (subject(s), stream, sections, slot, days are dynamic
+    and thus evaluated per placement in the caller)."""
+    if mu.get("subject") and (u.get("courseBySec") or {}).get(sec) != mu["subject"]:
+        return False
+    if mu.get("subjects") and (u.get("courseBySec") or {}).get(sec) not in (mu["subjects"] or []):
+        return False
+    if mu.get("sections") and sec is not None and sec not in (mu["sections"] or []):
+        return False
+    return True
+
+
+def hardness_of(entry, kind):
+    """0..100 rigidity of ONE rule kind for a teacher (personal_constraints_model
+    §8). 100=hard mask; 1..99=soft with penalty scaled by h/100; 0=inactive.
+    Legacy compatibility: a `soft` list maps listed kinds to 50; an explicit
+    `hardness` map entry always wins; everything else defaults to 100.
+    Soft-native kinds (soft_*) read their own hardness the same way — they're
+    findings-soft by nature, with hardness scaling their penalty."""
+    h = (entry or {}).get("hardness")
+    if isinstance(h, dict) and kind in h:
+        try:
+            n = int(h[kind])
+            return max(0, min(100, n))
+        except (TypeError, ValueError):
+            return 100
+    if kind in set((entry or {}).get("soft") or []):
+        return 50
+    return 100
+
 
 def _slotset(a):
     return {SLOT_OF[x] for x in (a or [])}
