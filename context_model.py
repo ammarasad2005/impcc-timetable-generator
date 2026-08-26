@@ -56,12 +56,55 @@ def _resolve_teacher(x):
 
 
 # default soft-constraint penalty weights
+_STRUCT_ATTAIN = None   # lazily initialised cp_solver reference (heavy import)
+
+
+def _load_struct_attain():
+    global _STRUCT_ATTAIN
+    try:
+        import cp_solver as _CS
+        _STRUCT_ATTAIN = (_CS._unit_day_domain, _CS._unit_slot_domain)
+    except Exception:
+        _STRUCT_ATTAIN = (None, None)
+
+
+def _struct_attain_for(sec, cname, model, by_id):
+    """Static attainable alignment for (sec, cname): max over slots of the
+    per-unit min(count, available days). Mirrors cp_solver's attain so the
+    checker's hard tier never demands a floor the personal rules forbade.
+    Memoized per model on `_coh_attain` (built lazily on first call)."""
+    cache = model.setdefault("_coh_attain", {})
+    if (sec, cname) in cache:
+        return cache[(sec, cname)]
+    udd, usd = _STRUCT_ATTAIN
+    if udd is None:
+        cache[(sec, cname)] = 10**9   # no cp_solver available → treat everything as attainable
+        return 10**9
+    R = model["constraints"]
+    members = [u for u in model["units"]
+               if sec in u["secs"] and (u["courseBySec"] or {}).get(sec) == cname]
+    if not members:
+        cache[(sec, cname)] = 10**9
+        return 10**9
+    best = 0
+    for s in range(model["periods"]):
+        reach = 0
+        for u in members:
+            if s in usd(u, R, model):
+                reach += min(u["count"], len(udd(u, R, model)))
+        best = max(best, reach)
+    cache[(sec, cname)] = best if best else 10**9
+    return cache[(sec, cname)]
+
+
 PENALTIES = {
     "rule": 5000,            # a soft faculty/GI rule is disobeyed (flat per rule)
     "preferFreeSlot": 500,   # each period in a soft-preferred-free slot
     "evenDistribution": 100, # each period above the even per-day share
     "individualSpread": 200, # teacher in P1 and last period the same week
     "nonConsecutive": 100,   # a day-exclusive pair course not on consecutive days
+    "periodConsistency45": 4500,  # = rule x 90% : count-4/5 class outside the dominant slot (§9)
+    "periodConsistency3": 3250,   # = rule x 65% : count-3 class outside the dominant slot (§9, soft only)
 }
 
 
@@ -198,6 +241,8 @@ def context_to_model(ctx):
         "dayExclusive": dx, "combined": combined_idx,
         "instructions": instr,
         "constraints": ctx.get("constraints") or {},
+        "_meta": {s["key"]: s for s in sections},
+        "_coh_exempt": {tuple(x) for x in (ctx.get("_cohExempt") or [])},
         "penalties": dict(PENALTIES, **(ctx.get("softPenalties") or {})),
         # parallel-group definitions (cp_solver._unit_slot_domain consumes them
         # via model["_parallel"] — without this the member availability shrinks
@@ -643,6 +688,86 @@ def teacher_rule_findings(code, entry, my_units, cells, pop_of, D, P, pen):
     return findings
 
 
+def period_coherence_findings(grids, model):
+    """Course period-coherence (spec §9): a course taught 3+ times a week in a
+    section should sit at ONE dominant period. Returns (issues, violations):
+      count 5   -> >=4 aligned; deviations >= 2 hard, deviation 1 documented soft
+      count 4   -> >=3 aligned; same structure
+      count 3   -> soft only, every deviation documented at 65% of rule base
+      count 1-2 -> no check
+    Grouping is per (section, course); ties on the dominant slot resolve to the
+    lowest slot index so PY/JS messages stay byte-identical."""
+    D = model["days"]; P = model["periods"]
+    pen = model["penalties"]
+    issues, violations = [], []
+    by_id = {u["id"]: u for u in model["units"]}
+    for section in model["sections"]:
+        key = section["key"]
+        g = grids.get(key)
+        if not g:
+            continue
+        slots_by_course = {}
+        for d in range(D):
+            for s in range(P):
+                uid = g[d][s]
+                if uid is None or uid not in by_id:
+                    continue
+                cname = by_id[uid]["courseBySec"].get(key)
+                if cname is None:
+                    continue
+                slots_by_course.setdefault(cname, []).append(s)
+        for cname in sorted(slots_by_course):
+            lst = slots_by_course[cname]
+            total = len(lst)
+            if total < 3:
+                continue
+            # structural exemption (spec §9): deviations within the statically
+            # attainable alignment (e.g. a day-pinned teacher like Tanveer can
+            # never place 3 QR classes in one slot) are documented soft, never
+            # hard. Computed lazily; identical maths as cp_solver's attain.
+            forced = 0
+            if total >= 4:
+                if _STRUCT_ATTAIN is None:
+                    _load_struct_attain()
+                attain = _struct_attain_for(key, cname, model, by_id)
+                forced = total - min(total, attain)
+            freq = {}
+            for s in lst:
+                freq[s] = freq.get(s, 0) + 1
+            best = max(freq.values())
+            dom = min(s for s, v in freq.items() if v == best)   # deterministic tie-break
+            dev = total - best
+            plab = _solver.SLOTS[dom]
+            exempt = model.get("_coh_exempt") or set()
+            eff_dev = dev if (key, cname) not in exempt else dev  # (cascade-exempt handled below)
+            over_forced = dev - forced if (key, cname) not in exempt else 0
+            if total >= 4:
+                if (key, cname) in exempt or over_forced <= 0:
+                    # sanctioned infeasibility: deviations stay documented soft
+                    if dev >= 1:
+                        violations.append({
+                            "rule": f"courseConsistency:{key}:{cname}",
+                            "detail": f"{key} {cname}: {dev} of {total} classes outside dominant period {plab} "
+                                      f"(alignment infeasible — documented exception)",
+                            "penalty": pen["periodConsistency45"] * dev})
+                elif over_forced >= 2:
+                    issues.append(
+                        f"{key} {cname}: {over_forced} of {total} classes outside one period "
+                        f"(dominant {plab}) — beyond the allowed 1 tolerance")
+                elif over_forced == 1:
+                    violations.append({
+                        "rule": f"courseConsistency:{key}:{cname}",
+                        "detail": f"{key} {cname}: 1 class outside dominant period {plab} (allowed at most 1)",
+                        "penalty": pen["periodConsistency45"]})
+            else:   # total == 3
+                if dev >= 1:
+                    violations.append({
+                        "rule": f"courseConsistency:{key}:{cname}",
+                        "detail": f"{key} {cname}: {dev} of 3 classes outside dominant period {plab}",
+                        "penalty": pen["periodConsistency3"] * dev})
+    return issues, violations
+
+
 def evaluate(grids, model):
     """Validate a solution (grids: unit ids per section cell) against the model.
 
@@ -704,6 +829,11 @@ def evaluate(grids, model):
             empty = sum(1 for d in range(D) for s in range(P) if g[d][s] is None)
             if empty:
                 issues.append(f"{key}: {empty} empty cells (inter sections fill the grid)")
+
+    # ---- course period-coherence (spec §9 general instruction, joint with personal rules)
+    coh_i, coh_v = period_coherence_findings(grids, model)
+    issues.extend(coh_i)
+    violations.extend(coh_v)
 
     # ---- teacher occupancy (deduped for dual-section/parallel units)
     occ = {}   # code -> list of [d, s, sec, countOnce]
@@ -1144,6 +1274,22 @@ def analyze_structured(grids, model):
                 _issue(f"{key}: {empty} empty cells (inter sections fill the grid)",
                        f"data@empty:{key}", None,
                        [C(key, d, s) for d in range(D) for s in range(P) if g[d][s] is None])
+
+    # ---- course period-coherence (spec §9)
+    coh_i, coh_v = period_coherence_findings(grids, model)
+    for msg in coh_i:
+        # reparse sec/course context from the shared formatter? no — just route by msg
+        _issue(msg, "cohrule@" + msg.split(" ", 1)[0])
+    for v in coh_v:
+        v2 = dict(v)
+        _, vkey, vcourse = v2["rule"].split(":", 2)
+        vuids = sorted(u["id"] for u in model["units"]
+                       if u["courseBySec"].get(vkey) == vcourse)
+        g2 = grids.get(vkey)
+        v2.update({"sig": f"cohrule@{vkey}", "units": vuids,
+                   "cells": [C(vkey, d, s) for d in range(D) for s in range(P)
+                             if g2 and g2[d][s] in vuids]})
+        violations.append(v2)
 
     # ---- teacher occupancy (deduped for dual-section/parallel units)
     occ = {}

@@ -116,6 +116,7 @@ if not FAST:
         check("T1 pool >= 10 target (documented: reachable across runs; single-run "
               "yield varies with machine load)", True, "single-run: %d" % len(ranked1))
     if ranked1:
+        model1 = CM.context_to_model(ctx1)   # rebuild: ctx carries _cohExempt after cascade
         b = ranked1[0]
         g = b["grids"]
         ev = CM.evaluate(g, model1)
@@ -1398,6 +1399,151 @@ try:
         check("F24d CP-SAT model builds with unknown-teacher units", False, str(e)[:120])
 except Exception as e:
     check("F24 unknown-teacher allocation wiring", False, str(e)[:160])
+
+# ------------------------------------------------------------------
+#  C4/§9  COURSE PERIOD-COHERENCE  (dominant-slot rule)
+#   count 5   -> hard floor: min 4 aligned; dev 1 documented soft 4500
+#   count 4   -> hard floor: min 3 aligned; dev 1 documented soft 4500
+#   count 3   -> soft only: dev * 3250 (no floor)
+#   count 1..2 -> no rule at all
+# ------------------------------------------------------------------
+print("-" * 72)
+print("C4: course period-coherence (spec §9)")
+print("-" * 72)
+try:
+    import canonical as _CNC, context_model as _CMC, cp_solver as _CSC
+    _ctxC = _CNC.solver_context(['inter-1', 'bs-1'])
+    _mC = _CMC.context_to_model(_ctxC)
+    _DC = _mC["days"]; _PC = _mC["periods"]
+
+    def _coh_grid(slot_seq):
+        """Empty grid; acc-5 unit of I.COM-I-A sits at slots slot_seq (one per day)."""
+        _g = {s["key"]: [[None] * _PC for _ in range(_DC)] for s in _mC["sections"]}
+        _uid = next(u["id"] for u in _mC["units"]
+                    if (u["courseBySec"] or {}).get("I.COM-I-A") == "Principles of Accounting"
+                    and u["count"] == 5)
+        for d, s in enumerate(slot_seq):
+            _g["I.COM-I-A"][d][s] = _uid
+        return _g
+
+    # -- count 5 scattered (dominant 3/5, dev 2) -> hard issue
+    _r = _CMC.evaluate(_coh_grid([0, 1, 0, 0, 2]), _mC)
+    _hs = [i for i in _r["issues"] if "outside one period" in str(i)]
+    check("C4a count-5 with 2 devs -> exactly one hard coherence issue", len(_hs) == 1)
+    if _hs:
+        check("C4b 5-course hard issue text (dominant P1 tie broken low) exact-match",
+              _hs[0] == "I.COM-I-A Principles of Accounting: 2 of 5 classes outside one period "
+                         "(dominant P1) — beyond the allowed 1 tolerance")
+    else:
+        check("C4b 5-course hard issue text (dominant P1 tie broken low) exact-match", False)
+    check("C4c hard case -> no coherence violations attached",
+          not any(str(v.get("rule", "")).startswith("courseConsistency") for v in _r["violations"]))
+
+    # -- count 5 with dev 1 -> documented soft @ 90% of rule base
+    _r = _CMC.evaluate(_coh_grid([0, 0, 0, 0, 1]), _mC)
+    _sv = [v for v in _r["violations"] if str(v["rule"]).startswith("courseConsistency")]
+    check("C4d count-5 with 1 dev -> exactly one documented soft violation", len(_sv) == 1)
+    if _sv:
+        check("C4e 5-course soft violation doc + pen (rule x 90%)",
+              _sv[0]["detail"] == "I.COM-I-A Principles of Accounting: 1 class outside "
+                                  "dominant period P1 (allowed at most 1)"
+              and _sv[0]["penalty"] == 4500
+              and _sv[0]["rule"] == "courseConsistency:I.COM-I-A:Principles of Accounting")
+    else:
+        check("C4e 5-course soft violation doc + pen (rule x 90%)", False)
+
+    # -- count 4 (Umair English I.COM-I-A) with dev 1 -> soft only, no hard
+    _g4 = _coh_grid([0, 0, 0, 0, 0])
+    _uid4 = next(u["id"] for u in _mC["units"]
+                 if (u["courseBySec"] or {}).get("I.COM-I-A") == "English" and u["count"] == 4)
+    for d, s in enumerate((2, 2, 2, 3)):
+        _g4["I.COM-I-A"][d][s] = _uid4
+    _r = _CMC.evaluate(_g4, _mC)
+    check("C4f count-4 with 1 dev -> documented soft only, no hard issue",
+          not any("outside one period" in str(i) for i in _r["issues"])
+          and len([v for v in _r["violations"] if str(v["rule"]) ==
+                   "courseConsistency:I.COM-I-A:English"]) == 1)
+
+    # -- count 3 scattered (each slot 1) -> dev 2, soft only
+    _g3 = _coh_grid([0, 0, 0, 0, 0])
+    _uid3 = next(u["id"] for u in _mC["units"]
+                 if (u["courseBySec"] or {}).get("I.COM-I-B") == "Principles of Commerce" and u["count"] == 3)
+    for d, s in enumerate((0, 1, 2)):
+        _g3["I.COM-I-B"][d][s] = _uid3
+    _r = _CMC.evaluate(_g3, _mC)
+    _v3 = [v for v in _r["violations"] if str(v["rule"]) ==
+           "courseConsistency:I.COM-I-B:Principles of Commerce"]
+    check("C4g count-3 scattered -> soft only, no hard issue",
+          not any("outside one period" in str(i) for i in _r["issues"]) and len(_v3) == 1)
+    if _v3:
+        check("C4h count-3 soft violation doc + pen (dev x rule x 65%)",
+              _v3[0]["detail"] == "I.COM-I-B Principles of Commerce: 2 of 3 classes outside dominant period P1"
+              and _v3[0]["penalty"] == 3250 * 2)
+    else:
+        check("C4h count-3 soft violation doc + pen (dev x rule x 65%)", False)
+
+    # -- count 2 -> no rule at all
+    _g2 = _coh_grid([0, 0, 0, 0, 0])
+    _uid2 = next(u["id"] for u in _mC["units"]
+                 if (u["courseBySec"] or {}).get("ICS-I-A") == "Tarjama-tul-Quran" and u["count"] == 2)
+    for d, s in enumerate((0, 1)):
+        _g2["ICS-I-A"][d][s] = _uid2
+    _r = _CMC.evaluate(_g2, _mC)
+    check("C4i count-2 course -> no coherence issue/violation of any kind",
+          not any("outside one period" in str(i) for i in _r["issues"])
+          and not any(str(v["rule"]).startswith("courseConsistency") for v in _r["violations"]))
+
+    # -- CP-SAT presence: the hard-floored groups exist for count-4/5 courses
+    try:
+        _bC = _CSC.build_from_context(_mC)
+        _vrC = [x for x in _bC[0].Proto().variables
+                if x.name.startswith("cohds_")]
+        check("C4j CP-SAT model carries dominant-slot variables for coherence groups",
+              len(_vrC) >= 10)
+    except Exception as e:
+        check("C4j CP-SAT model carries dominant-slot variables for coherence groups",
+              False, str(e)[:120])
+
+    # -- JS parity: identical findings on the count-5 hard case
+    import subprocess as _spC
+    _js_code = r"""
+global.IMPCC_POPULATIONS = { POPULATIONS: require('./populations.js').POPULATIONS };
+global.IMPCC_DATA = require('./data.js');
+const CANON = require('./canonical.js');
+const JS = require('./context_solver.js');
+const model = JS.contextToModel(CANON.solverContext(['inter-1','bs-1']));
+const D = model.days, P = model.periods;
+const grids = {};
+for (const s of model.sections) grids[s.key] = Array.from({length: D}, () => Array(P).fill(null));
+let uid = null;
+for (const u of model.units) {
+  if (u.courseBySec['I.COM-I-A'] === 'Principles of Accounting' && u.count === 5) { uid = u.id; break; }
+}
+const seq = [0, 1, 0, 0, 2];
+for (let d = 0; d < 5; d++) grids['I.COM-I-A'][d][seq[d]] = uid;
+const rep = JS.evaluate(grids, model);
+console.log(JSON.stringify({
+  issues: rep.issues.filter(i => String(i).includes('outside one period')),
+  cohViolations: rep.violations.filter(v => String(v.rule).startsWith('courseConsistency'))
+}));
+"""
+    _res = _spC.run(["node", "-e", _js_code], capture_output=True, text=True, cwd=".")
+    _ok = False; _note = ""
+    if _res.returncode == 0:
+        try:
+            _jsR = __import__("json").loads(_res.stdout.strip())
+            _jsH = _jsR["issues"]
+            _pyH = [i for i in _CMC.evaluate(_coh_grid([0, 1, 0, 0, 2]), _mC)["issues"]
+                    if "outside one period" in i]
+            _ok = (_jsH == _pyH and _jsR["cohViolations"] == [])
+            _note = "msgs identical" if _ok else "diff: %r vs %r" % (_jsH[:1], _pyH[:1])
+        except Exception as e:
+            _note = str(e)[:100]
+    else:
+        _note = "exit %d %s" % (_res.returncode, _res.stderr[:100])
+    check("C4k JS mirror: byte-identical hard message on 5-course 2-dev case", _ok, _note)
+except Exception as e:
+    check("C4 course period-coherence block", False, str(e)[:160])
 
 total = passed + failures
 print("RESULT: %d/%d checks passed%s" %

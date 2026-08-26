@@ -48,7 +48,9 @@
     preferFreeSlot: 500,   // each period in a soft-preferred-free slot
     evenDistribution: 100, // each period above the even per-day share
     individualSpread: 200, // teacher in P1 and last period the same week
-    nonConsecutive: 100    // a day-exclusive pair course not on consecutive days
+    nonConsecutive: 100,   // a day-exclusive pair course not on consecutive days
+    periodConsistency45: 4500,  // = rule x 90% : count-4/5 class outside the dominant slot (§9)
+    periodConsistency3: 3250    // = rule x 65% : count-3 deviation (§9, soft only)
   };
 
   // ------------------------------------------------------------- helpers
@@ -216,7 +218,8 @@
       constraints: ctx.constraints || {},
       penalties: Object.assign({}, PENALTIES, ctx.softPenalties || {}),
       _parallelGroups: rel.parallelGroups || [],
-      _metaBySec: metaBySec
+      _metaBySec: metaBySec,
+      _cohExempt: new Set((ctx._cohExempt || []).map(x => x[0] + "|" + x[1]))
     };
   }
 
@@ -784,6 +787,73 @@
     return findings;
   }
 
+  function periodCoherenceFindings(grids, model) {
+    // Mirror of context_model.period_coherence_findings (spec §9) — byte-identical msgs.
+    const D = model.days, P = model.periods;
+    const pen = model.penalties;
+    const issues = [], violations = [];
+    const byId = {};
+    for (const u of model.units) byId[u.id] = u;
+    for (const section of model.sections) {
+      const key = section.key;
+      const g = grids[key];
+      if (!g) continue;
+      const slotsByCourse = {};
+      for (let d = 0; d < D; d++) for (let s = 0; s < P; s++) {
+        const uid = g[d][s];
+        if (uid === null || byId[uid] === undefined) continue;
+        const cname = byId[uid].courseBySec[key];
+        if (cname === undefined || cname === null) continue;
+        (slotsByCourse[cname] = slotsByCourse[cname] || []).push(s);
+      }
+      for (const cname of Object.keys(slotsByCourse).sort()) {
+        const lst = slotsByCourse[cname];
+        const total = lst.length;
+        if (total < 3) continue;
+        const freq = {};
+        for (const s of lst) freq[s] = (freq[s] || 0) + 1;
+        let best = 0;
+        for (const k in freq) if (freq[k] > best) best = freq[k];
+        let dom = null;
+        for (const k in freq) {
+          if (freq[k] === best && (dom === null || (+k) < dom)) dom = +k;
+        }
+        const dev = total - best;
+        const plab = PERIOD_LABELS[dom];
+        // structural + sanctioned exemptions (spec §9, mirrors _struct_attain_for):
+        // cascade-exempt partitions (from ctx._cohExempt) keep deviations doc-soft.
+        const exempt = model._cohExempt || new Set();
+        const exKey = key + "|" + cname;
+        if (total >= 4 && exempt.has(exKey)) {
+          if (dev >= 1) {
+            violations.push({ rule: "courseConsistency:" + key + ":" + cname,
+              detail: key + " " + cname + ": " + dev + " of " + total + " classes outside dominant period " + plab
+                      + " (alignment infeasible — documented exception)",
+              penalty: pen["periodConsistency45"] * dev });
+          }
+          continue;
+        }
+        if (total >= 4) {
+          if (dev >= 2) {
+            issues.push(key + " " + cname + ": " + dev + " of " + total + " classes outside one period "
+                        + "(dominant " + plab + ") — beyond the allowed 1 tolerance");
+          } else if (dev === 1) {
+            violations.push({ rule: "courseConsistency:" + key + ":" + cname,
+              detail: key + " " + cname + ": 1 class outside dominant period " + plab + " (allowed at most 1)",
+              penalty: pen["periodConsistency45"] });
+          }
+        } else {
+          if (dev >= 1) {
+            violations.push({ rule: "courseConsistency:" + key + ":" + cname,
+              detail: key + " " + cname + ": " + dev + " of 3 classes outside dominant period " + plab,
+              penalty: pen["periodConsistency3"] * dev });
+          }
+        }
+      }
+    }
+    return { issues: issues, violations: violations };
+  }
+
   function evaluate(grids, model) {
     const D = model.days, P = model.periods;
     const issues = [], violations = [];
@@ -844,6 +914,11 @@
         if (empty) issues.push(key + ": " + empty + " empty cells (inter sections fill the grid)");
       }
     }
+
+    // ---- course period-coherence (spec §9)
+    const coh = periodCoherenceFindings(grids, model);
+    for (const i2 of coh.issues) issues.push(i2);
+    for (const v2 of coh.violations) violations.push(v2);
 
     // ---- teacher occupancy (deduped across dual sections / groups)
     const occ = {};

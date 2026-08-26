@@ -449,7 +449,7 @@ def _unit_day_domain(u, R, model):
     return sorted(dom)
 
 
-def build_from_context(model, objective="default", collect=None):
+def build_from_context(model, objective="default", collect=None, coh_off=None):
     from solver import _slotset, _dayset, SLOT_OF, DAY_OF, hardness_of  # local (mirrors soft_raise)
     """CP-SAT model for a context model (context_model.context_to_model output).
 
@@ -1204,6 +1204,66 @@ def build_from_context(model, objective="default", collect=None):
                 m.Add(gap >= 0)
                 soft_terms.append((wng, gap))
 
+    # =========================================================
+    # COURSE PERIOD-COHERENCE (spec §9) — per (section, course) with count >= 3:
+    #   count 5   -> hard floor: >= 4 pieces in one dominant slot; dev 1 soft 4500
+    #   count 4   -> hard floor: >= 3 aligned;                  dev 1 soft 4500
+    #   count 3   -> soft only: doc + charge 3250 per deviation (no floor)
+    #   count 1..2  -> no rule at all
+    # Structural exemption (§9): a teacher's personal rules can make the floor
+    # unattainable (e.g. day-pinned to 2 days) — the floor relaxes to the
+    # statically attainable alignment, deviations beyond that stay hard.
+    # Piece slots are shared per unit; combined units appear in each member
+    # section's course group separately (each keeps its own ds).
+    # coh_off: iterable of (sec, course) keys whose HARD floor is skipped
+    # (tier-cascade fallback used by generate_context; soft charge stays).
+    # =========================================================
+    coh_off_set = set(coh_off or [])
+    _coh_groups = {}
+    for u in model["units"]:
+        for sec in u["secs"]:
+            c = u["courseBySec"].get(sec)
+            if c is None:
+                continue
+            _coh_groups.setdefault((sec, c), set()).add(u["id"])
+    build_from_context._last_coh_keys = []
+    for (sec, course), uids in sorted(_coh_groups.items()):
+        members = [u for u in model["units"] if u["id"] in sorted(uids)]
+        pieces = [(u["id"], p) for u in members for p in range(u["count"])]
+        cnt = len(pieces)
+        if cnt < 3:
+            continue
+        build_from_context._last_coh_keys.append((sec, course))
+        # static attainable alignment: max over slots s of sum-min(count,ndays)
+        attain = 0
+        for s in range(Pg):
+            reach = 0
+            for u in members:
+                if s in _unit_slot_domain(u, R, model):
+                    reach += min(u["count"], len(_unit_day_domain(u, R, model)))
+            attain = max(attain, reach)
+        forced = cnt - min(cnt, attain)
+        floor = cnt - max(1, forced)
+        if floor < 3:
+            continue   # nothing above 3-in-one-slot attainable — leave it to the soft shuffle
+        ds = m.NewIntVar(0, Pg - 1, f"cohds_{sec}_{course}")
+        sames = []
+        for (uid, p) in pieces:
+            b = m.NewBoolVar(f"cohs_{sec}_{course}_{uid}_{p}")
+            m.Add(piece_slots[uid][p] == ds).OnlyEnforceIf(b)
+            m.Add(piece_slots[uid][p] != ds).OnlyEnforceIf(b.Not())
+            sames.append(b)
+        dev = m.NewIntVar(0, cnt, f"cohdev_{sec}_{course}")
+        m.Add(dev == cnt - sum(sames))
+        if cnt >= 4:
+            if (sec, course) not in coh_off_set:
+                m.Add(sum(sames) >= floor)   # hard floor: at most (cnt-floor) deviations
+            ch = m.NewIntVar(0, cnt, f"cohch_{sec}_{course}")
+            m.Add(ch >= dev - forced)        # charge only deviations beyond the forced floor
+            soft_terms.append((int(pen["periodConsistency45"]), ch))
+        else:
+            soft_terms.append((int(pen["periodConsistency3"]), dev))
+
     # ---- soft: individual spread + even distribution
     if model["instructions"].get("softIndividualSpread"):
         for t, keys in teacher_keys.items():
@@ -1373,6 +1433,9 @@ def standalone_reference(population, time_per_seed=45, n_seeds=1):
             "allPenalized": fallback, "solutionsConsidered": len(ranked)}
 
 
+_COH_TIER_CACHE = {}
+
+
 def generate_context(context, n_seeds=2, time_per_seed=45, max_solutions=0):
     """Solve a context (canonical.solver_context output). Returns (ranked, any_optimal):
     ranked = list of {grids, score, penalty, violations, total}, best first.
@@ -1384,8 +1447,92 @@ def generate_context(context, n_seeds=2, time_per_seed=45, max_solutions=0):
         return [], False   # nothing to solve (e.g. inter-2 before data entry)
     results = {}
     any_optimal = False
+
+    # ==========================================================
+    # Coherence tier cascade (spec §9 structural exemption): the
+    # (sec, course) hard floors can be JOINTLY infeasible under teacher
+    # personal rules across linked sections. Walk a deterministic cascade —
+    # first feasible tier keeps its floors; later tiers demote more groups
+    # to soft-steered documented mode. Cached per section signature.
+    # ==========================================================
+    model.setdefault("_coh_exempt", set())
+
+    def _build_probe():
+        built0 = build_from_context(model)
+        if built0 is None:
+            return None, None
+        return built0, getattr(build_from_context, "_last_coh_keys", [])
+
+    import hashlib, json as _json
+    _sig_j = _json.dumps(
+        {"secs": [(s["key"], sorted(s.get("effDays", s.get("activeDays", []) or [])))
+                  for s in model["sections"]],
+         "units": sorted((u["id"], u["teacher"], tuple(sorted(u["secs"])), u["count"],
+                          (u["courseBySec"] or {}).get(u["secs"][0]))
+                         for u in model["units"]),
+         "R": model.get("constraints")},
+        sort_keys=True, default=str)
+    _popsig = (tuple(sorted(s["key"] for s in model["sections"])),
+               hashlib.sha1(_sig_j.encode()).hexdigest()[:12])
+    active_off = _COH_TIER_CACHE.get(_popsig)
+    _probe_grids = []
+    if active_off is None:
+        class _FindOne(cp_model.CpSolverSolutionCallback):
+            def __init__(sself):
+                super().__init__()
+                sself.hit = False
+                sself.grids_found = []          # decoded grids kept for post-cascade merge
+            def on_solution_callback(sself):
+                sself.hit = True
+                try:
+                    sself.grids_found.append(
+                        decode_context(sself, model, builtT[1], builtT[2]))
+                except Exception:
+                    pass
+                sself.StopSearch()
+        built0, all_keys0 = _build_probe()
+        if built0 is None:
+            return [], False
+        # deterministic tier cascade: all floors → inter only → bs only → none.
+        _lvl_of = {s["key"]: s.get("level") for s in model["sections"]}
+        inter_keys = [k for k in all_keys0 if _lvl_of.get(k[0]) == "inter"]
+        bs_keys = [k for k in all_keys0 if _lvl_of.get(k[0]) != "inter"]
+        tiers = [frozenset(), frozenset(bs_keys), frozenset(inter_keys),
+                 frozenset(all_keys0)]
+        active_off = None
+        _probe_grids = []
+        for offset in tiers:
+            builtT = build_from_context(model, coh_off=offset) if offset else built0
+            if builtT is None:
+                return [], False
+            _fo = _FindOne()
+            probe = cp_model.CpSolver()
+            probe.parameters.max_time_in_seconds = float(time_per_seed)
+            probe.parameters.num_search_workers = int(os.environ.get("CP_SAT_WORKERS", "8"))
+            probe.Solve(builtT[0], _fo)
+            if _fo.hit:
+                active_off = frozenset(offset)
+                _probe_grids = _fo.grids_found
+                break
+        if active_off is None:
+            active_off = frozenset(all_keys0)   # absolutely nothing floors hard
+        _COH_TIER_CACHE[_popsig] = active_off
+    for k in active_off:
+        model["_coh_exempt"].add(k)
+    context["_cohExempt"] = sorted(map(list, active_off))   # persist with the solution context
+
+    for pg in _probe_grids:
+        ev = CM.evaluate(pg, model)
+        if not ev["issues"]:
+            key = _json_key(pg)
+            if key not in results:
+                sc = CM.shuffle_score(pg, model)
+                results[key] = {"grids": pg, "score": sc, "penalty": ev["penalty"],
+                                "violations": ev["violations"],
+                                "total": sc + ev["penalty"]}
+
     for seed in range(n_seeds):
-        built = build_from_context(model)
+        built = build_from_context(model, coh_off=active_off)
         if built is None:
             return [], False
         m, piece_slots, piece_days, piece_keys = built

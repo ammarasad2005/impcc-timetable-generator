@@ -621,6 +621,28 @@ def validate(grids, R=None):
         for subj, teacher, count in sec["subs"]:
             if counts[subj] != count:
                 issues.append(f"{sec['key']} {subj} load {counts[subj]} != {count}")
+        # ---- course period-coherence (spec §9, classic-grid mirror of context_model)
+        for cname, total in counts.items():
+            if total < 3:
+                continue
+            slots = [s for d in range(Dg) for s in range(Pg)
+                     if g[d][s] is not None and UNITS[g[d][s]]["subject"] == cname]
+            freq = {}
+            for s in slots:
+                freq[s] = freq.get(s, 0) + 1
+            best = max(freq.values())
+            dom = min(s for s, v in freq.items() if v == best)
+            dev = total - best
+            plab = SLOTS[dom]
+            if total >= 4:
+                if dev >= 2:
+                    issues.append(f"{sec['key']} {cname}: {dev} of {total} classes outside one period "
+                                  f"(dominant {plab}) — beyond the allowed 1 tolerance")
+                elif dev == 1:
+                    issues.append(f"(soft) {sec['key']} {cname}: 1 class outside dominant period "
+                                  f"{plab} (allowed at most 1)")
+            elif dev >= 1:
+                issues.append(f"(soft) {sec['key']} {cname}: {dev} of 3 classes outside dominant period {plab}")
 
     occ = defaultdict(list)
     for sec in SECTIONS:
@@ -733,7 +755,8 @@ def validate(grids, R=None):
         if not found:
             issues.append(f"non-overriding failed {x}")
 
-    return len(issues) == 0, issues
+    hard = [i for i in issues if not str(i).startswith("(soft)")]
+    return len(hard) == 0, issues
 
 def score(grids):
     pen = 0
