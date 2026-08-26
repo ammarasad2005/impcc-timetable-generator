@@ -723,17 +723,30 @@
       }
     }
     for (const e of ((model.instructions.subjectForbiddenSlotDays) || [])) {
+      // generalized 'forbid cells' kernel matcher (dynamic rules lower here too)
+      const hit = (u, sec) => {
+        if (e.subject && courseOf(u, sec) !== e.subject) return false;
+        if (e.subjects && e.subjects.length && e.subjects.indexOf(courseOf(u, sec)) < 0) return false;
+        if (e.sections && e.sections.length && e.sections.indexOf(sec) < 0) return false;
+        if (e.teachers && e.teachers.length) {
+          const mems = u.members || [];
+          if (e.teachers.indexOf(u.teacher) < 0 && !mems.some(m => e.teachers.indexOf(m) >= 0)) return false;
+        }
+        if (e.scope && secStream(sec) !== e.scope) return false;
+        return true;
+      };
+      const lbl = [e.subject, (e.subjects || []).join('/'), (e.sections || []).join(','), (e.teachers || []).join(',')]
+                  .filter(Boolean).join(' ') || 'cells';
+      const ds = (e.days && e.days.length) ? daySet(e.days) : null;
+      const ss = (e.slots && e.slots.length) ? slotSet(e.slots) : null;
       for (const u of units) {
         for (const sec of u.secs) {
-          if (courseOf(u, sec) !== e.subject) continue;
-          if (e.scope && secStream(sec) !== e.scope) continue;
+          if (!hit(u, sec)) continue;
           const g = grids[sec];
           if (!g) continue;
-          const ds = daySet(e.days);
-          const ss = slotSet(e.slots);
           for (let d = 0; d < D; d++) for (let s = 0; s < P; s++) {
-            if (g[d][s] === u.id && ds.has(d) && ss.has(s)) {
-              issues.push(sec + " " + e.subject + " at forbidden window " + DAY_NAMES[d] + " " + PERIOD_LABELS[s]);
+            if (g[d][s] === u.id && (!ds || ds.has(d)) && (!ss || ss.has(s))) {
+              issues.push(sec + " " + lbl + " at forbidden window " + DAY_NAMES[d] + " " + PERIOD_LABELS[s]);
             }
           }
         }

@@ -697,13 +697,31 @@ def build_from_context(model, objective="default", collect=None):
     # ---- subject x day x slot forbidden windows (institution rule, e.g.
     # "Physics must not be scheduled in the last two periods on Friday"):
     # a hard ban — the unit's pieces may never sit in those exact cells.
+    # generalized 'forbid cells' kernel: match by subject(s) and/or sections
+    # and/or teacher code(s), optional stream scope, over a days x slots window
+    # (empty day/slot lists mean 'all'). DYNAMIC custom rules from the admin
+    # registry lower to entries of this same list (see solver_context), so they
+    # are real constraints here, not display-only text.
     for e in ((model.get("instructions") or {}).get("subjectForbiddenSlotDays") or []):
-        dset = _dayset(e.get("days") or [])
-        sset = _slotset(e.get("slots") or [])
+
+        def _dyn_hit(u, sec, e=e):
+            if e.get("subject") and u["courseBySec"].get(sec) != e.get("subject"):
+                return False
+            if e.get("subjects") and u["courseBySec"].get(sec) not in e["subjects"]:
+                return False
+            if e.get("sections") and sec not in e["sections"]:
+                return False
+            if e.get("teachers") and u.get("teacher") not in e["teachers"] \
+                    and not set(u.get("members") or []).intersection(e["teachers"]):
+                return False
+            if e.get("scope") and _sec_stream(sec) != e["scope"]:
+                return False
+            return True
+
+        dset = _dayset(e.get("days") or [d for d in range(Dg)])
+        sset = _slotset(e.get("slots") or ["P%d" % (s + 1) for s in range(Pg)])
         for u in model["units"]:
-            secs = [sec for sec in u["secs"]
-                    if u["courseBySec"].get(sec) == e.get("subject")
-                    and (not e.get("scope") or _sec_stream(sec) == e["scope"])]
+            secs = [sec for sec in u["secs"] if _dyn_hit(u, sec)]
             if not secs:
                 continue
             for p in range(u["count"]):

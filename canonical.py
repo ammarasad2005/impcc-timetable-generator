@@ -226,6 +226,55 @@ def _population_level(pid):
     return "bs" if pid == "bs-1" else "inter"
 
 
+BUILTIN_GI_TYPES = {
+    "no_same_subject_same_day", "same_subject_same_day_allowed", "avoid_shuffling",
+    "non_overriding", "consecutive_days_for_2pw", "subject_forbidden_days",
+    "section_off_days", "first_last_period_occupied", "combined_classes",
+    "soft_individual_spread", "subject_forbidden_slots_on_days",
+}
+
+
+def _rule_registry(overrides=None):
+    """Dynamic-rule definitions: admin's live registry (sent per request) on
+    top of the bundled seed. Everything is validated kernel-only upstream."""
+    reg = {}
+    seed = get().get("ruleRegistry") or []
+    for d in seed:
+        if isinstance(d, dict) and d.get("id"):
+            reg[d["id"]] = dict(d)
+    ov = (overrides or {}).get("rule_registry") or {}
+    if isinstance(ov, dict):
+        for k, d in ov.items():
+            if isinstance(d, dict) and (d.get("id") == k or not d.get("id")) and d.get("enabled", True):
+                dd = dict(d)
+                dd["id"] = k
+                reg[k] = dd
+    return reg
+
+
+def _lower_dyn_entry(e, defn, n2c):
+    """Compile one dynamic-rule entry into the generalized window-ban
+    instruction (the forbid_cells kernel). Params map 1:1 onto matcher
+    fields; teacher names resolve to codes; no generated code executes."""
+    p = e.get("params") or {}
+    out = {"dsl": (defn.get("label") or e.get("type", "custom"))}
+    if p.get("subject"):
+        out["subject"] = str(p["subject"])
+    if isinstance(p.get("subjects"), list) and p["subjects"]:
+        out["subjects"] = [str(x) for x in p["subjects"]]
+    if isinstance(p.get("sections"), list) and p["sections"]:
+        out["sections"] = [str(x) for x in p["sections"]]
+    if isinstance(p.get("teachers"), list) and p["teachers"]:
+        out["teachers"] = [n2c.get(str(t), str(t)) for t in p["teachers"]]
+    if p.get("stream"):
+        out["scope"] = str(p["stream"])
+    if isinstance(p.get("days"), list) and p["days"]:
+        out["days"] = [str(x).upper() for x in p["days"]]
+    if isinstance(p.get("slots"), list) and p["slots"]:
+        out["slots"] = [str(x).upper() for x in p["slots"]]
+    return out
+
+
 def solver_context(population_ids, overrides=None):
     """Build a solve context for one SHIFT's populations (shift 1: ["inter-1",
     "bs-1"] solved jointly; shift 2: ["inter-2"]). Schedule configs come from
@@ -256,6 +305,7 @@ def solver_context(population_ids, overrides=None):
         except (TypeError, ValueError):
             pass
 
+    _dyn_reg = _rule_registry(ov)
     gi = _gi_rules(pids)
 
     # the admin's CURRENT per-population general-instruction lists override the
@@ -339,6 +389,11 @@ def solver_context(population_ids, overrides=None):
             {"subject": e["params"].get("subject"), "days": e["params"].get("days", []),
              "slots": e["params"].get("slots", []), "scope": e["params"].get("scope")}
             for e in gi.get("subject_forbidden_slots_on_days", []) if e.get("params")
+        ] + [
+            _lower_dyn_entry(e, _dyn_reg.get(e["type"]) or {}, name_to_code())
+            for _t, _entries in gi.items() if _t not in BUILTIN_GI_TYPES
+            for e in (_entries or [])
+            if e.get("type") in _dyn_reg and e.get("enabled", True) is not False
         ],
         "softIndividualSpread": bool(gi.get("soft_individual_spread")),
     }
