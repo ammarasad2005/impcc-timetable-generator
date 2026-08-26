@@ -454,6 +454,7 @@ RULE TYPES (use EXACTLY these):
 - "non_overriding" params {"sections": ["I.COM-I-A",...], "subjects": ["Subject A", "Subject B"]} — each listed section must have a period of subject A where the OTHER sections do NOT have subject B
 - "consecutive_days_for_2pw" params {} — subjects with 2 classes/week sit on consecutive days
 - "subject_forbidden_days" params {"subject": "<name>", "days": ["FRI"], "scope": "I.COM"|"ICS"|null} — a subject must not be scheduled on those days (scope optional)
+- "subject_forbidden_slots_on_days" params {"subject": "<name>", "days": ["FRI"], "slots": ["P4","P5"], "scope": "I.COM"|"ICS"|null} — a subject must not be scheduled in those SPECIFIC periods on those days (scope optional). Prefer this over a full-day ban whenever the statement mentions specific periods ("last two periods", "P1", "first period").
 - "section_off_days" params {"sections": ["BSAF-SEM-VII",...], "days": ["FRI"]} — whole sections have no classes those days
 - "first_last_period_occupied" params {"libraryWorkLabel": "Library Work"} — free boundary periods not allowed; free middle periods become library work
 - "combined_classes" params {"groups": ["<id>"]} — co-taught section pairs at identical slots (admin links groups in the data)
@@ -472,13 +473,16 @@ Output: {"type":"section_off_days","params":{"sections":["BSAF-SEM-VII","BSCM-SE
 
 Input: "Business Mathematics in I.Com must not be set on Friday"
 Output: {"type":"subject_forbidden_days","params":{"subject":"Business Mathematics","days":["FRI"],"scope":"I.COM"},"natural":"Business Mathematics in I.Com must not be set on Friday","confidence":0.95,"notes":"Scoped to I.Com sections.","unmapped":[]}
+
+Input: "Physics must not be scheduled in the last two periods on Friday"
+Output: {"type":"subject_forbidden_slots_on_days","params":{"subject":"Physics","days":["FRI"],"slots":["P4","P5"],"scope":null},"natural":"Physics must not be scheduled in the last two periods on Friday","confidence":0.95,"notes":"Last two periods of a 5-period day are P4 and P5.","unmapped":[]}
 """
 
 GI_RULE_TYPES = {
     "no_same_subject_same_day", "same_subject_same_day_allowed", "avoid_shuffling",
     "non_overriding", "consecutive_days_for_2pw", "subject_forbidden_days",
     "section_off_days", "first_last_period_occupied", "combined_classes",
-    "soft_individual_spread",
+    "soft_individual_spread", "subject_forbidden_slots_on_days",
 }
 
 
@@ -535,3 +539,202 @@ def translate_general_instruction(text):
         "confidence": float(parsed.get("confidence") or 0),
         "unmapped": parsed.get("unmapped") or [],
     }
+
+# =====================================================================
+# DYNAMIC RULES — the self-extending ruleset
+#
+# Fixed kernel v1: forbid_cells — a HARD ban of matched unit pieces from
+# (day x slot) cell windows, matched by subject / subjects / sections /
+# teachers / stream scope. A dynamic rule DEFINITION is data only (never
+# generated code); the authoring call proposes one, we validate it hard,
+# and it enters the registry that ships on the publish channel.
+
+DYN_KERNEL_KINDS = {"forbid_cells"}
+_DYN_SLUG = re.compile(r"^[a-z][a-z0-9_]{2,39}$")
+_DYN_LIST_LIMIT = 12
+_DYN_PARAM_KEYS = {"subject", "subjects", "sections", "teachers", "stream",
+                   "days", "slots", "libraryWorkLabel"}
+
+
+def ruleset_context_md(registry):
+    """The living ruleset document the authoring call reasons over: the
+    kernel vocabulary + every dynamic rule currently registered."""
+    lines = [
+        "# IMPCC dynamic ruleset (kernel v1: forbid_cells)",
+        "",
+        "Enforcement kernel: forbid_cells — permanently BAN matched teaching units",
+        "from every (day, slot) cell selected by the matchers. Matchers (all optional):",
+        "subject | subjects[] | sections[] | teachers[] | stream (I.COM/ICS/BBA) |",
+        "days[] (MON..SAT) | slots[] (P1..P8). Empty days/slots list means 'all'.",
+        "Matchers combine with AND. A rule can only forbid cells, never schedule.",
+        "",
+        "Currently registered dynamic rules:",
+    ]
+    if not registry:
+        lines.append("  (none yet)")
+    for slug, d in sorted((registry or {}).items()):
+        en = d.get("enforcement") or {}
+        lst = sorted((en.get("matchers") or {}).keys())
+        lines.append("- `%s` — %s%s" % (slug, d.get("label", slug),
+                                        (" [matchers: " + ", ".join(lst) + "]") if lst else ""))
+        if d.get("summary"):
+            lines.append("    " + str(d["summary"]))
+    return "\n".join(lines)
+
+
+def validate_dyn_rule(defn, existing_ids=None):
+    """Hard validation of an authored rule definition; returns a cleaned copy
+    or None (caller rejects / falls back). Kernel kinds only, no code."""
+    if not isinstance(defn, dict):
+        return None
+    rid = str(defn.get("id") or "").strip().lower()
+    if not _DYN_SLUG.match(rid):
+        return None
+    if existing_ids and rid in set(existing_ids):
+        return None
+    if rid in GI_RULE_TYPES:
+        return None
+    label = str(defn.get("label") or "").strip()[:120]
+    if not label:
+        return None
+    summary = str(defn.get("summary") or "").strip()[:400]
+    params = defn.get("params_schema") or {}
+    if not isinstance(params, dict) or len(params) > 6:
+        return None
+    for k in params:
+        if str(k) not in _DYN_PARAM_KEYS:
+            return None
+    en = defn.get("enforcement") or {}
+    if en.get("kind") not in DYN_KERNEL_KINDS:
+        return None
+    matchers = en.get("matchers") or {}
+    if not isinstance(matchers, dict) or not matchers:
+        return None
+    clean_matchers = {}
+    for k, v in matchers.items():
+        if k not in ("subject", "subjects", "sections", "teachers", "stream", "days", "slots"):
+            return None
+        if k in ("subject", "stream"):
+            if not isinstance(v, str) or not (0 < len(v) <= 48):
+                return None
+            clean_matchers[k] = v.upper() if k == "stream" else v
+        else:
+            if not isinstance(v, list) or not v or len(v) > _DYN_LIST_LIMIT:
+                return None
+            if not all(isinstance(x, str) and 0 < len(x) <= 48 for x in v):
+                return None
+            clean_matchers[k] = [x.upper() for x in v] if k in ("days", "slots") else list(v)
+    return {"id": rid, "label": label, "summary": summary,
+            "params_schema": {str(k): str(v)[:80] for k, v in params.items()},
+            "enforcement": {"kind": en["kind"], "matchers": clean_matchers},
+            "enabled": True, "authored": True}
+
+_AUTHOR_PROMPT_LINES = [
+    "You design ONE new scheduling rule for a school timetable solver.",
+    "",
+    "The constraint below does NOT match any existing rule type, so it needs a NEW",
+    "rule definition that compiles onto the solver's fixed enforcement kernel.",
+    "",
+    "«ruleset»",
+    "",
+    "THE CONSTRAINT:",
+    "«««detail»»»",
+    "«context»",
+    "",
+    "Return ONLY a JSON object:",
+    '  {"id": "<unique snake_case slug, 3-40 chars>",',
+    '   "label": "<=12 words human label>",',
+    '   "summary": "<what it enforces, <=60 words; quote the evidence>",',
+    '   "params_schema": {"<matcher key>": "<short hint for admins>"},',
+    '   "enforcement": {"kind": "forbid_cells",',
+    '                    "matchers": { the fields the rule itself FIXES:',
+    '                       subject/subjects/sections/teachers as written in the constraint;',
+    '                       optionally stream, days[], slots[] when the constraint fixes them',
+    '                    }',
+    '   }',
+    "  }",
+    "",
+    "Rules:",
+    "- id must be a NEW unique slug (never reuse an existing id).",
+    "- matchers may ONLY use: subject, subjects, sections, teachers, stream, days, slots.",
+    "- days uses MON..SAT; slots uses P1..P8. Copy subject/section/teacher names verbatim.",
+    "- Hard-code only what the constraint actually fixes; leave anything variable as a",
+    "  parameter (params_schema) for admins to fill per use.",
+    "- If the description is too vague to fix ANY matcher, return exactly:",
+    '  {"unresolvable": true}',
+]
+
+
+def _openrouter_json(messages, max_tokens=3600):
+    """One strict call; returns the parsed JSON object or a string error."""
+    api_key = os.environ.get("LLM_API_KEY")
+    if not api_key:
+        return "LLM not configured — set LLM_API_KEY on the backend"
+    base_url = os.environ.get("LLM_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
+    model = os.environ.get("LLM_MODEL", "google/gemma-4-26b-a4b-it:free")
+    payload = json.dumps({"model": model, "messages": messages,
+                          "temperature": 0, "max_tokens": max_tokens}).encode()
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + api_key,
+        "HTTP-Referer": os.environ.get("LLM_HTTP_REFERER", "https://impcc-timetable-generator.vercel.app"),
+        "X-Title": os.environ.get("LLM_X_TITLE", "IMPCC Timetable Generator"),
+    }
+    req = urlreq.Request(f"{base_url}/chat/completions", data=payload, headers=headers)
+    try:
+        with urlreq.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read().decode())
+    except HTTPError as e:
+        return f"LLM HTTP {e.code}: {e.read().decode()[:300]}"
+    except URLError as e:
+        return f"LLM unreachable: {e.reason}"
+    try:
+        content = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError):
+        return "LLM returned an unexpected shape"
+    content = re.sub(r"^```(json)?\s*|\s*```$", "", content.strip(), flags=re.MULTILINE).strip()
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        return "LLM did not return valid JSON"
+    return parsed if isinstance(parsed, dict) else "LLM output was not an object"
+
+
+def author_rule(detail, existing_registry=None, extras=None):
+    """Author ONE new dynamic rule for a constraint that matched no fixed
+    type. Returns {authored, rule:{...validated definition...}} or
+    {"unresolvable": true} / {"error": ...} dicts (never raises)."""
+    detail = (detail or "").strip()
+    if len(detail) < 10:
+        return {"error": "constraint description is too short"}
+    registry = dict(existing_registry or {})
+    context_lines = ""
+    if extras:
+        context_lines = "\nADMIN CONTEXT / NOTES:\n" + "\n".join(
+            "- " + str(e)[:200] for e in extras[:8])
+    prompt = "\n".join(_AUTHOR_PROMPT_LINES)
+    prompt = prompt.replace("\u00abruleset\u00bb", ruleset_context_md(registry))
+    prompt = prompt.replace("\u00ab\u00ab\u00abdetail\u00bb\u00bb\u00bb",
+                            '###' + detail[:2000] + '###')
+    prompt = prompt.replace("\u00abcontext\u00bb", context_lines)
+    parsed = _openrouter_json(
+        [{"role": "system", "content": "You are a rules author that ONLY returns strict JSON."},
+         {"role": "user", "content": prompt}])
+    if isinstance(parsed, str):
+        return {"error": parsed}
+    if parsed.get("unresolvable"):
+        return {"unresolvable": True,
+                "error": "the constraint is not expressible as a forbid-cells rule"}
+    clean = validate_dyn_rule(parsed, existing_ids=set(registry) | GI_RULE_TYPES)
+    if not clean:
+        return {"error": "authored rule failed validation (bad slug/kind/matchers)",
+                "raw": parsed}
+    clean["natural"] = detail
+    return {"authored": True,
+            "rule": clean,
+            "type": clean["id"],
+            "params": dict(clean["enforcement"]["matchers"]),
+            "natural": detail,
+            "notes": "authored a NEW dynamic rule: " + clean["label"],
+            "confidence": 0.8,
+            "unmapped": []}

@@ -193,6 +193,10 @@ def context_to_model(ctx):
         "instructions": instr,
         "constraints": ctx.get("constraints") or {},
         "penalties": dict(PENALTIES, **(ctx.get("softPenalties") or {})),
+        # parallel-group definitions (cp_solver._unit_slot_domain consumes them
+        # via model["_parallel"] — without this the member availability shrinks
+        # silently no-op for PG:* units)
+        "_parallel": rel.get("parallelGroups") or [],
     }
 
 
@@ -206,6 +210,33 @@ def model_section_fill(model, section):
 
 
 # ---------------------------------------------------------------- evaluation
+def _dyn_cells_hit(e, u, sec):
+    """Generalized forbid-cells matcher (dynamic/custom rules lower to the
+    same entries). Match by subject / subjects / sections / teachers (own or
+    parallel-group membership), optional scope; empty days/slots = all."""
+    if e.get("subject") and u["courseBySec"].get(sec) != e["subject"]:
+        return False
+    if e.get("subjects") and u["courseBySec"].get(sec) not in (e["subjects"] or []):
+        return False
+    if e.get("sections") and sec not in (e["sections"] or []):
+        return False
+    if e.get("teachers"):
+        if u.get("teacher") not in e["teachers"] and not set(u.get("members") or []).intersection(e["teachers"]):
+            return False
+    if e.get("scope") and _sec_stream(sec) != e["scope"]:
+        return False
+    return True
+
+
+def _dyn_label(e):
+    bits = []
+    if e.get("subject"): bits.append(str(e["subject"]))
+    if e.get("subjects"): bits.append("/".join(map(str, e["subjects"])))
+    if e.get("sections"): bits.append(",".join(map(str, e["sections"])))
+    if e.get("teachers"): bits.append(",".join(map(str, e["teachers"])))
+    return " ".join(bits) or "cells"
+
+
 def evaluate(grids, model):
     """Validate a solution (grids: unit ids per section cell) against the model.
 
@@ -511,6 +542,21 @@ def evaluate(grids, model):
                     for s in range(P):
                         if g[d][s] == u["id"] and d in dset:
                             issues.append(f"{sec} {e['subject']} on forbidden day {_solver.DAYS[d]}")
+
+    for e in (model["instructions"].get("subjectForbiddenSlotDays") or []):
+        for u in units:
+            for sec in u["secs"]:
+                if not _dyn_cells_hit(e, u, sec):
+                    continue
+                g = grids.get(sec)
+                if not g:
+                    continue
+                dset = _dayset(e.get("days") or [d for d in range(D)])
+                sset = _slotset(e.get("slots") or ["P%d" % (s + 1) for s in range(P)])
+                for d in range(D):
+                    for s in range(P):
+                        if g[d][s] == u["id"] and d in dset and s in sset:
+                            issues.append(f"{sec} {_dyn_label(e)} at forbidden window {_solver.DAYS[d]} {_solver.SLOTS[s]}")
     for e in (model["instructions"].get("nonOverriding") or []):
         secs = e["sections"]
         subs = e["subjects"]
@@ -1106,6 +1152,24 @@ def analyze_structured(grids, model):
                 for (d, s) in bad_cells:
                     _issue(f"{sec} {e['subject']} on forbidden day {_solver.DAYS[d]}",
                            f"gi_sfbd@{e['subject']}|{scope}", [u["id"]],
+                           [C(sec, d, s)])
+
+    for e in (model["instructions"].get("subjectForbiddenSlotDays") or []):
+        for u in units:
+            for sec in u["secs"]:
+                if not _dyn_cells_hit(e, u, sec):
+                    continue
+                g = grids.get(sec)
+                if not g:
+                    continue
+                scope = e.get("scope")
+                dset = _dayset(e.get("days") or [d for d in range(D)])
+                sset = _slotset(e.get("slots") or ["P%d" % (s + 1) for s in range(P)])
+                bad_cells = [(d, s) for d in range(D) for s in range(P)
+                             if g[d][s] == u["id"] and d in dset and s in sset]
+                for (d, s) in bad_cells:
+                    _issue(f"{sec} {_dyn_label(e)} at forbidden window {_solver.DAYS[d]} {_solver.SLOTS[s]}",
+                           f"gi_sfsd@{_dyn_label(e)}|{scope}", [u["id"]],
                            [C(sec, d, s)])
     for e in (model["instructions"].get("nonOverriding") or []):
         secs = e["sections"]

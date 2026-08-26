@@ -6264,5 +6264,290 @@ rep("const pure={}; for(const kk in pub.timetable_config){ if(kk!=='sectionsAdde
 # 3) styles
 rep("/* theme picker control (masthead) */", f21_css.strip() + "\n/* theme picker control (masthead) */")
 
+# ---- 54) F22a: new rule type subject_forbidden_slots_on_days + CP-SAT gi overrides --
+
+# (a) JS admin-merge: union the new type like subject_forbidden_days
+rep("""        for(const g of (byType.subject_forbidden_days || [])){
+          const r = { subject: (g.params||{}).subject, days: (g.params||{}).days||[], scope: (g.params||{}).scope };
+          const k = r.subject + '|' + (r.scope || '');
+          if(!seenSFD[k]){ seenSFD[k] = true; unionSFD.push(r); }
+        }""",
+    """        for(const g of (byType.subject_forbidden_days || [])){
+          const r = { subject: (g.params||{}).subject, days: (g.params||{}).days||[], scope: (g.params||{}).scope };
+          const k = r.subject + '|' + (r.scope || '');
+          if(!seenSFD[k]){ seenSFD[k] = true; unionSFD.push(r); }
+        }
+        for(const g of (byType.subject_forbidden_slots_on_days || [])){
+          unionSFSD.push({ subject: (g.params||{}).subject, days: (g.params||{}).days||[],
+                           slots: (g.params||{}).slots||[], scope: (g.params||{}).scope });
+        }""")
+rep("const unionSFD = [], seenSFD = {}, unionNO = [];",
+    "const unionSFD = [], seenSFD = {}, unionNO = [], unionSFSD = [];")
+rep("""    if(typeHasAdmin['subject_forbidden_days']) giCtx.instructions.subjectForbiddenDays = unionSFD;
+    if(typeHasAdmin['non_overriding']) giCtx.instructions.nonOverriding = unionNO;""",
+    """    if(typeHasAdmin['subject_forbidden_days']) giCtx.instructions.subjectForbiddenDays = unionSFD;
+    if(typeHasAdmin['subject_forbidden_slots_on_days']) giCtx.instructions.subjectForbiddenSlotDays = unionSFSD;
+    if(typeHasAdmin['non_overriding']) giCtx.instructions.nonOverriding = unionNO;""")
+
+# (b) cpsatOverrides now carries the admin general-instruction lists too, so
+# the cloud engine enforces exactly what the admin staged (replace-per-pop
+# semantics on the backend, validated + capped there)
+rep("""  const alloc={};
+  for(const p of pops){
+    const a=(p==='inter-1'&&state.allocation)?state.allocation:(state.allocByPop[p]||(CANON?getPopAllocation(p):null));
+    if(a&&Object.keys(a).length) alloc[p]=a;
+  }
+  if(Object.keys(alloc).length) out.allocation=alloc;
+  return Object.keys(out).length?out:null;""",
+    """  const alloc={};
+  for(const p of pops){
+    const a=(p==='inter-1'&&state.allocation)?state.allocation:(state.allocByPop[p]||(CANON?getPopAllocation(p):null));
+    if(a&&Object.keys(a).length) alloc[p]=a;
+  }
+  if(Object.keys(alloc).length) out.allocation=alloc;
+  const instr={};
+  for(const p of pops){ const lst=giList(p); if(lst.length) instr[p]=lst; }
+  if(Object.keys(instr).length) out.general_instructions=instr;
+  return Object.keys(out).length?out:null;""")
+
+# (c) sheet DSL: render + parse the new rule type
+rep("""    case 'section_off_days':               return pre + 'sections ' + (p.sections || []).join(',') + ' off on ' + (p.days || []).join(',');""",
+    """    case 'subject_forbidden_slots_on_days':{
+      const scope2 = p.scope ? ' (scope: ' + p.scope + ')' : '';
+      return pre + "subject '" + (p.subject || '?') + "' forbidden on " + (p.days || []).join(',') + ' at ' + (p.slots || []).join(',') + scope2;
+    }
+    case 'section_off_days':               return pre + 'sections ' + (p.sections || []).join(',') + ' off on ' + (p.days || []).join(',');""")
+rep("""    if((m = s.match(/^subject\\s+'([^']+)'\\s+forbidden\\s+on\\s+([A-Za-z ,]+?)(?:\\s+\\(scope:\\s*(.+)\\))?$/i))){""",
+    """    if((m = s.match(/^subject\\s+'([^']+)'\\s+forbidden\\s+on\\s+([A-Za-z ,]+?)\\s+at\\s+([Pp0-9 ,]+?)(?:\\s+\\(scope:\\s*(.+)\\))?$/i))){
+      const days = m[2].split(',').map(dslNormDay); if(days.some(function(d){ return !d; })) throw new Error("bad day in: " + raw);
+      const slots = m[3].split(',').map(function(x){ x = x.trim().toUpperCase(); if(/^P[1-8]$/.test(x)) return x; });
+      if(slots.some(function(x){ return !x; })) throw new Error("bad period in: " + raw);
+      const p = { subject: m[1].trim(), days: days, slots: slots }; if(m[4]) p.scope = m[4].trim();
+      pushRule(pops, 'subject_forbidden_slots_on_days', p); continue;
+    }
+    if((m = s.match(/^subject\\s+'([^']+)'\\s+forbidden\\s+on\\s+([A-Za-z ,]+?)(?:\\s+\\(scope:\\s*(.+)\\))?$/i))){""")
+
+# (d) pattern-first translator: subject + specific periods phrasing
+rep("""  if((m = d.match(/([a-z][a-z .&-]{2,40}?)\\s+(?:must|should) not be (?:set |scheduled |held )?on (mon|tue|wed|thu|fri|sat|sun)[a-z]*/))){""",
+    """  if((m = d.match(/([a-z][a-z .&-]{2,40}?)\\s+(?:must|should) not be (?:set |scheduled |held |taught )?(?:in|during|at|on)?[^.]*?(mon|tue|wed|thu|fri|sat|sun)[a-z]*[^.]*?(first|last)\\s+(one|two|1|2)\\s+periods?/))
+      || (m = d.match(/([a-z][a-z .&-]{2,40}?)\\s+(?:must|should) not be (?:set |scheduled |held |taught )?on (mon|tue|wed|thu|fri|sat|sun)[a-z]*[^.]*?(first|last)\\s+(one|two|1|2)\\s+periods?/))){
+    const day = dslNormDay(m[2]);
+    const n = (m[4] === 'two' || m[4] === '2') ? 2 : 1;
+    const last = m[3] === 'last';
+    const P = (POP().periods) || 5;
+    const slots = [];
+    for(let k = 0; k < n; k++) slots.push('P' + (last ? (P - n + 1 + k) : (1 + k)));
+    if(day) return "subject '" + m[1].trim().replace(/\\b\\w/g, function(c){ return c.toUpperCase(); }) + "' forbidden on " + day + ' at ' + slots.join(',');
+  }
+  if((m = d.match(/([a-z][a-z .&-]{2,40}?)\\s+(?:must|should) not be (?:set |scheduled |held )?on (mon|tue|wed|thu|fri|sat|sun)[a-z]*/))){""")
+
+# (e) help text gets the new clause
+rep("<code>sections BSAF-SEM-VII,BBA-SEM-VII off on FRI</code> · ",
+    "<code>sections BSAF-SEM-VII,BBA-SEM-VII off on FRI</code> · <code>subject 'Physics' forbidden on FRI at P4,P5</code> · ")
+
+# ---- 55) F23: dynamic ruleset registry — store, lowering, publish, panel, DSL --
+
+# (a) registry store + lowering helpers (inserted before sheetKeyOf)
+rep("function sheetKeyOf(shift){ return 'impcc-gisheet-' + shift; }",
+    """/* ---- dynamic ruleset registry (self-extending ruleset) ----
+   Definitions are data only: they compile onto the fixed forbid_cells kernel
+   server-side + locally; nothing executes LLM-generated code. New authored
+   rules auto-activate; the registry rides the ☁Publish channel. */
+function ruleRegistryInit(){
+  if(state.ruleRegistry) return;
+  state.ruleRegistry = {};
+  try{ const raw = localStorage.getItem('impcc-rule-registry'); if(raw) state.ruleRegistry = JSON.parse(raw) || {}; }catch(e){}
+  const seed = (CANON && CANON.ruleRegistry) || [];
+  for(const d of seed){ if(d && d.id && !state.ruleRegistry[d.id]) state.ruleRegistry[d.id] = d; }
+}
+function ruleRegistry(){ ruleRegistryInit(); return state.ruleRegistry; }
+function ruleRegistrySaveLocal(){ try{ localStorage.setItem('impcc-rule-registry', JSON.stringify(ruleRegistry())); }catch(e){} }
+function ruleRegistryInsert(def){
+  if(!def || !def.id) return;
+  ruleRegistry()[def.id] = def; ruleRegistrySaveLocal();
+}
+function ruleRegistryToggle(slug){ const r = ruleRegistry()[slug]; if(r){ r.enabled = !(r.enabled !== false); ruleRegistrySaveLocal(); renderMain(); } }
+function ruleRegistryDelete(slug){ if(!confirm("Remove dynamic rule '" + slug + "' from the ruleset? Applied rows that keep its clauses stop parsing.")) return; delete ruleRegistry()[slug]; ruleRegistrySaveLocal(); renderMain(); }
+function lowerDynRule(entry){
+  /* compile one dynamic-rule entry into the forbid_cells window-ban context form */
+  const def = ruleRegistry()[entry.type];
+  if(!def || (def.enforcement || {}).kind !== 'forbid_cells' || def.enabled === false) return null;
+  const p = entry.params || {};
+  const out = { dsl: def.label || def.id };
+  if(p.subject) out.subject = p.subject;
+  if(Array.isArray(p.subjects) && p.subjects.length) out.subjects = p.subjects;
+  if(Array.isArray(p.sections) && p.sections.length) out.sections = p.sections;
+  if(Array.isArray(p.teachers) && p.teachers.length) out.teachers = p.teachers;
+  if(p.stream) out.scope = p.stream;
+  if(Array.isArray(p.days) && p.days.length) out.days = p.days;
+  if(Array.isArray(p.slots) && p.slots.length) out.slots = p.slots;
+  return out;
+}
+function dynMatcherText(p){
+  const bits = [];
+  if(p.subject) bits.push("subject '" + p.subject + "'");
+  if(Array.isArray(p.subjects) && p.subjects.length) bits.push("subjects '" + p.subjects.join('/') + "'");
+  if(Array.isArray(p.sections) && p.sections.length) bits.push('sections ' + p.sections.join(','));
+  if(Array.isArray(p.teachers) && p.teachers.length) bits.push("teachers '" + p.teachers.join(',') + "'");
+  if(p.stream) bits.push('stream ' + p.stream);
+  return bits.join(', ') || 'everything';
+}
+function dynClauseFor(entry){
+  const p = entry.params || {};
+  const on = (p.days && p.days.length ? p.days.join(',') : 'all days');
+  const at = (p.slots && p.slots.length ? p.slots.join(',') : 'all periods');
+  return 'forbid ' + dynMatcherText(p) + ' on ' + on + ' at ' + at + ' #' + entry.type;
+}
+
+/* ---- ⛭ ruleset panel ---- */
+function rulesetOpen(){
+  const reg = ruleRegistry();
+  const slugs = Object.keys(reg).sort();
+  let h = '';
+  if(!slugs.length){
+    h = '<p class="sheet-st" style="padding:6px 0">Nothing authored yet. When an AI translation cannot match a builtin rule type, it authors a new one here automatically.</p>';
+  }
+  for(const slug of slugs){
+    const d = reg[slug];
+    const en = d.enforcement || {};
+    const match = dynMatcherText(en.matchers || {});
+    const off = d.enabled === false;
+    h += '<div class="sheet-row" style="display:block;' + (off ? 'opacity:.55;' : '') + 'margin:6px 0">'
+      + '<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap">'
+      + '<b style="font-size:12.5px">' + esc(d.label || slug) + '</b>'
+      + '<span class="sheet-actions">'
+      + '<button class="sheet-btn" onclick="ruleRegistryToggle(\\'' + slug + '\\')">' + (off ? '▶ Enable' : '⏸ Disable') + '</button>'
+      + '<button class="sheet-btn" onclick="ruleRegistryDelete(\\'' + slug + '\\')">🗑</button></span></div>'
+      + '<div style="font-size:11px;color:var(--ink-dim);margin:2px 0">#' + esc(slug) + (d.authored ? ' · authored by AI' : ' · seeded') + '</div>'
+      + (d.summary ? '<p style="font-size:12px;margin:4px 0">' + esc(d.summary) + '</p>' : '')
+      + '<div class="sheet-st">enforcement: ' + esc(en.kind || '?') + ' — ' + esc(match) + '</div>'
+      + '<div class="sheet-st">use it: <code>forbid &lt;matchers&gt; on &lt;days&gt; at &lt;slots&gt; #' + esc(slug) + '</code></div>'
+      + '</div>';
+  }
+  document.getElementById('rulesetList').innerHTML = h;
+  document.getElementById('rulesetModal').style.display = 'flex';
+}
+function sheetKeyOf(shift){ return 'impcc-gisheet-' + shift; }""")
+
+# (b) buildShiftContext: lower dynamic-rule entries into the window-ban context list
+rep("""        for(const g of (byType.subject_forbidden_slots_on_days || [])){
+          unionSFSD.push({ subject: (g.params||{}).subject, days: (g.params||{}).days||[],
+                           slots: (g.params||{}).slots||[], scope: (g.params||{}).scope });
+        }""",
+    """        for(const g of (byType.subject_forbidden_slots_on_days || [])){
+          unionSFSD.push({ subject: (g.params||{}).subject, days: (g.params||{}).days||[],
+                           slots: (g.params||{}).slots||[], scope: (g.params||{}).scope });
+        }
+        // dynamic rules (admin-authored) lower onto the same forbid_cells context list
+        for(const t in byType){
+          if(GI_BUILTIN_TYPES.has(t)) continue;
+          for(const g of byType[t]){
+            const low = lowerDynRule(g);
+            const k = low ? JSON.stringify(low) : null;
+            if(k && !seenSFSD[k]){ seenSFSD[k] = true; unionSFSD.push(low); dynPushed = true; }
+          }
+        }""")
+rep("const unionSFD = [], seenSFD = {}, unionNO = [], unionSFSD = [];",
+    "const unionSFD = [], seenSFD = {}, unionNO = [], unionSFSD = [], seenSFSD = {}; let dynPushed = false;")
+rep("""    if(typeHasAdmin['subject_forbidden_slots_on_days']) giCtx.instructions.subjectForbiddenSlotDays = unionSFSD;""",
+    """    if(typeHasAdmin['subject_forbidden_slots_on_days'] || dynPushed) giCtx.instructions.subjectForbiddenSlotDays = unionSFSD;""")
+
+# (c) builtin type set + dynamic clause support in the DSL
+rep("""function dslRenderRule(rule, pop, shift){""",
+    """const GI_BUILTIN_TYPES = new Set(['no_same_subject_same_day', 'same_subject_same_day_allowed', 'avoid_shuffling',
+  'non_overriding', 'consecutive_days_for_2pw', 'subject_forbidden_days', 'section_off_days',
+  'first_last_period_occupied', 'combined_classes', 'soft_individual_spread', 'subject_forbidden_slots_on_days']);
+
+function dslRenderRule(rule, pop, shift){""")
+rep("""  const p = rule.params || {};
+  const pre = dslScopeTag(pop, shift);
+  switch(rule.type){""",
+    """  const p = rule.params || {};
+  const pre = dslScopeTag(pop, shift);
+  if(!GI_BUILTIN_TYPES.has(rule.type)){
+    // a dynamic rule clause: 'forbid <matchers> on <days> at <slots> #slug'
+    return pre + dynClauseFor(rule);
+  }
+  switch(rule.type){""")
+rep("""    if((m = s.match(/^subject\\s+'([^']+)'\\s+forbidden\\s+on\\s+([A-Za-z ,]+?)\\s+at\\s+([Pp0-9 ,]+?)(?:\\s+\\(scope:\\s*(.+)\\))?$/i))){""",
+    """    if((m = s.match(/^forbid\\s+(.+?)\\s+on\\s+([A-Za-z ,]+?|all days)\\s+at\\s+([Pp0-9 ,]+?|all periods)\\s+#([a-z][a-z0-9_]*)$/i))){
+      const slug = m[4].toLowerCase();
+      const mt = m[1].trim();
+      const pr = {};
+      let mm;
+      if((mm = mt.match(/subject\\s+'([^']+)'/))) pr.subject = mm[1].trim();
+      if((mm = mt.match(/subjects\\s+'([^']+)'/))) pr.subjects = mm[1].split('/').map(function(x){ return x.trim(); });
+      if((mm = mt.match(/sections\\s+([A-Z0-9.-]+(?:\\s*,\\s*[A-Z0-9.-]+)*)/i))) pr.sections = mm[1].split(/\\s*,\\s*/).map(function(x){ return x.trim(); }).filter(Boolean);
+      if((mm = mt.match(/teachers\\s+'([^']+)'/))) pr.teachers = mm[1].split(',').map(function(x){ return x.trim(); });
+      if((mm = mt.match(/stream\\s+([A-Za-z .]+?)$/))) pr.stream = mm[1].trim();
+      if(m[2] !== 'all days'){ const dys = m[2].split(',').map(dslNormDay); if(dys.some(function(d){ return !d; })) throw new Error("bad day in: " + raw); pr.days = dys; }
+      if(m[3] !== 'all periods'){ const sls = m[3].split(',').map(function(x){ x = x.trim().toUpperCase(); if(/^P[1-8]$/.test(x)) return x; });
+        if(sls.some(function(x){ return !x; })) throw new Error("bad period in: " + raw); pr.slots = sls; }
+      pushRule(pops, slug, pr); continue;
+    }
+    if((m = s.match(/^subject\\s+'([^']+)'\\s+forbidden\\s+on\\s+([A-Za-z ,]+?)\\s+at\\s+([Pp0-9 ,]+?)(?:\\s+\\(scope:\\s*(.+)\\))?$/i))){""")
+
+# (d) giTranslateRow: send the live registry with the request
+rep("""    body: JSON.stringify({ text: text, population: primary })""",
+    """    body: JSON.stringify({ text: text, population: primary, context_rules: ruleRegistry() })""")
+rep("""  .then(function(res){
+    delete row.statusTxt;
+    if(res.error){ row.error = res.error; }""",
+    """  .then(function(res){
+    delete row.statusTxt;
+    if(res && res.authored && res.rule && res.rule.id){
+      // a NEW rule was authored onto the kernel — it auto-activates into the
+      // shared ruleset (publish to share it); the row applies with it at once
+      ruleRegistryInsert(res.rule);
+      setTicker('➕ Authored new rule: ' + res.rule.label + ' (#' + res.rule.id + ') — review in ⛭ Ruleset, ☁ Publish to share', 'ok');
+    }
+    if(res.error){ row.error = res.error; }""")
+
+# (e) cpsatOverrides carries the live registry so the cloud engine sees the same
+# dynamic vocabulary (validated kernel-only on the backend)
+rep("""  const instr={};
+  for(const p of pops){ const lst=giList(p); if(lst.length) instr[p]=lst; }
+  if(Object.keys(instr).length) out.general_instructions=instr;
+  return Object.keys(out).length?out:null;""",
+    """  const instr={};
+  for(const p of pops){ const lst=giList(p); if(lst.length) instr[p]=lst; }
+  if(Object.keys(instr).length) out.general_instructions=instr;
+  const reg=ruleRegistry();
+  if(Object.keys(reg).length) out.rule_registry=JSON.parse(JSON.stringify(reg));
+  return Object.keys(out).length?out:null;""")
+
+# (f) publish rides ruleRegistry at the primary pop + sync restores it
+rep("""    if(pop === GI_SHIFT_PRIMARY[shift]) cfg.sheet = JSON.parse(JSON.stringify(rows));""",
+    """    if(pop === GI_SHIFT_PRIMARY[shift]){ cfg.sheet = JSON.parse(JSON.stringify(rows)); cfg.ruleRegistry = JSON.parse(JSON.stringify(ruleRegistry())); }""")
+rep("""        if(Array.isArray(pub.timetable_config.sheet)){ const _sh=(POP_ID==='inter-1')?'shift-1':(POP_ID==='inter-2')?'shift-2':null; if(_sh){ state.sheetByShift=state.sheetByShift||{}; state.sheetByShift[_sh]=pub.timetable_config.sheet; try{localStorage.setItem('impcc-gisheet-'+_sh,JSON.stringify(pub.timetable_config.sheet));}catch(e){} } }""",
+    """        if(Array.isArray(pub.timetable_config.sheet)){ const _sh=(POP_ID==='inter-1')?'shift-1':(POP_ID==='inter-2')?'shift-2':null; if(_sh){ state.sheetByShift=state.sheetByShift||{}; state.sheetByShift[_sh]=pub.timetable_config.sheet; try{localStorage.setItem('impcc-gisheet-'+_sh,JSON.stringify(pub.timetable_config.sheet));}catch(e){} } }
+        if(pub.timetable_config.ruleRegistry && typeof pub.timetable_config.ruleRegistry === 'object' && !Array.isArray(pub.timetable_config.ruleRegistry)){
+          // the shared ruleset rides the publish channel — adopt it wholesale
+          state.ruleRegistry = pub.timetable_config.ruleRegistry; ruleRegistrySaveLocal();
+        }""")
+rep("""if(kk!=='sectionsAdded'&&kk!=='sectionsRemoved'&&kk!=='sheet') pure[kk]=pub.timetable_config[kk];""",
+    """if(kk!=='sectionsAdded'&&kk!=='sectionsRemoved'&&kk!=='sheet'&&kk!=='ruleRegistry') pure[kk]=pub.timetable_config[kk];""")
+
+# (g) ⛭ Ruleset button in each shift-sheet head + modal markup
+rep("""    + '<button class="mini-export" data-sheet-reset="' + shift + '">Reset to defaults</button></div></div>'""",
+    """    + '<button class="mini-export" data-sheet-reset="' + shift + '">Reset to defaults</button>'
+    + '<button class="mini-export" onclick="rulesetOpen()" title="The self-extending ruleset — rules the AI has authored over time">⛭ Ruleset (' + Object.keys(ruleRegistry()).length + ')</button></div></div>'""")
+rep('<div class="auth-modal" id="swapModal">',
+    """<div class="auth-modal" id="rulesetModal">
+  <div class="auth-box" style="max-width:640px;max-height:80vh;overflow:auto">
+    <h3>⛭ Dynamic ruleset</h3>
+    <p style="font-size:12.5px;color:var(--ink2);margin:0 0 10px">
+      Rules the AI has <b>authored</b> when a constraint matched no builtin type. Every definition compiles
+      onto the fixed <i>forbid-cells</i> kernel (days × slots window bans) — generated code never runs.
+      New rules auto-activate; disable or delete them here, and <b>☁ Publish</b> to share the updated ruleset.
+    </p>
+    <div id="rulesetList"></div>
+    <div class="auth-row" style="margin-top:12px">
+      <button class="btn" onclick="document.getElementById('rulesetModal').style.display='none'">Close</button>
+    </div>
+  </div>
+</div>
+<div class="auth-modal" id="swapModal">""")
+
 io.open(DST, "w", encoding="utf-8").write(src)
 print("OK → wrote", DST, "(", len(src), "bytes )")

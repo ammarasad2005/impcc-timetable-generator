@@ -200,14 +200,30 @@ def translate(req: TranslateRequest, user: dict = Depends(require_user)):
 class GITranslateRequest(BaseModel):
     text: str = Field(..., description="the plain-language general instruction")
     population: str = Field(default=None, description="optional population context (inter-1/bs-1/inter-2)")
+    context_rules: dict = Field(default=None,
+                                description="the admin's live dynamic-rule registry (slug -> definition); "
+                                            "validated hard (kernel-only). Lets translation reuse + grow the ruleset.")
 
 
 @app.post("/translate-gi")
 def translate_gi(req: GITranslateRequest, user: dict = Depends(require_user)):
-    """Translate a plain-language GENERAL instruction into the structured GI schema."""
+    """Translate a plain-language GENERAL instruction into the structured GI schema;
+    when nothing matches, AUTHOR a new dynamic rule (kernel-only, auto-activates
+    into the caller's registry)."""
     if not (req.text or "").strip():
         return {"error": "text is required"}
-    return llm_translate.translate_general_instruction(req.text.strip())
+    registry = {}
+    if isinstance(req.context_rules, dict):
+        for k, d in req.context_rules.items():
+            if isinstance(d, dict) and isinstance(k, str) and len(registry) < 32:
+                registry[k] = dict(d)
+    out = llm_translate.translate_general_instruction(req.text.strip())
+    if not isinstance(out, dict):
+        return out
+    unknown = bool(out.get("error")) and ("unknown rule type" in str(out.get("error")))
+    if out.get("needs_new_rule") or unknown:
+        return llm_translate.author_rule(req.text.strip(), existing_registry=registry)
+    return out
 
 
 class TweakTranslateRequest(BaseModel):
@@ -358,6 +374,59 @@ def _clean_overrides(populations, raw):
                 a = None
         except Exception:
             a = None
+    g = raw.get("general_instructions")
+    if isinstance(g, dict):
+        try:
+            import llm_translate as _lt
+            _types = _lt.GI_RULE_TYPES
+        except Exception:
+            _types = {"no_same_subject_same_day", "same_subject_same_day_allowed", "avoid_shuffling",
+                      "non_overriding", "consecutive_days_for_2pw", "subject_forbidden_days",
+                      "section_off_days", "first_last_period_occupied", "combined_classes",
+                      "soft_individual_spread", "subject_forbidden_slots_on_days"}
+        import re as _re
+        _dyn_slugs = {str(k) for k, d in (raw.get("rule_registry") or {}).items()
+                      if isinstance(k, str) and isinstance(d, dict) and _re.match(r"^[a-z][a-z0-9_]{2,39}$", str(k))}
+        _allowed_types = set(_types) | _dyn_slugs
+        good_gi = {}
+        for pid, entries in g.items():
+            if pid not in populations or not isinstance(entries, list) or len(entries) > 64:
+                continue
+            kept = []
+            for e in entries:
+                if not isinstance(e, dict) or e.get("type") not in _allowed_types:
+                    continue
+                p = e.get("params") or {}
+                if not isinstance(p, dict):
+                    continue
+                ok = True
+                for v in p.values():
+                    vals = v if isinstance(v, list) else [v]
+                    if len(vals) > 40 or not all(isinstance(x, (str, int, float, bool, type(None))) and len(str(x)) <= 80 for x in vals):
+                        ok = False
+                        break
+                if ok:
+                    kept.append({"id": str(e.get("id") or "")[:64], "type": e["type"], "params": p, "enabled": True})
+            if kept:
+                good_gi[pid] = kept
+        if good_gi:
+            out["general_instructions"] = good_gi
+    rr = raw.get("rule_registry")
+    if isinstance(rr, dict):
+        import llm_translate as _lt
+        reg = {}
+        existing = set()
+        for slug, d in rr.items():
+            if not isinstance(slug, str) or not isinstance(d, dict) or len(reg) >= 32:
+                continue
+            dd = dict(d); dd["id"] = slug
+            clean_d = _lt.validate_dyn_rule(dd, existing_ids=existing | {s for s in rr if s != slug and not d.get("enabled", True)})
+            if clean_d:
+                clean_d["enabled"] = bool(d.get("enabled", True))   # never re-enable an admin-disabled rule
+                reg[slug] = clean_d
+                existing.add(slug)
+        if reg:
+            out["rule_registry"] = reg
     clean = {}
     if isinstance(a, dict):
         for pid, secs in a.items():

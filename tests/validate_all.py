@@ -873,6 +873,137 @@ try:
 except Exception as e:
     check("R9/R10 API override flow (accept + validate)", False, str(e)[:120])
 
+# ---- F22: subject_forbidden_slots_on_days + general-instruction overrides ----
+try:
+    import canonical as _CN22
+    try:
+        import sys as _sys22; _sys22.path.insert(0, 'api')
+        import index as _API22
+        import llm_translate as _LT22
+        check("F22a new GI type is whitelisted (catalog + api validator share it)",
+              "subject_forbidden_slots_on_days" in _LT22.GI_RULE_TYPES)
+        _cl22 = _API22._clean_overrides(['inter-1'], {'general_instructions': {'inter-1': [
+            {'type': 'subject_forbidden_slots_on_days', 'params': {'subject': 'Physics', 'days': ['FRI'], 'slots': ['P4', 'P5']}},
+            {'type': 'bogus_type', 'params': {}}]}})
+        check("F22b _clean_overrides drops unknown types, keeps the new one (+ fills id/enabled)",
+              _cl22 and _cl22['general_instructions']['inter-1'] == [
+                  {'id': '', 'type': 'subject_forbidden_slots_on_days',
+                   'params': {'subject': 'Physics', 'days': ['FRI'], 'slots': ['P4', 'P5']}, 'enabled': True}])
+    except Exception as e:
+        check("F22a/F22b api surface (whitelist + clean)", False, str(e)[:120])
+    _i22 = _CN22.solver_context(['inter-1'], overrides={'general_instructions': {'inter-1': [
+        {'type': 'avoid_shuffling', 'params': {}, 'enabled': True},
+        {'type': 'no_same_subject_same_day', 'params': {}, 'enabled': True},
+        {'type': 'consecutive_days_for_2pw', 'params': {}, 'enabled': True},
+        {'type': 'soft_individual_spread', 'params': {}, 'enabled': True},
+        {'type': 'subject_forbidden_slots_on_days', 'params': {'subject': 'Physics', 'days': ['FRI'], 'slots': ['P4', 'P5'], 'scope': 'ICS'}, 'enabled': True},
+    ]}})['instructions']
+    check("F22c admin instruction list replaces pop rules per type + emits subjectForbiddenSlotDays",
+          _i22['subjectForbiddenSlotDays'] == [{'subject': 'Physics', 'days': ['FRI'], 'slots': ['P4', 'P5'], 'scope': 'ICS'}]
+          and _i22['subjectForbiddenDays'] == []
+          and _i22['noSameSubjectSameDay']['inter'] is True)
+    _i22b = _i22 = None
+    _i22b = _CN22.solver_context(['inter-1'], overrides={'general_instructions': {'inter-1': [
+        {'type': 'avoid_shuffling', 'params': {}, 'enabled': True},
+    ]}})['instructions']
+    check("F22d dropping a canonical rule from the admin list removes it (no_same gone)",
+          _i22b['noSameSubjectSameDay']['inter'] is False)
+    _i22c = _CN22.solver_context(['inter-1'])['instructions']
+    check("F22e canonical context unchanged (no overrides -> noSame kept, no slot-day bans)",
+          _i22c['noSameSubjectSameDay']['inter'] is True and _i22c.get('subjectForbiddenSlotDays') == [])
+    import context_model as _CM22
+    _m22 = _CM22.context_to_model(_CN22.solver_context(['inter-1'], overrides={'general_instructions': {'inter-1': [
+        {'type': 'subject_forbidden_slots_on_days', 'params': {'subject': 'Physics', 'days': ['FRI'], 'slots': ['P4', 'P5']}, 'enabled': True},
+        {'type': 'avoid_shuffling', 'params': {}, 'enabled': True},
+        {'type': 'no_same_subject_same_day', 'params': {}, 'enabled': True},
+        {'type': 'consecutive_days_for_2pw', 'params': {}, 'enabled': True},
+        {'type': 'soft_individual_spread', 'params': {}, 'enabled': True},
+    ]}}))
+    _u22 = next(u for u in _m22['units'] if 'Physics' in (u['courseBySec'] or {}).values())
+    _sec22 = _u22['secs'][0]
+    _g22 = {_sec22: [[None] * _m22['periods'] for _ in range(_m22['days'])]}
+    _g22[_sec22][4][3] = _u22['id']
+    _ev22 = _CM22.evaluate(_g22, _m22)
+    check("F22f context checker flags the forbidden window",
+          any('forbidden window' in x and 'FRI' in x for x in _ev22['issues']))
+    _g22b = {_sec22: [[None] * _m22['periods'] for _ in range(_m22['days'])]}
+    _g22b[_sec22][4][1] = _u22['id']
+    _ev22b = _CM22.evaluate(_g22b, _m22)
+    check("F22g context checker clean outside the window", not any('forbidden window' in x for x in _ev22b['issues']))
+except Exception as e:
+    check("F22 new-rule-type backend wiring", False, str(e)[:160])
+
+# ---- F23: the dynamic ruleset (self-extending ruleset / kernel-only authoring) ----
+try:
+    import canonical as _CN23, context_model as _CM23
+    try:
+        import sys as _sys23; _sys23.path.insert(0, 'api')
+        import llm_translate as _LT23, index as _API23
+        check("F23a author validates kernel-only: good def passes, codegen + bad slugs rejected",
+              bool(_LT23.validate_dyn_rule({'id': 'no_x_fri', 'label': 'X',
+                'enforcement': {'kind': 'forbid_cells', 'matchers': {'subjects': ['Math'], 'days': ['FRI'], 'slots': ['P1']}},
+                'params_schema': {}}))
+              and _LT23.validate_dyn_rule({'id': 'Bad Slug!', 'label': 'X',
+                'enforcement': {'kind': 'forbid_cells', 'matchers': {'subjects': ['Math']}}, 'params_schema': {}}) is None
+              and _LT23.validate_dyn_rule({'id': 'evil_rule', 'label': 'X',
+                'enforcement': {'kind': 'python_code', 'matchers': {'subjects': ['Math']}}, 'params_schema': {}}) is None
+              and _LT23.validate_dyn_rule({'id': 'no_same_subject_same_day', 'label': 'X',
+                'enforcement': {'kind': 'forbid_cells', 'matchers': {'subjects': ['Math']}}, 'params_schema': {}}) is None)
+        _cl23 = _API23._clean_overrides(['inter-1'], {'rule_registry': {
+            'no_early_math_on_fridays': {'label': 'No Math in first period Friday',
+              'enforcement': {'kind': 'forbid_cells', 'matchers': {'subject': 'Mathematics', 'days': ['FRI'], 'slots': ['P1']}},
+              'enabled': True},
+            'Bad Slug!': {'label': 'x', 'enforcement': {'kind': 'forbid_cells', 'matchers': {'subject': 'U'}}, 'enabled': True},
+            'codegen': {'label': 'x', 'enforcement': {'kind': 'js', 'matchers': {'subject': 'U'}}, 'enabled': True}}})
+        check("F23b _clean_overrides passes validated dynamic rules only (+drops bad)",
+              _cl23 and 'rule_registry' in _cl23 and list(_cl23['rule_registry']) == ['no_early_math_on_fridays'])
+        _cl23b = _API23._clean_overrides(['inter-1'], {
+            'rule_registry': {'no_early_math_on_fridays': {'label': 'X',
+                'enforcement': {'kind': 'forbid_cells', 'matchers': {'subject': 'Mathematics'}}, 'enabled': True}},
+            'general_instructions': {'inter-1': [
+                {'type': 'no_early_math_on_fridays',
+                 'params': {'subject': 'Mathematics', 'days': ['FRI'], 'slots': ['P1']}, 'enabled': True}]}})
+        check("F23b2 gi entries carrying registry slug types pass validation",
+              _cl23b and _cl23b.get('general_instructions', {}).get('inter-1', [{}])[0].get('type') == 'no_early_math_on_fridays')
+    except Exception as e:
+        check("F23a/F23b authoring + wire surface", False, str(e)[:140])
+    _ov23 = {'rule_registry': {'no_early_math_on_fridays': {
+                'label': 'No Math in first period Friday', 'enabled': True,
+                'enforcement': {'kind': 'forbid_cells', 'matchers': {}}}},
+             'general_instructions': {'inter-1': [
+                {'type': 'no_early_math_on_fridays',
+                 'params': {'subject': 'Mathematics', 'days': ['FRI'], 'slots': ['P1']}, 'enabled': True},
+                {'type': 'avoid_shuffling', 'params': {}, 'enabled': True},
+                {'type': 'no_same_subject_same_day', 'params': {}, 'enabled': True},
+                {'type': 'consecutive_days_for_2pw', 'params': {}, 'enabled': True},
+                {'type': 'soft_individual_spread', 'params': {}, 'enabled': True}]}}
+    _ctx23 = _CN23.solver_context(['inter-1'], overrides=_ov23)
+    check("F23c dynamic gi entry lowers onto the forbid_cells context list",
+          any(e.get('subject') == 'Mathematics' and e.get('days') == ['FRI'] and e.get('slots') == ['P1'] and 'dsl' in e
+              for e in _ctx23['instructions']['subjectForbiddenSlotDays']))
+    _m23 = _CM23.context_to_model(_ctx23)
+    _u23 = next(u for u in _m23['units'] if 'Mathematics' in (u['courseBySec'] or {}).values())
+    _sec23 = _u23['secs'][0]
+    _g23 = {_sec23: [[None] * _m23['periods'] for _ in range(_m23['days'])]}
+    _g23[_sec23][4][0] = _u23['id']
+    _ev23 = _CM23.evaluate(_g23, _m23)
+    check("F23d checker flags a lowered dynamic ban (FRI P1 Mathematics)",
+          any('forbidden window' in x and 'FRI' in x for x in _ev23['issues']))
+    # teacher-matcher entries (kernel generalization)
+    _m23b = _m23
+    _m23b['instructions']['subjectForbiddenSlotDays'] = [{'teachers': ['Ishfaq'], 'days': ['FRI'], 'slots': ['P4'], 'dsl': 'x'}]
+    _g23b = {}
+    for _u in _m23b['units']:
+        if _u.get('teacher') == 'Ishfaq':
+            _s = _u['secs'][0]
+            _g23b.setdefault(_s, [[None] * _m23b['periods'] for _ in range(_m23b['days'])])
+            _g23b[_s][4][3] = _u['id']
+    _ev23b = _CM23.evaluate(_g23b, _m23b)
+    check("F23e teacher-matcher kernel flags cross-section hits",
+          len([x for x in _ev23b['issues'] if 'forbidden window' in x]) >= 2)
+except Exception as e:
+    check("F23 dynamic ruleset wiring", False, str(e)[:160])
+
 total = passed + failures
 print("RESULT: %d/%d checks passed%s" %
       (passed, total, "  —  ALL TESTS PASSED ✓" if failures == 0 else
