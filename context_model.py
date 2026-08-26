@@ -47,7 +47,12 @@ def _resolve_teacher(x):
     if x in _ALL_CODES:
         return x
     import canonical as _c
-    return _c.name_to_code().get(x)
+    # unknown display name -> the name itself is its own teacher code (same as
+    # the in-browser solver's resolve(): context_solver.js `n2c[x] ?? x`).
+    # Returning None here would crash CP-SAT's teacher-keyed constraints
+    # (None.startswith) on allocations whose teachers are outside the
+    # canonical faculty registry.
+    return _c.name_to_code().get(x, x)
 
 
 # default soft-constraint penalty weights
