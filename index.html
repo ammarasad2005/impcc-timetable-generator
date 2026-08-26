@@ -348,6 +348,12 @@ td.mb-changed select{outline:2px solid var(--amber);background:var(--amber-tint)
 .cons-status{font-family:var(--mono);font-size:10.5px;color:var(--ink2);min-height:14px}
 .cons-rules-ed{display:flex;flex-direction:column;gap:4px}
 .rule-row{display:flex;align-items:center;gap:6px;font-size:12px}
+.hard-wrap{display:inline-flex;align-items:center;gap:4px;flex:none}
+.hard-slider{width:64px;accent-color:var(--green);cursor:pointer}
+.hard-badge{font-family:var(--mono);font-size:9px;min-width:34px;text-align:right;padding:1px 5px;border:1px solid var(--line2);border-radius:8px;background:#fff}
+.hard-badge.h100{background:var(--green);color:#fff;border-color:var(--green)}
+.hard-badge.h0{background:#f4e3e1;color:#8f2d22;border-color:#e0b8b2;text-decoration:line-through}
+.hard-badge.hmid{background:#fdf3d7;color:#7a5d00;border-color:#ead9a0}
 .rule-label{font-family:var(--mono);font-size:10px;color:var(--ink2);min-width:128px}
 .rule-val{flex:1;font-size:11.5px;color:var(--ink)}
 .rule-row .mini-export,.rule-row .card-csv{padding:2px 7px;font-size:10px}
@@ -2566,17 +2572,21 @@ mainEl.addEventListener('click',e=>{
   const consBtn=e.target.closest('[data-translate],[data-apply],[data-reset-one],#consDownload,#consUpload,#consReset');
   if(consBtn){
     if(consBtn.id==='consReset'){resetConstraints();return;}
-  if(consBtn.id==='consSim'){state.simMode=!state.simMode;if(!state.simMode){state.simEdits={};}renderMain();setTicker(state.simMode?'Simulation mode ON — edits below are hypothetical (Apply/Discard in the banner)':'Simulation mode OFF — edits are live','ok');return;}
+  if(consBtn.id==='consSim'){state.simMode=!state.simMode;if(!state.simMode){state.simEdits={};state.simHardness={};}renderMain();setTicker(state.simMode?'Simulation mode ON — edits below are hypothetical (Apply/Discard in the banner)':'Simulation mode OFF — edits are live','ok');return;}
   if(consBtn.id==='simRefresh'){renderMain();setTicker('Simulation re-evaluated','ok');return;}
-  if(consBtn.id==='simDiscard'){state.simMode=false;state.simEdits={};renderMain();setTicker('Simulation discarded — real constraints untouched','ok');return;}
+  if(consBtn.id==='simDiscard'){state.simMode=false;state.simEdits={};state.simHardness={};renderMain();setTicker('Simulation discarded — real constraints untouched','ok');return;}
   if(consBtn.id==='simApply'){
     state.constraints=state.constraints||{};
     for(const code in (state.simEdits||{})){
       state.constraints[code]=state.constraints[code]||{name:code,edits:{}};
       state.constraints[code].edits=Object.assign({},(state.constraints[code].edits||{}),state.simEdits[code]);
     }
+    for(const code in (state.simHardness||{})){
+      state.constraints[code]=state.constraints[code]||{name:code,edits:{}};
+      state.constraints[code].hardness=Object.assign({},(state.constraints[code].hardness||{}),state.simHardness[code]);
+    }
     try{localStorage.setItem(CONST_KEY,JSON.stringify(state.constraints));}catch(e){}
-    pushToCloud();state.simMode=false;state.simEdits={};renderMain();
+    pushToCloud();state.simMode=false;state.simEdits={};state.simHardness={};renderMain();
     setTicker('Simulation applied to the real constraints ✓','ok');return;
   }
     if(consBtn.id==='consDownload'){downloadConstraints();return;}
@@ -2635,6 +2645,18 @@ mainEl.addEventListener('click',e=>{
 mainEl.addEventListener('change',e=>{
   const at=e.target.closest('.add-rule-type');
   if(at&&at.value){const code=at.dataset.code;at.closest('.rule-add').insertAdjacentHTML('beforebegin',ruleEditorHTML(code,at.value,null));at.value='';}
+});
+mainEl.addEventListener('input',e=>{
+  const s=e.target.closest('.hard-slider');
+  if(!s)return;
+  const b=document.getElementById('hb-'+s.dataset.code+'-'+s.dataset.key.replace(/[^A-Za-z0-9]/g,'_'));
+  if(b){const v=parseInt(s.value,10)||0;b.textContent=(v===0?'off':v+'%');b.className='hard-badge '+hardBadgeCls(v);}
+});
+mainEl.addEventListener('change',e=>{
+  const s=e.target.closest('.hard-slider');
+  if(!s)return;
+  const v=Math.max(0,Math.min(100,parseInt(s.value,10)||0));
+  saveRuleHardness(s.dataset.code,s.dataset.key,v);
 });
 mainEl.addEventListener('input',e=>{if(e.target.classList.contains('alloc-subj')||e.target.classList.contains('alloc-tchr')||e.target.classList.contains('alloc-per'))allocInputHandler(e.target);});
 mainEl.addEventListener('change',e=>{if(e.target.classList.contains('alloc-tchr'))allocInputHandler(e.target);});
@@ -3226,6 +3248,16 @@ const RULE_META={
   soft_compact_days:{label:'Compact days, no gaps (soft)',kind:'bool'},
   allow_same_subject_same_day:{label:'Same-subject doubles allowed',kind:'bool'},
 };
+function hardnessOfUI(entry,kind){
+  // mirror of solver.py hardness_of / solver.js hardnessOfFac
+  const h=entry&&entry.hardness;
+  if(h&&typeof h==='object'&&Object.prototype.hasOwnProperty.call(h,kind)){
+    const n=parseInt(h[kind],10);return isNaN(n)?100:Math.max(0,Math.min(100,n));
+  }
+  if(entry&&entry.soft&&entry.soft.indexOf(kind)>=0)return 50;
+  return 100;
+}
+function hardBadgeCls(h){return h===100?'h100':(h===0?'h0':'hmid');}
 function scopeBadge(e){
   if(!e||typeof e!=='object')return '';
   const sc=e.scope||{};const bits=[];
@@ -3402,9 +3434,13 @@ function renderConstraints(){
     h+='<div class="cons-rules-ed">';
     if(keys.length){
       for(const k of keys){
+        const _hh=hardnessOfUI(res[e.code]||{},k);
         h+='<div class="rule-row" data-code="'+e.code+'" data-key="'+k+'">'+
           '<span class="rule-label">'+esc(RULE_META[k]?RULE_META[k].label:k)+'</span>'+
           '<span class="rule-val">'+esc(describeRule(k,eff[k]))+'</span>'+
+          '<span class="hard-wrap" title="Hardness: 100% = unbreakable \u00b7 lower = softer \u00b7 0% = ignored">'+
+            '<input type="range" class="hard-slider" min="0" max="100" step="5" value="'+_hh+'" data-code="'+e.code+'" data-key="'+k+'">'+
+            '<span class="hard-badge '+hardBadgeCls(_hh)+'" id="hb-'+e.code+'-'+k.replace(/[^A-Za-z0-9]/g,'_')+'">'+(_hh===0?'off':_hh+'%')+'</span></span>'+
           '<button class="mini-export rule-edit" title="Edit this rule">✎</button>'+
           '<button class="card-csv rule-remove" title="Remove this rule">✕</button>'+
         '</div>';
@@ -3447,9 +3483,10 @@ function translateOne(code){
   .then(d=>{
     if(d.error){if(st)st.textContent='⚠ '+d.error;return;}
     const sum=rulesSummary(d.rules||{});
+    const hsum=(function(){const h=d.hardness||{};const bits=[];for(const k in h)if(k in (d.rules||{}))bits.push('hardness '+k.split('_')[0]+' '+(h[k]===0?'off':h[k]+'%'));return bits;})();
     const preview=sum.join(' · ')||'(no rules)';
     pendingTranslations[code]=d;
-    if(st)st.textContent='✓ '+preview+(d.confidence?(' · confidence '+Math.round(d.confidence*100)+'%'):'')+(d.unmapped&&d.unmapped.length?(' · unmapped: '+d.unmapped.join(', ')):'');
+    if(st)st.textContent='✓ '+preview+(hsum.length?(' · ['+hsum.join(', ')+']'):'')+(d.confidence?(' · confidence '+Math.round(d.confidence*100)+'%'):'')+(d.unmapped&&d.unmapped.length?(' · unmapped: '+d.unmapped.join(', ')):'');
     const applyBtn=document.querySelector('[data-apply="'+code+'"]');
     if(applyBtn)applyBtn.disabled=false;
   })
@@ -3461,7 +3498,8 @@ function applyTranslation(code){
   const ta=document.querySelector('.cons-nl[data-code="'+code+'"]');
   const natural=ta?ta.value.trim():d.natural;
   if(!state.constraints)state.constraints={};
-  {const o=ensureOverride(code);o.natural=natural;for(const rk in (d.rules||{})){o.edits[rk]=d.rules[rk];}}
+  {const o=ensureOverride(code);o.natural=natural;for(const rk in (d.rules||{})){o.edits[rk]=d.rules[rk];}
+   if(d.hardness&&Object.keys(d.hardness).length){o.hardness=Object.assign({},o.hardness||{});for(const hk in d.hardness)if(hk in (d.rules||{}))o.hardness[hk]=d.hardness[hk];}}
   saveConstraints();
   delete pendingTranslations[code];
   setTicker('Applied constraints for '+(IMPCC_SOLVER.TEACHER_FULL[code]||code)+' — will affect the next generation','ok');
@@ -5567,6 +5605,21 @@ function renderGILegacy_UNUSED(){
    selected timetable combination. The real constraints are never touched:
    simulated rules live in state.simRules and are rendered as an overlay on
    the Constraints page with a per-rule verdict. */
+function saveRuleHardness(code,key,h){
+  if(simActive()){
+    state.simHardness=state.simHardness||{};
+    state.simHardness[code]=Object.assign({},state.simHardness[code]||{});
+    state.simHardness[code][key]=h;
+    setTicker('Simulation hardness '+key+' = '+h+'% — press Re-evaluate','ok');
+    return;
+  }
+  const o=ensureOverride(code);
+  o.hardness=Object.assign({},o.hardness||{});
+  o.hardness[key]=h;
+  saveConstraints();
+  setTicker('Hardness of "'+(RULE_META[key]?RULE_META[key].label:key)+'" for '+displayNameOf(code)+' set to '+(h===0?'off (inactive)':h+'%'),'ok');
+}
+function simBaseHardness(){ return state.simHardness || {}; }
 function simActive(){ return !!state.simMode; }
 function simRulesOf(code){
   state.simEdits = state.simEdits || {};
@@ -5583,6 +5636,10 @@ function simBaseConstraints(){
   for(const code in (state.simEdits || {})){
     merged[code] = merged[code] || { name: code, edits: {} };
     merged[code].edits = Object.assign({}, (merged[code].edits || {}), state.simEdits[code]);
+  }
+  for(const code in (state.simHardness || {})){
+    merged[code] = merged[code] || { name: code, edits: {} };
+    merged[code].hardness = Object.assign({}, (merged[code].hardness || {}), state.simHardness[code]);
   }
   return merged;
 }

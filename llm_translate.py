@@ -66,6 +66,65 @@ RULE_SPEC = {
 # per-entry scope object (may sit on ANY list-entry; absent = applies everywhere)
 SCOPE_KEYS = ("populations", "streams", "sections", "days")
 
+# ---------------------------------------------------------------- hardness
+# v2.1: every translated key gets a default hardness 0..100 inferred from the
+# statement's rigidity keywords (personal_constraints_model.md §8). The admin
+# can adjust afterwards in the UI; engines clamp/revalidate at ingest.
+HARDNESS_KEYWORDS = [
+    # (substring pattern, hardness) — first LONGEST-ANCHORED match wins
+    ("as much as possible", 20),
+    ("as far as possible", 20),
+    ("whenever possible", 20),
+    ("when possible", 25),
+    ("if possible", 25),
+    ("where possible", 25),
+    ("preferably", 30),
+    ("would prefer", 30),
+    ("prefers", 35),
+    ("prefer", 35),
+    ("try to avoid", 40),
+    ("tries to avoid", 40),
+    ("ideally", 45),
+    ("should try", 45),
+]
+_HARD_LITERAL_100 = ("only", "never", "must ", "cannot", "can't", "no less",
+                     "strictly", "always ", "at all times")
+
+
+def infer_hardness(text, rules, soft=None):
+    """Default hardness per rule key from the statement's rigidity keywords.
+    soft_* kinds are intrinsically soft (engines treat them as penalties
+    regardless) so they inherit the keyword strength too. A keyword hit LOWER
+    in this list beats nothing: earliest (strongest-soft) match wins. No
+    softening keyword -> 100 (only/never are the default reading anyway)."""
+    t = " " + (text or "").lower() + " "
+    hit = None
+    for kw, hv in HARDNESS_KEYWORDS:
+        if kw in t:
+            hit = hv if hit is None else min(hit, hv)
+    return {key: (hit if hit is not None else 100) for key in (rules or {})}
+
+
+def _validate_hardness(h, rules):
+    """Keep only {known rule key: int 0..100} entries; clamp; warn & drop the
+    rest. Returns (clean, warnings)."""
+    clean, warns = {}, []
+    if h is None:
+        return {}, []
+    if not isinstance(h, dict):
+        return {}, ["hardness must be an object {rule_key: 0..100}"]
+    for k, v in h.items():
+        if k not in (rules or {}):
+            warns.append(f"ignored hardness for unknown/absent key '{k}'")
+            continue
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            warns.append(f"ignored non-numeric hardness for '{k}'")
+            continue
+        clean[k] = max(0, min(100, n))
+    return clean, warns
+
 SYSTEM_PROMPT = """You translate a faculty member's natural-language timetable constraints into strict JSON.
 
 VOCABULARY
@@ -78,10 +137,19 @@ OUTPUT — return ONLY a JSON object, no markdown fences, with exactly this shap
   "teacher": "<name, or null if not identifiable>",
   "natural": "<the original statement, verbatim>",
   "rules": { ... },
+  "hardness": { "<rule key>": <int 0..100> },
   "confidence": 0.0,
   "unmapped": ["<anything you could not express>"],
   "notes": "<one short sentence explaining your interpretation>"
 }
+
+HARDNESS (per rule key, 0..100 — how rigid the rule is):
+- 100 = completely hard ("only", "never", "must always", bare imperatives).
+- 20..50 = softened by hedging keywords. Use this table (strongest match):
+    "as much as possible" → 20 · "whenever/if/where possible" → 20..25 ·
+    "preferably"/"prefer" → 30..35 · "try to avoid" → 40 · "ideally" → 45
+- 0 = annotation only (rarely use; only when the statement marks it as a mere note).
+Give a hardness value for EVERY key you emit in "rules".
 
 RULES — deterministic kind table (personal_constraints_model.md v2). Use ONLY these keys; anything that does not map mechanically to a row goes into "unmapped" — NEVER invent keys.
 
@@ -168,13 +236,13 @@ RULES OF CONDUCT
 EXAMPLES
 
 Input: "He can only come on Thursday and Friday, in the first three periods."
-Output: {"teacher":null,"natural":"He can only come on Thursday and Friday, in the first three periods.","rules":{"allowed_days":["THU","FRI"],"allowed_slots":["P1","P2","P3"]},"confidence":0.97,"unmapped":[],"notes":"Interpreted 'first three periods' as P1-P3."}
+Output: {"teacher":null,"natural":"He can only come on Thursday and Friday, in the first three periods.","rules":{"allowed_days":["THU","FRI"],"allowed_slots":["P1","P2","P3"]},"hardness":{"allowed_days":100,"allowed_slots":100},"confidence":0.97,"unmapped":[],"notes":"Interpreted 'first three periods' as P1-P3."}
 
 Input: "1st period must be engaged 4 days a week, last period must be free, no day must be completely off."
-Output: {"teacher":null,"natural":"1st period must be engaged 4 days a week, last period must be free, no day must be completely off.","rules":{"min_days_in_slot":[{"slot":"P1","min_days":4}],"forbidden_slots":["P5"],"min_days_engaged":5},"confidence":0.95,"unmapped":[],"notes":"'No day completely off' mapped to min_days_engaged 5."}
+Output: {"teacher":null,"natural":"1st period must be engaged 4 days a week, last period must be free, no day must be completely off.","rules":{"min_days_in_slot":[{"slot":"P1","min_days":4}],"forbidden_slots":["P5"],"min_days_engaged":5},"hardness":{"min_days_in_slot":100,"forbidden_slots":100,"min_days_engaged":100},"confidence":0.95,"unmapped":[],"notes":"'No day completely off' mapped to min_days_engaged 5."}
 
 Input: "Monday first two periods free, and I prefer not to teach on Friday."
-Output: {"teacher":null,"natural":"Monday first two periods free, and I prefer not to teach on Friday.","rules":{"forbidden_slots_on_days":[{"days":["MON"],"slots":["P1","P2"]}],"forbidden_days":["FRI"]},"confidence":0.9,"unmapped":[],"notes":"'Prefer' treated as a hard constraint."}
+Output: {"teacher":null,"natural":"Monday first two periods free, and I prefer not to teach on Friday.","rules":{"forbidden_slots_on_days":[{"days":["MON"],"slots":["P1","P2"]}],"forbidden_days":["FRI"]},"hardness":{"forbidden_slots_on_days":100,"forbidden_days":30},"confidence":0.9,"unmapped":[],"notes":"Monday windows are hard; 'prefer not' softens the Friday ban to hardness 30."}
 """
 
 
@@ -318,22 +386,29 @@ def try_direct_expression(text, teacher=None):
         payload if any(k in RULE_SPEC for k in payload.keys()) else None)
     if raw_rules is None:
         return None
+    if isinstance(raw_rules, dict) and "hardness" in raw_rules:
+        raw_rules = {k: v for k, v in raw_rules.items() if k != "hardness"}
     clean, errs, warns = _validate_rules(raw_rules)
+    raw_hard = payload.get("hardness")
+    hv, h_warns = _validate_hardness(raw_hard, clean)
     note = "direct expression (validated locally, no LLM call)"
     if errs:
-        return {"error": "invalid direct expression", "errors": errs, "warnings": warns,
-                "rules": clean, "natural": payload.get("natural") or t,
+        return {"error": "invalid direct expression", "errors": errs,
+                "warnings": warns + h_warns,
+                "rules": clean, "hardness": hv,
+                "natural": payload.get("natural") or t,
                 "teacher": teacher or payload.get("teacher") or None,
                 "notes": note, "unmapped": errs}
     return {
         "teacher": teacher or payload.get("teacher") or None,
         "natural": payload.get("natural") or t,
         "rules": clean,
+        "hardness": hv,   # absent map -> admin sliders show engine defaults
         "confidence": 1.0,
         "unmapped": payload.get("unmapped") or [],
-        "notes": ("; ".join(warns) + " — " if warns else "") + note,
+        "notes": ("; ".join(warns + h_warns) + " — " if warns + h_warns else "") + note,
         "errors": [],
-        "warnings": warns,
+        "warnings": warns + h_warns,
     }
 
 
@@ -423,15 +498,20 @@ def translate_constraints(text, teacher=None):
         return {"error": "LLM output was not an object", "raw": content}
 
     rules, errs, warns = _validate_rules(parsed.get("rules") or {})
+    hv, h_warns = _validate_hardness(parsed.get("hardness"), rules)
+    inferred = infer_hardness(parsed.get("natural") or text, rules)
+    # explicit LLM per-key hardness wins; fallback = keyword inference
+    hardness = {k: hv.get(k, inferred.get(k, 100)) for k in rules}
     return {
         "teacher": parsed.get("teacher") or teacher or None,
         "natural": parsed.get("natural") or text,
         "rules": rules,
+        "hardness": hardness,
         "confidence": float(parsed.get("confidence") or 0),
         "unmapped": parsed.get("unmapped") or [],
         "notes": parsed.get("notes") or "",
         "errors": errs,
-        "warnings": warns,
+        "warnings": warns + h_warns,
     }
 
 

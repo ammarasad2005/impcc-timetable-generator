@@ -224,14 +224,13 @@
   function teacherSlotDomain(teacher, R, P) {
     const entry = (R || {})[teacher] || {};
     const r = entry.rules || {};
-    const soft = new Set(entry.soft || []);
     let dom = null, restricted = false;
-    if (r.allowed_slots != null && !soft.has("allowed_slots")) {
+    if (r.allowed_slots != null && hardnessOfJS(entry, "allowed_slots") === 100) {
       dom = new Set();
       for (const x of r.allowed_slots) { const s = SLOT_OF[x]; if (s < P) dom.add(s); }
       restricted = true;
     }
-    if (r.forbidden_slots != null && !soft.has("forbidden_slots")) {
+    if (r.forbidden_slots != null && hardnessOfJS(entry, "forbidden_slots") === 100) {
       if (!dom) { dom = new Set(); for (let s = 0; s < P; s++) dom.add(s); }
       for (const x of r.forbidden_slots) dom.delete(SLOT_OF[x]);
       restricted = true;
@@ -293,19 +292,19 @@
     const D = model.days;
     let dom = new Set();
     for (let d = 0; d < D; d++) dom.add(d);
-    const rules = u.group ? {} : (((R || {})[u.teacher] || {}) || {}).rules || {};
-    const soft = u.group ? new Set() : new Set(((R || {})[u.teacher] || {}).soft || []);
+    const uEnt = u.group ? {} : ((R || {})[u.teacher] || {});
+    const rules = u.group ? {} : (uEnt.rules || {});
     const metaBySec = model._metaBySec || {};
     for (const sec of u.secs) {
       const m = metaBySec[sec] || {};
       for (const d of (m.offDays || [])) dom.delete(d);
     }
     if (!u.group) {
-      if (rules.allowed_days != null && !soft.has("allowed_days")) {
+      if (rules.allowed_days != null && hardnessOfJS(uEnt, "allowed_days") === 100) {
         const allow = daySet(rules.allowed_days);
         for (const d of Array.from(dom)) if (!allow.has(d)) dom.delete(d);
       }
-      if (rules.forbidden_days != null && !soft.has("forbidden_days")) {
+      if (rules.forbidden_days != null && hardnessOfJS(uEnt, "forbidden_days") === 100) {
         for (const d of daySet(rules.forbidden_days)) dom.delete(d);
       }
       for (const e of (rules.allowed_days_in_stream || [])) {
@@ -333,13 +332,13 @@
       }
     } else {
       for (const mem of u.members) {
-        const mr = ((R || {})[mem] || {}).rules || {};
-        const msoft = new Set(((R || {})[mem] || {}).soft || []);
-        if (mr.allowed_days != null && !msoft.has("allowed_days")) {
+        const mEnt = (R || {})[mem] || {};
+        const mr = mEnt.rules || {};
+        if (mr.allowed_days != null && hardnessOfJS(mEnt, "allowed_days") === 100) {
           const allow = daySet(mr.allowed_days);
           for (const d of Array.from(dom)) if (!allow.has(d)) dom.delete(d);
         }
-        if (mr.forbidden_days != null && !msoft.has("forbidden_days")) {
+        if (mr.forbidden_days != null && hardnessOfJS(mEnt, "forbidden_days") === 100) {
           for (const d of daySet(mr.forbidden_days)) dom.delete(d);
         }
       }
@@ -367,6 +366,18 @@
     const sc = (e && typeof e.scope === "object" && e.scope) || {};
     return sc;
   }
+  function hardnessOfJS(entry, kind) {
+    // Mirror of solver.py hardness_of: explicit entry.hardness map wins,
+    // legacy soft list -> 50, everything else -> 100. (personal_constraints_model §8)
+    const h = entry && entry.hardness;
+    if (h && typeof h === "object" && Object.prototype.hasOwnProperty.call(h, kind)) {
+      const n = parseInt(h[kind], 10);
+      return isNaN(n) ? 100 : Math.max(0, Math.min(100, n));
+    }
+    if (entry && entry.soft && entry.soft.includes(kind)) return 50;
+    return 100;
+  }
+
   function scopeCellAppliesJS(e, sec, day, pop, stream) {
     const sc = scopeOfEntry(e);
     const pops = sc.populations, streams = sc.streams, secs = sc.sections, days = sc.days;
@@ -396,7 +407,10 @@
     return days;
   }
 
-  function teacherRuleFindings(code, rules, softSet, myUnits, cells, popMap, D, P, pen) {
+  function teacherRuleFindings(code, entry, myUnits, cells, popMap, D, P, pen) {
+    entry = entry || {};
+    const rules = entry.rules || {};
+    const softSet = new Set(entry.soft || []);
     // cells: [[d, s, sec, unit], ...]; popMap: {sec -> pop}; returns finding dicts.
     const findings = [];
     const popOf = sec => popMap[sec] != null ? popMap[sec] : null;
@@ -418,12 +432,23 @@
     const uidsOf = pred => [...new Set(cells.filter(c => pred(c[0], c[1], c[2], c[3])).map(c => c[3].id))].sort((a, b) => a - b);
     function add(ruleKey, msg, opts) {
       opts = opts || {};
+      const h = hardnessOfJS(entry, ruleKey);
+      if (h === 0) return;   // inactive: annotation only
+      let isSoft = opts.isSoft != null ? !!opts.isSoft : softSet.has(ruleKey);
+      let penX = opts.pen != null ? opts.pen : null;
+      if (!isSoft && h < 100) {
+        isSoft = true;                       // demoted hard kind
+        if (penX === null) penX = Math.floor(pen.rule * h / 100);
+      } else if (isSoft && h < 100) {
+        // native soft (soft list) or soft_* kind — legacy list = h50 (spec §8)
+        penX = Math.floor((penX !== null ? penX : pen.rule) * h / 100);
+      }
       findings.push({
         rule_key: ruleKey, msg: msg,
-        soft: opts.isSoft != null ? !!opts.isSoft : softSet.has(ruleKey),
+        soft: isSoft,
         uids: opts.uids != null ? opts.uids : [...new Set(myUnits.map(u => u.id))].sort((a, b) => a - b),
         cells: opts.cells || [],
-        pen: opts.pen != null ? opts.pen : null
+        pen: penX
       });
     }
 
@@ -969,7 +994,7 @@
           }
         }
       }
-      for (const f of teacherRuleFindings(code, rules, soft, myUnits, cells, popMap, D, P, pen)) {
+      for (const f of teacherRuleFindings(code, entry, myUnits, cells, popMap, D, P, pen)) {
         if (f.soft) {
           violations.push({ rule: code + ":" + f.rule_key, detail: f.msg,
                             penalty: f.pen != null ? f.pen : pen.rule });
@@ -1672,7 +1697,7 @@
           if ((tDayUsed[t] || (tDayUsed[t] = new Set())).has(d)) return false;
           // hard day+slot bans (Atif/UmairAhmad/Irfan/Naeem-style)
           const tentry = (model.constraints[t] || {});
-          if (tentry.soft && tentry.soft.indexOf("forbidden_slots_on_days") >= 0) continue;
+          if (hardnessOfJS(tentry, "forbidden_slots_on_days") < 100) continue;
           for (const e of ((tentry.rules || {}).forbidden_slots_on_days || [])) {
             if (daySet(e.days).has(d) && slotSet(e.slots).has(s)) return false;
           }

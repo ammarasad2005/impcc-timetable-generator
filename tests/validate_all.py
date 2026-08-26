@@ -1144,7 +1144,7 @@ def _c2_grid_one_unit():
     return grids, u
 
 
-def _c2_findings(code, rules, grids, soft=None):
+def _c2_findings(code, rules, grids, soft=None, hardness=None):
     my_units = [u for u in model_c2["units"]
                 if u["teacher"] == code or (u["group"] and code in (u["members"] or []))]
     cells = []
@@ -1157,7 +1157,8 @@ def _c2_findings(code, rules, grids, soft=None):
                 for s in range(P2):
                     if g[d][s] == u["id"]:
                         cells.append((d, s, sec, u))
-    return CM.teacher_rule_findings(code, rules, set(soft or []), my_units, cells,
+    entry = {"rules": rules, "soft": list(soft or []), "hardness": hardness or {}}
+    return CM.teacher_rule_findings(code, entry, my_units, cells,
                                     pop_of_c2, D2, P2, model_c2["penalties"]), u
 
 
@@ -1243,6 +1244,126 @@ check("C2-t analyze surfaces the same breach (sig/ticket)", tick_found)
 an_hard = json.dumps([v for v in rep.get("violations", []) if "allowed_slots_days" in json.dumps(v)]
                      + rep.get("issues", []) if rep.get("issues") else [])
 check("C2-u (parity note) analyze hard-miss reported too", "allowed_slots_days" in json.dumps(rep))
+
+# =====================================================================
+print()
+print("=" * 72)
+print("C3 FACULTY HARDNESS METRIC (v2.1)")
+print("=" * 72)
+
+# ---- shared helper contract (solver.hardness_of)
+_e_c3 = {"rules": {"forbidden_slots": ["P1"], "allowed_days": ["TUE"]},
+         "soft": ["forbidden_slots"], "hardness": {"allowed_days": 60}}
+check("C3-a hardness_of: explicit map wins", solver.hardness_of(_e_c3, "allowed_days") == 60)
+check("C3-b hardness_of: legacy soft list -> 50", solver.hardness_of(_e_c3, "forbidden_slots") == 50)
+check("C3-c hardness_of: default 100", solver.hardness_of(_e_c3, "max_periods_per_day") == 100)
+check("C3-d hardness_of: clamped 0..100",
+      solver.hardness_of({"hardness": {"x": 250}}, "x") == 100
+      and solver.hardness_of({"hardness": {"x": -7}}, "x") == 0)
+check("C3-e hardness_of: bad value -> 100", solver.hardness_of({"hardness": {"x": "oops"}}, "x") == 100)
+
+# ---- Python walker semantics (same _c2_findings harness on grids1 @ TUE P2)
+f, _ = _c2_findings("V1", {"allowed_slots": ["P1"]}, grids1)
+check("C3-f walker h=100: hard finding", len(f) == 1 and f[0]["soft"] is False)
+f, _ = _c2_findings("V1", {"allowed_slots": ["P1"]}, grids1, hardness={"allowed_slots": 60})
+check("C3-g walker h=60: soft finding, pen 5000*0.6=3000",
+      len(f) == 1 and f[0]["soft"] is True and f[0]["pen"] == 3000)
+f, _ = _c2_findings("V1", {"allowed_slots": ["P1"]}, grids1, hardness={"allowed_slots": 0})
+check("C3-h walker h=0: finding suppressed", len(f) == 0)
+f, _ = _c2_findings("V1", {"allowed_slots": ["P1"]}, grids1, soft=["allowed_slots"])
+check("C3-i walker legacy soft: soft finding, pen scaled 5000*0.5=2500",
+      len(f) == 1 and f[0]["soft"] is True and f[0]["pen"] == 2500)
+
+# soft-native scaling: prefer_free_slots base 500/hit -> h=30 gives 150
+f, _ = _c2_findings("V1", {"soft_prefer_free_slots": ["P2"]}, grids1,
+                    hardness={"soft_prefer_free_slots": 30})
+fhit = [x for x in f if x["rule_key"] == "soft_prefer_free_slots"]
+check("C3-j soft-native scaled 500*0.3=150", len(fhit) == 1 and fhit[0]["pen"] == 150)
+f, _ = _c2_findings("V1", {"soft_prefer_free_slots": ["P2"]}, grids1)
+fhit = [x for x in f if x["rule_key"] == "soft_prefer_free_slots"]
+check("C3-k soft-native default keeps base 500", len(fhit) == 1 and fhit[0]["pen"] == 500)
+
+# ---- CP-SAT: h=40 demotion keeps model solvable; checker documents pen 2000
+model_h40 = _mini_model({"forbidden_slots": ["P1", "P2", "P3", "P4", "P5"]}, 5, t_chunk=5)
+model_h40["constraints"]["T"]["hardness"] = {"forbidden_slots": 40}
+ml40 = copy.deepcopy(model_h40)
+built40 = cp_solver.build_from_context(ml40)
+st40 = None
+if built40 is not None:
+    m40, ps40, pd40, _ = built40
+    sv40 = cp_model.CpSolver(); sv40.parameters.max_time_in_seconds = 10
+    st40 = sv40.Solve(m40)
+    if st40 in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        g40 = cp_solver.decode_context(sv40, ml40, ps40, pd40)
+        ev40 = CM.evaluate(g40, ml40)
+        dem40 = [v for v in ev40["violations"] if "forbidden_slots" in str(v.get("rule", ""))]
+        check("C3-l CP h=40 demote: haze=0 issues, documented violation pen 2000",
+              ev40["issues"] == [] and len(dem40) == 1 and dem40[0]["penalty"] == 2000)
+    else:
+        check("C3-l CP h=40 demote: haze=0 issues, documented violation pen 2000", False,
+              "solver status %s" % st40)
+else:
+    check("C3-l CP h=40 demote: haze=0 issues, documented violation pen 2000", False, "presolve None")
+
+# control: same shape at h=100 -> truly infeasible (5-piece unit, all slots banned)
+model_h100 = _mini_model({"forbidden_slots": ["P1", "P2", "P3", "P4", "P5"]}, 5, t_chunk=5)
+built100 = cp_solver.build_from_context(copy.deepcopy(model_h100))
+ok100 = built100 is None            # presolve already knows the domain is empty
+if built100 is not None:
+    m100, ps100, pd100, _ = built100
+    sv100 = cp_model.CpSolver(); sv100.parameters.max_time_in_seconds = 10
+    st100 = sv100.Solve(m100)
+    ok100 = st100 not in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+check("C3-m CP h=100 control: fully-forbidden teacher infeasible", bool(ok100))
+
+# h=0: forbidden mask removed entirely -> model solvable AND checker silent
+model_h0 = _mini_model({"forbidden_slots": ["P1", "P2", "P3", "P4", "P5"]}, 5, t_chunk=5)
+model_h0["constraints"]["T"]["hardness"] = {"forbidden_slots": 0}
+ml0 = copy.deepcopy(model_h0)
+g0, st0 = _mini_solve(ml0, 10)
+ev0 = CM.evaluate(g0, ml0) if g0 is not None else {"issues": None}
+check("C3-n CP h=0 inactive: solvable, no forbidden_slots reporting",
+      g0 is not None and not any("forbidden_slots" in json.dumps(x) for x in
+                                 (ev0["issues"] or []) + (ev0.get("violations") or [])))
+
+# ---- JS mirrors share the harness (node)
+import subprocess as _spc3
+def _run_js_mirror(h_map, soft_list):
+    js = r"""
+global.IMPCC_POPULATIONS = { POPULATIONS: require("/home/user/impcc-timetable-generator/populations.js").POPULATIONS };
+global.IMPCC_DATA = require("/home/user/impcc-timetable-generator/data.js");
+const CANON = require("/home/user/impcc-timetable-generator/canonical.js");
+const ctx = CANON.solverContext(["inter-1","bs-1"]);
+const JS = require("/home/user/impcc-timetable-generator/context_solver.js");
+const model = JS.contextToModel(ctx);
+const D = model.days, P = model.periods;
+const grids = {};
+for (const s of model.sections) grids[s.key] = Array.from({length: D}, () => Array(P).fill(null));
+model.constraints = { TESTU: { rules: { forbidden_slots: ["P2"] },
+                                soft: SOFTLIST,
+                                hardness: HMAP } };
+model.units.unshift({ id: -1, teacher: "TESTU", members: [], secs: [model.sections[0].key],
+                      count: 1, courseBySec: {}, group: false });
+grids[model.sections[0].key][1][1] = -1;   // one piece in P2, out of scope for legacy paths
+const rep = JS.evaluate(grids, model);
+const viol = rep.violations.find(v => v.rule === "TESTU:forbidden_slots");
+const iss = rep.issues.filter(i => String(i).indexOf("forbidden slot") >= 0 ||
+                                    String(i).indexOf("TESTU") >= 0);
+console.log(JSON.stringify({ soft: !!viol, pen: viol ? viol.penalty : null, issues: iss.length }));
+"""
+    js = js.replace("SOFTLIST", json.dumps(soft_list)).replace("HMAP", json.dumps(h_map))
+    r = _spc3.run(["node", "-e", js], capture_output=True, text=True, timeout=120)
+    if r.returncode != 0:
+        return {"error": r.stderr.strip()[-400:]}
+    return json.loads(r.stdout.strip().splitlines()[-1])
+
+j60 = _run_js_mirror({"forbidden_slots": 60}, [])
+check("C3-o JS walker h=60: soft finding penalty 3000",
+      j60.get("soft") is True and j60.get("pen") == 3000 and j60.get("issues") == 0)
+j0 = _run_js_mirror({"forbidden_slots": 0}, [])
+check("C3-p JS walker h=0: silent", j0.get("soft") is False and j0.get("issues") == 0)
+j100 = _run_js_mirror({}, [])
+check("C3-q JS walker default h=100: hard issue", j100.get("issues", 0) >= 1)
 
 total = passed + failures
 print("RESULT: %d/%d checks passed%s" %

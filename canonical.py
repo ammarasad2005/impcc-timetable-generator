@@ -153,10 +153,28 @@ def solver_allocation(population_id):
 
 def solver_constraints():
     """Faculty constraints -> the solver's edits-model form (person-level).
-    Carries the `soft` list (rule keys enforced as soft preferences)."""
-    return {code: {"name": c["name"], "rules": c["rules"],
-                   "soft": c.get("soft") or []}
-            for code, c in (get().get("constraints") or {}).items()}
+    Carries the `soft` list and the v2.1 `hardness` map (cleaned at ingest)."""
+    return {code: clean_faculty_entry(c) for code, c in (get().get("constraints") or {}).items()}
+
+
+def clean_faculty_entry(c):
+    """Shape wall for one teacher's constraint record: unknown rule keys are
+    dropped, the v2.1 hardness map is reduced to present rule keys and clamped
+    to ints 0..100. Keeps the legacy `soft` list verbatim (legacy compat:
+    listed keys behave like hardness 50)."""
+    from llm_translate import _validate_rules
+    rules, _errs, warnings = _validate_rules(c.get("rules") or {})
+    hard = {}
+    for k, v in (c.get("hardness") or {}).items():
+        if k not in rules:
+            continue
+        try:
+            hard[k] = max(0, min(100, int(v)))
+        except (TypeError, ValueError):
+            continue
+    returns_ = {"name": c["name"], "rules": rules,
+                "soft": c.get("soft") or [], "hardness": hard}
+    return returns_
 
 
 # ---------------------------------------------------------------- helpers

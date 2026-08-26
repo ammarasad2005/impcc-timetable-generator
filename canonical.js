@@ -156,11 +156,43 @@
   }
 
   // Faculty constraints -> the solver's edits-model form (person-level).
+  // Shape wall: drop unknown rule keys, clmap the v2.1 hardness map to
+  // present keys / ints 0..100, keep the legacy `soft` list as-is.
+  // Mirror of canonical.clean_faculty_entry. Kind list 1:1 with
+  // personal_constraints_model.md (taxonomy v2) / llm_translate.RULE_SPEC.
+  var KNOWN_RULE_KEYS = [
+    "allowed_slots","forbidden_slots","allowed_days","forbidden_days",
+    "allowed_slots_days","allowed_slots_in_sections","allowed_days_in_sections",
+    "allowed_sections","forbidden_sections","forbidden_slots_on_days",
+    "allowed_slots_in_stream","allowed_days_in_stream","stream_forbidden_days",
+    "subject_slots","subject_forbidden_days","subject_days_allowed",
+    "subject_slot_days","subject_slots_days",
+    "min_days_in_slot","max_days_in_slot","min_days_engaged",
+    "max_periods_per_day","min_periods_per_day","stream_slots_required",
+    "max_pieces_match","min_pieces_match",
+    "no_daily_gaps",
+    "soft_prefer_free_slots","soft_prefer_free_slots_days",
+    "soft_even_distribution","soft_compact_days",
+    "allow_same_subject_same_day"
+  ];
+  function cleanFacultyEntry(c) {
+    const rules = {};
+    for (const k in (c.rules || {})) {
+      if (KNOWN_RULE_KEYS.indexOf(k) >= 0) rules[k] = c.rules[k];
+    }
+    const hard = {};
+    for (const k in (c.hardness || {})) {
+      if (!(k in rules)) continue;
+      const n = parseInt(c.hardness[k], 10);
+      if (isNaN(n)) continue;
+      hard[k] = Math.max(0, Math.min(100, n));
+    }
+    return { name: c.name, rules: rules, soft: c.soft || [], hardness: hard };
+  }
   function solverConstraints() {
     const out = {};
     for (const code in (get().constraints || {})) {
-      const c = get().constraints[code];
-      out[code] = { name: c.name, rules: c.rules, soft: c.soft || [] };
+      out[code] = cleanFacultyEntry(get().constraints[code]);
     }
     return out;
   }
@@ -322,6 +354,7 @@
     load: load, get: get, validate: validate,
     directory: directory, nameToCode: nameToCode, codeOf: codeOf, displayName: displayName,
     solverAllocation: solverAllocation, solverConstraints: solverConstraints,
+    cleanFacultyEntry: cleanFacultyEntry,
     solverContext: solverContext,
     extendSolver: extendSolver, sectionFill: sectionFill, teacherLoad: teacherLoad,
     POPULATIONS: ["inter-1", "bs-1", "inter-2"],

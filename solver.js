@@ -228,6 +228,18 @@
       const soft = entry.soft || (out[code] && out[code].soft) || [];
       out[code] = { name: entry.name || (out[code] && out[code].name) || k, rules: base };
       if (soft.length) out[code].soft = soft.slice();
+      // v2.1 hardness map: defaults merged with the override (per-key, clamped)
+      const hardM = Object.assign({},
+        (DEFAULT_CONSTRAINTS[code] && DEFAULT_CONSTRAINTS[code].hardness) || {},
+        entry.hardness || {});
+      const hard = {};
+      for (const hk in hardM) {
+        if (!(hk in base)) continue;
+        const n = parseInt(hardM[hk], 10);
+        if (isNaN(n)) continue;
+        hard[hk] = Math.max(0, Math.min(100, n));
+      }
+      if (Object.keys(hard).length) out[code].hardness = hard;
     }
     return out;
   }
@@ -306,25 +318,33 @@
   // ------------------------------------------------------------- domains
   function slotDomainT(t, subj, R) {
     if (t === "PARALLEL") return [2, 3];                       // structural option block
-    const r = R && R[t] && R[t].rules;
-    if (r && r.subject_slots) {
+    const ent = R && R[t] ? R[t] : null;
+    const r = ent && ent.rules;
+    const _hard = k => !ent || hardnessOfFac(ent, k) === 100;
+    if (r && r.subject_slots && _hard("subject_slots")) {
       const m = r.subject_slots.find(e => e.subject === subj);
       if (m) return m.slots.map(x => SLOT_OF[x]);
     }
     let dom = [];
     for (let i = 0; i < P; i++) dom.push(i);
-    if (r && r.allowed_slots)   dom = dom.filter(x => _slotSet(r.allowed_slots).has(x));
-    if (r && r.forbidden_slots) dom = dom.filter(x => !_slotSet(r.forbidden_slots).has(x));
+    if (r && r.allowed_slots && _hard("allowed_slots"))
+      dom = dom.filter(x => _slotSet(r.allowed_slots).has(x));
+    if (r && r.forbidden_slots && _hard("forbidden_slots"))
+      dom = dom.filter(x => !_slotSet(r.forbidden_slots).has(x));
     return dom;
   }
   function slotDomain(u, R) { return slotDomainT(u.teacher, u.subject, R); }
   function dayDomainT(t, subj, R) {
-    const r = R && R[t] && R[t].rules;
+    const ent = R && R[t] ? R[t] : null;
+    const r = ent && ent.rules;
+    const _hard = k => !ent || hardnessOfFac(ent, k) === 100;
     let dom = [];
     for (let i = 0; i < D; i++) dom.push(i);
-    if (r && r.allowed_days)   dom = dom.filter(d => _daySet(r.allowed_days).has(d));
-    if (r && r.forbidden_days) dom = dom.filter(d => !_daySet(r.forbidden_days).has(d));
-    if (r && r.subject_forbidden_days) {
+    if (r && r.allowed_days && _hard("allowed_days"))
+      dom = dom.filter(d => _daySet(r.allowed_days).has(d));
+    if (r && r.forbidden_days && _hard("forbidden_days"))
+      dom = dom.filter(d => !_daySet(r.forbidden_days).has(d));
+    if (r && r.subject_forbidden_days && _hard("subject_forbidden_days")) {
       const m = r.subject_forbidden_days.find(e => e.subject === subj);
       if (m) dom = dom.filter(d => !_daySet(m.days).has(d));
     }
@@ -813,6 +833,17 @@
   // ------------------------------------------------------------ validate
 
   // =====================================================================
+  function hardnessOfFac(entry, kind) {
+    // Mirror of solver.py hardness_of (personal_constraints_model §8).
+    const h = entry && entry.hardness;
+    if (h && typeof h === "object" && Object.prototype.hasOwnProperty.call(h, kind)) {
+      const n = parseInt(h[kind], 10);
+      return isNaN(n) ? 100 : Math.max(0, Math.min(100, n));
+    }
+    if (entry && entry.soft && entry.soft.includes(kind)) return 50;
+    return 100;
+  }
+
   // facultyRuleFindings — classic port of the shared personal-rule walker
   // (identical kinds/semantics to context_solver.js / context_model.py).
   // Classic sections carry no pop; pop-scoped entries stay permissive here.
@@ -863,7 +894,10 @@
     return days;
   }
 
-  function facultyRuleFindings(code, rules, softSet, myUnits, cells, popMap, D, P, penFac) {
+  function facultyRuleFindings(code, facEntry, myUnits, cells, popMap, D, P, penFac) {
+    facEntry = facEntry || {};
+    const rules = facEntry.rules || {};
+    const softSet = new Set(facEntry.soft || []);
     // cells: [[d, s, sec, unit], ...]; popMap: {sec -> pop}; returns finding dicts.
     const findings = [];
     const popOf = sec => popMap[sec] != null ? popMap[sec] : null;
@@ -882,12 +916,22 @@
     const uidsOf = pred => [...new Set(cells.filter(c => pred(c[0], c[1], c[2], c[3])).map(c => c[3].id))].sort((a, b) => a - b);
     function add(ruleKey, msg, opts) {
       opts = opts || {};
+      const hf = hardnessOfFac(facEntry, ruleKey);
+      if (hf === 0) return;                    // inactive: annotation only
+      let isSoft = opts.isSoft != null ? !!opts.isSoft : softSet.has(ruleKey);
+      let penX = opts.pen != null ? opts.pen : null;
+      if (!isSoft && hf < 100) {
+        isSoft = true;                         // demoted hard kind
+        if (penX === null && penFac && penFac.rule != null) penX = Math.floor(penFac.rule * hf / 100);
+      } else if (isSoft && hf < 100) {
+        penX = Math.floor((penX !== null ? penX : penFac.rule) * hf / 100);
+      }
       findings.push({
         rule_key: ruleKey, msg: msg,
-        soft: opts.isSoft != null ? !!opts.isSoft : softSet.has(ruleKey),
+        soft: isSoft,
         uids: opts.uids != null ? opts.uids : [...new Set(myUnits.map(u => u.id))].sort((a, b) => a - b),
         cells: opts.cells || [],
-        pen: opts.pen != null ? opts.pen : null
+        pen: penX
       });
     }
 
@@ -1297,7 +1341,8 @@
           const sh = shimOf(uid);
           if (sh && sh.teacher === t) cells.push([d, s, secKey, sh]);
         }
-        for (const f of facultyRuleFindings(t, rules, softSet, myUnits, cells, {}, Dg, Pg, penFac)) {
+        const facEntry = { rules: rules, soft: entry.soft, hardness: entry.hardness };
+        for (const f of facultyRuleFindings(t, facEntry, myUnits, cells, {}, Dg, Pg, penFac)) {
           issues.push((f.soft ? "(soft) " : "") + t + " " + f.msg);
         }
       }

@@ -248,16 +248,20 @@ def _scope_signature(e):
             tuple(sorted(sc.get("sections") or [])))
 
 
-def teacher_rule_findings(code, rules, soft, my_units, cells, pop_of, D, P, pen):
+def teacher_rule_findings(code, entry, my_units, cells, pop_of, D, P, pen):
     """Shared deterministic walk over ONE teacher's taught cells against the
     full personal-constraint taxonomy (personal_constraints_model.md).
 
+    `entry` = the teacher's record {rules:{...}, soft:[...], hardness:{...}};
+    hardness 100 = hard mask, 1..99 = soft (penalty × h/100), 0 = inactive (§8).
     `cells` = list of (d, s, sec, u) — the teacher's occupied cells (ints d,s).
     Returns finding dicts: {rule_key, msg, soft, uids, cells, pen}.
     evaluate() AND the repair analyzer both consume this — one implementation
     of every personal rule kind, so semantics can never drift apart."""
-    from solver import scope_cell_applies
-    soft = set(soft or [])
+    from solver import scope_cell_applies, hardness_of
+    entry = entry or {}
+    rules = entry.get("rules") or {}
+    soft = set(entry.get("soft") or [])
     findings = []
 
     def course(u, sec):
@@ -282,9 +286,21 @@ def teacher_rule_findings(code, rules, soft, my_units, cells, pop_of, D, P, pen)
         return sorted({u["id"] for (d, s, sec, u) in cells if pred(d, s, sec, u)})
 
     def add(rule_key, msg, clist=None, uids=None, is_soft=None, pen_=None):
+        h = hardness_of(entry, rule_key)
+        if h == 0:
+            return   # inactive: kept as an admin annotation only
+        is_soft_ = (rule_key in soft) if is_soft is None else bool(is_soft)
+        if not is_soft_ and h < 100:
+            is_soft_ = True                       # demoted to a soft finding
+            if pen_ is None:
+                pen_ = int(pen["rule"] * h / 100)
+        elif is_soft_ and h < 100:
+            # native soft (in `soft` list) or soft_* kind: scale the penalty too —
+            # legacy soft list behaves like explicit h=50 (spec §8)
+            pen_ = int((pen_ if pen_ is not None else pen["rule"]) * h / 100)
         findings.append({
             "rule_key": rule_key, "msg": msg,
-            "soft": (rule_key in soft) if is_soft is None else bool(is_soft),
+            "soft": is_soft_,
             "uids": uids if uids is not None else sorted({u["id"] for u in my_units}),
             "cells": list(clist or []), "pen": pen_})
 
@@ -783,8 +799,6 @@ def evaluate(grids, model):
     R = model["constraints"]
     pop_of = {s["key"]: s.get("pop") for s in model.get("sections", [])}
     for code, entry in R.items():
-        rules = (entry or {}).get("rules") or {}
-        soft_l = set((entry or {}).get("soft") or [])
         my_units = [u for u in units if u["teacher"] == code or (u["members"] and code in u["members"])]
         if not my_units:
             continue
@@ -799,7 +813,7 @@ def evaluate(grids, model):
                         if g[d][s] == u["id"]:
                             cells.append((d, s, sec, u))
 
-        for f in teacher_rule_findings(code, rules, soft_l, my_units, cells, pop_of, D, P, pen):
+        for f in teacher_rule_findings(code, entry, my_units, cells, pop_of, D, P, pen):
             if f["soft"]:
                 violations.append({"rule": f"{code}:{f['rule_key']}", "detail": f["msg"],
                                    "penalty": f["pen"] if f["pen"] is not None else pen["rule"]})
@@ -1260,8 +1274,6 @@ def analyze_structured(grids, model):
     R = model["constraints"]
     pop_of = {s["key"]: s.get("pop") for s in model.get("sections", [])}
     for code, entry in R.items():
-        rules = (entry or {}).get("rules") or {}
-        soft_l = set((entry or {}).get("soft") or [])
         my_units = [u for u in units if u["teacher"] == code or (u["members"] and code in u["members"])]
         if not my_units:
             continue
@@ -1275,7 +1287,7 @@ def analyze_structured(grids, model):
                     for s in range(P):
                         if g[d][s] == u["id"]:
                             cells.append((d, s, sec, u))
-        for f in teacher_rule_findings(code, rules, soft_l, my_units, cells, pop_of, D, P, pen):
+        for f in teacher_rule_findings(code, entry, my_units, cells, pop_of, D, P, pen):
             uids = f["uids"]
             clist = [C(sec, d, s) for (sec, d, s) in f["cells"]]
             if f["soft"]:
