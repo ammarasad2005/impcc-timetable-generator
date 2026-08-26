@@ -383,15 +383,24 @@ def _unit_slot_domain(u, R, model):
                     gdom &= set(md)
             dom &= gdom
     else:
+        _ss_by_subj = {}
         for e in (rules.get("subject_slots") or []):
+            if e.get("days"):
+                continue   # day-scoped pins are encoded at the cell level
+            _ss_by_subj.setdefault(e["subject"], set()).update({SLOT_OF[x] for x in e["slots"]})
+        for subj, sset in _ss_by_subj.items():
             for sec in u["secs"]:
-                if u["courseBySec"].get(sec) == e["subject"]:
-                    dom &= {SLOT_OF[x] for x in e["slots"]}
+                if u["courseBySec"].get(sec) == subj:
+                    dom &= sset
         for e in (rules.get("subject_slot_days") or []):
+            if e.get("days"):
+                continue   # day-scoped pin handled cell-level
             for sec in u["secs"]:
                 if u["courseBySec"].get(sec) == e["subject"]:
                     dom &= {SLOT_OF[e["slot"]]}
         for e in (rules.get("allowed_slots_in_stream") or []):
+            if e.get("days"):
+                continue
             for sec in u["secs"]:
                 if _sec_stream(sec) == e["stream"]:
                     dom &= {SLOT_OF[x] for x in e["slots"]}
@@ -520,22 +529,21 @@ def build_from_context(model, objective="default", collect=None):
             for e in (trules.get("forbidden_slots_on_days") or []):
                 if "forbidden_slots_on_days" in tsoft:
                     continue
+                sc = e.get("scope") or {}
+                if sc.get("streams") and not any(_sec_stream(sec) in sc["streams"] for sec in u["secs"]):
+                    continue
+                if sc.get("sections") and not any(sec in sc["sections"] for sec in u["secs"]):
+                    continue
+                if sc.get("populations") and not any(((model.get("_meta") or {}).get(sec) or {}).get("pop") in sc["populations"] for sec in u["secs"]):
+                    continue
                 dset = {DAY_OF[x] for x in e["days"]}
+                if sc.get("days"):
+                    dset &= _dayset(sc["days"])
                 sset = {SLOT_OF[x] for x in e["slots"]}
                 for p in range(c):
                     for d in sorted(dset):
                         for s_ in sorted(sset):
                             m.Add(piece_keys[i][p] != s_ * Dg + d)
-            if t == u["teacher"] and not u["group"]:
-                for e in (trules.get("subject_slot_days") or []):
-                    if "subject_slot_days" in tsoft:
-                        continue
-                    if any(u["courseBySec"].get(sec) == e["subject"] for sec in u["secs"]):
-                        dset = {DAY_OF[x] for x in e["days"]}
-                        for p in range(c):
-                            for d in range(Dg):
-                                if d not in dset:
-                                    m.Add(piece_days[i][p] != d)
 
         # ---- soft slot rules (excluded from domains; penalized here)
         if not u["group"]:
@@ -729,6 +737,299 @@ def build_from_context(model, objective="default", collect=None):
                     for sl in sset:
                         m.Add(piece_keys[u["id"]][p] != sl * Dg + d)
 
+    # =================================================================
+    # EXTENDED PERSONAL RULES (personal_constraints_model.md v2): every
+    # taxonomy-v2 kind not expressible in the legacy slot/day domains lands
+    # here — day×slot windows, section/stream-scoped masks, distribution
+    # quotas, per-day count bounds, gap structure, and the new soft kinds.
+    # Units with multiple sections SHARE piece vars across sections, so a
+    # section-scoped test uses the conservative all-sections-match reading
+    # (scope_unit_applies); single-section units match the checker exactly.
+    # =================================================================
+    from solver import scope_unit_applies as _sua
+    pop_map = {s["key"]: s.get("pop") for s in model.get("sections", [])}
+    _pop_of = lambda sec: pop_map.get(sec)
+
+    def _e_days(e, Dg_=Dg):
+        """Entry day set with scope.days intersecting literal days; empty = all."""
+        days = _dayset(e.get("days") or [])
+        scd = _dayset(((e.get("scope") or {}).get("days")) or [])
+        if days and scd:
+            days &= scd
+        elif scd:
+            days = scd
+        return days if days else set(range(Dg_))
+
+    def _unit_in_scope(e, u):
+        return _sua(e, u, _pop_of, _sec_stream)
+
+    for code, entry in R.items():
+        trules = (entry or {}).get("rules") or {}
+        tsoft = set((entry or {}).get("soft") or [])
+        units_of = [u for u in model["units"]
+                    if u["teacher"] == code or (u["group"] and code in (u["members"] or []))]
+        own_units = [u for u in model["units"] if u["teacher"] == code]
+        if not units_of:
+            continue
+
+        def _ban_keys(u, keys):
+            for p in range(u["count"]):
+                for kval in keys:
+                    m.Add(piece_keys[u["id"]][p] != kval)
+
+        # ---- positive day×slot window: only these (day,slot) cells allowed
+        # (cover-all: pieces must land INSIDE the union of same-scope windows)
+        if "allowed_slots_days" not in tsoft:
+            wgroups = {}
+            for e in (trules.get("allowed_slots_days") or []):
+                sc = e.get("scope") or {}
+                sig = (tuple(sorted(sc.get("populations") or [])),
+                       tuple(sorted(sc.get("streams") or [])),
+                       tuple(sorted(sc.get("sections") or [])))
+                wgroups.setdefault(sig, []).append(e)
+            for sig, es in wgroups.items():
+                win = set()
+                for e in es:
+                    for d in _e_days(e):
+                        for sl in _slotset(e.get("slots") or []):
+                            win.add((d, sl))
+                for u in units_of:
+                    if _unit_in_scope(es[0], u):
+                        _ban_keys(u, [sl * Dg + d for d in range(Dg) for sl in range(Pg)
+                                      if (d, sl) not in win])
+
+        # ---- windows/allow-days restricted to given sections
+        for e in (trules.get("allowed_slots_in_sections") or []):
+            if "allowed_slots_in_sections" in tsoft:
+                continue
+            secset = set(e.get("sections") or [])
+            dset = _e_days(e)
+            sset = _slotset(e.get("slots") or [])
+            for u in units_of:
+                if all(sec in secset for sec in u["secs"]):
+                    _ban_keys(u, [sl * Dg + d for d in dset for sl in range(Pg) if sl not in sset])
+        for e in (trules.get("allowed_days_in_sections") or []):
+            if "allowed_days_in_sections" in tsoft:
+                continue
+            secset = set(e.get("sections") or [])
+            dset = _e_days(e)
+            for u in units_of:
+                if all(sec in secset for sec in u["secs"]):
+                    _ban_keys(u, [sl * Dg + d for d in range(Dg) if d not in dset
+                                  for sl in range(Pg)])
+
+        # ---- stream-scoped day bans (new kind)
+        for e in (trules.get("stream_forbidden_days") or []):
+            if "stream_forbidden_days" in tsoft:
+                continue
+            dset = _e_days(e) if e.get("days") else _dayset(e.get("days") or [])
+            if not dset:
+                dset = set(range(Dg))
+            for u in units_of:
+                if all(_sec_stream(sec) == e["stream"] for sec in u["secs"]):
+                    _ban_keys(u, [sl * Dg + d for d in dset for sl in range(Pg)])
+
+        # ---- subject × days allowed (union per subject across entries)
+        subj_days_allow = {}
+        for e in (trules.get("subject_days_allowed") or []):
+            subj_days_allow.setdefault(e["subject"], set()).update(_dayset(e.get("days") or []))
+        if "subject_days_allowed" not in tsoft:
+            for subj, dset in subj_days_allow.items():
+                for u in units_of:
+                    if any(u["courseBySec"].get(sec) == subj for sec in u["secs"]):
+                        _ban_keys(u, [sl * Dg + d for d in range(Dg) if d not in dset
+                                      for sl in range(Pg)])
+
+        # ---- subject day×slot pins (union per subject across both pin kinds)
+        pins = {}
+        if "subject_slot_days" not in tsoft:
+            for e in (trules.get("subject_slot_days") or []):
+                days = _e_days(e) if e.get("days") else set(range(Dg))
+                pins.setdefault(e["subject"], set()).update(
+                    (d, SLOT_OF[e["slot"]]) for d in days)
+        if "subject_slots_days" not in tsoft:
+            for e in (trules.get("subject_slots_days") or []):
+                days = _e_days(e) if e.get("days") else set(range(Dg))
+                pins.setdefault(e["subject"], set()).update(
+                    (d, sl) for d in days for sl in _slotset(e.get("slots") or []))
+        if pins:
+            for subj, win in pins.items():
+                for u in units_of:
+                    if any(u["courseBySec"].get(sec) == subj for sec in u["secs"]):
+                        _ban_keys(u, [sl * Dg + d for d in range(Dg) for sl in range(Pg)
+                                      if (d, sl) not in win])
+        # ---- subject_slots entries that carry day scoping
+        pins2 = {}
+        for e in (trules.get("subject_slots") or []):
+            if e.get("days"):
+                pins2.setdefault(e["subject"], set()).update(
+                    (d, sl) for d in _dayset(e["days"]) for sl in _slotset(e.get("slots") or []))
+        for subj, win in pins2.items():
+            for u in units_of:
+                if any(u["courseBySec"].get(sec) == subj for sec in u["secs"]):
+                    dayset = {d for (d, _) in win}
+                    _ban_keys(u, [sl * Dg + d for d in dayset for sl in range(Pg)
+                                  if (d, sl) not in win])
+        # ---- allowed_slots_in_stream entries carrying day scoping
+        for e in (trules.get("allowed_slots_in_stream") or []):
+            if not e.get("days") or "allowed_slots_in_stream" in tsoft:
+                continue   # pure-slot form already handled by the slot domain
+            dset = _dayset(e["days"])
+            sset = _slotset(e.get("slots") or [])
+            for u in units_of:
+                if all(_sec_stream(sec) == e["stream"] for sec in u["secs"]):
+                    _ban_keys(u, [sl * Dg + d for d in dset for sl in range(Pg) if sl not in sset])
+
+        # ---- section allow/deny (unit-level; conservative for joint units)
+        if "allowed_sections" not in tsoft and isinstance(trules.get("allowed_sections"), list) \
+                and trules["allowed_sections"]:
+            allow = set(trules["allowed_sections"])
+            for u in units_of:
+                if any(sec not in allow for sec in u["secs"]):
+                    return None   # unit needs a section the teacher may not teach
+        if "forbidden_sections" not in tsoft and isinstance(trules.get("forbidden_sections"), list) \
+                and trules["forbidden_sections"]:
+            deny = set(trules["forbidden_sections"])
+            for u in units_of:
+                if any(sec in deny for sec in u["secs"]):
+                    return None
+
+        # ================= count / engagement channels =================
+        def _day_count_terms(us, d, slot=None):
+            terms = []
+            for u in us:
+                for p in range(u["count"]):
+                    if slot is None:
+                        terms.append(_eq_bool(m, piece_days[u["id"]][p], d,
+                                              f"dcnt_{code}_{d}_{u['id']}_{p}"))
+                    else:
+                        terms.append(_eq_bool(m, piece_keys[u["id"]][p], slot * Dg + d,
+                                              f"dcnts_{code}_{d}_{slot}_{u['id']}_{p}"))
+            return terms
+
+        # max_periods_per_day: int or [{max, days?, stream?, sections?, scope?}]
+        mppd = trules.get("max_periods_per_day")
+        mppd_list = ([{"max": mppd}] if isinstance(mppd, int)
+                     else (mppd if isinstance(mppd, list) else []))
+        if "max_periods_per_day" not in tsoft:
+            for e in mppd_list:
+                cap = e.get("max")
+                if cap is None:
+                    continue
+                us = ([u for u in own_units if _unit_in_scope(e, u)]
+                      if any(e.get(k) for k in ("stream", "sections", "scope")) else own_units)
+                for d in sorted(_e_days(e)):
+                    terms = _day_count_terms(us, d)
+                    if terms:
+                        m.Add(sum(terms) <= cap)
+
+        # min_periods_per_day gated by actually engaged that day
+        minpd = trules.get("min_periods_per_day")
+        minpd_list = ([{"min": minpd}] if isinstance(minpd, int)
+                      else (minpd if isinstance(minpd, list) else []))
+        if "min_periods_per_day" not in tsoft:
+            for e in minpd_list:
+                floor = e.get("min")
+                if floor is None:
+                    continue
+                us = ([u for u in own_units if _unit_in_scope(e, u)]
+                      if any(e.get(k) for k in ("stream", "sections", "scope")) else own_units)
+                for d in sorted(_e_days(e)):
+                    terms = _day_count_terms(us, d)
+                    if not terms:
+                        continue
+                    cnt = m.NewIntVar(0, len(terms), f"minpd_c_{code}_{d}")
+                    m.Add(cnt == sum(terms))
+                    work = m.NewBoolVar(f"minpd_w_{code}_{d}")
+                    m.Add(cnt >= 1).OnlyEnforceIf(work)
+                    m.Add(cnt == 0).OnlyEnforceIf(work.Not())
+                    m.Add(cnt >= floor).OnlyEnforceIf(work)
+
+        # max_days_in_slot: [{slot, max_days, days?, scope?}]
+        if "max_days_in_slot" not in tsoft:
+            for e in (trules.get("max_days_in_slot") or []):
+                si = SLOT_OF[e["slot"]]
+                cap = e.get("max_days")
+                if cap is None:
+                    continue
+                daybools = []
+                for d in sorted(_e_days(e)):
+                    terms = _day_count_terms(units_of, d, slot=si)
+                    if not terms:
+                        continue
+                    db = m.NewBoolVar(f"mdsl_{code}_{si}_{d}")
+                    m.Add(sum(terms) >= 1).OnlyEnforceIf(db)
+                    m.Add(sum(terms) == 0).OnlyEnforceIf(db.Not())
+                    daybools.append(db)
+                if daybools:
+                    m.Add(sum(daybools) <= cap)
+
+        # ---- distribution quotas over the teacher's week
+        def _quota_units(e):
+            out = []
+            for u in own_units:
+                subs = {u["courseBySec"].get(sec) for sec in u["secs"]}
+                if e.get("subject") and e["subject"] not in subs:
+                    continue
+                if e.get("subjects") and not subs.intersection(e["subjects"]):
+                    continue
+                if e.get("stream") and not all(_sec_stream(sec) == e["stream"] for sec in u["secs"]):
+                    continue
+                if e.get("sections") and not all(sec in (e["sections"] or []) for sec in u["secs"]):
+                    continue
+                if not _unit_in_scope(e, u):
+                    continue
+                out.append(u)
+            return out
+
+        for key, is_max in (("max_pieces_match", True), ("min_pieces_match", False)):
+            if key in tsoft:
+                continue
+            for e in (trules.get(key) or []):
+                bnd = e.get("max" if is_max else "min")
+                if bnd is None:
+                    continue
+                us = _quota_units(e)
+                if e.get("slot") or e.get("days"):
+                    dset = _e_days(e)
+                    sls = _slotset([e["slot"]]) if e.get("slot") else set(range(Pg))
+                    terms = []
+                    for u in us:
+                        for p in range(u["count"]):
+                            ors = [_eq_bool(m, piece_keys[u["id"]][p], sl * Dg + d,
+                                            f"quo_{code}_{key}_{u['id']}_{p}_{d}_{sl}")
+                                   for d in sorted(dset) for sl in sorted(sls)]
+                            b = m.NewBoolVar(f"quob_{code}_{key}_{u['id']}_{p}")
+                            m.AddMaxEquality(b, ors)
+                            terms.append(b)
+                    expr = sum(terms)
+                else:
+                    expr = sum(u["count"] for u in us)   # fully static count
+                m.Add(expr <= bnd) if is_max else m.Add(expr >= bnd)
+
+        # ---- no free holes inside a teaching day (rare; bigger encoding)
+        if trules.get("no_daily_gaps") and "no_daily_gaps" not in tsoft:
+            for d in range(Dg):
+                occ = {}
+                for sl in range(Pg):
+                    terms = [_eq_bool(m, piece_keys[u["id"]][p], sl * Dg + d,
+                                      f"ng_{code}_{d}_{sl}_{u['id']}_{p}")
+                             for u in own_units for p in range(u["count"])]
+                    if terms:
+                        b = m.NewBoolVar(f"ngb_{code}_{d}_{sl}")
+                        m.AddMaxEquality(b, terms)
+                        occ[sl] = b
+                for a in range(Pg):
+                    for c in range(a + 2, Pg):
+                        if a not in occ or c not in occ:
+                            continue
+                        both = m.NewBoolVar(f"ngboth_{code}_{d}_{a}_{c}")
+                        m.AddBoolAnd([occ[a], occ[c]]).OnlyEnforceIf(both)
+                        m.AddBoolOr([occ[a].Not(), occ[c].Not()]).OnlyEnforceIf(both.Not())
+                        for bslot in range(a + 1, c):
+                            if bslot in occ:
+                                m.AddImplication(both, occ[bslot])
+
     # ---- soft: individual spread + even distribution
     if model["instructions"].get("softIndividualSpread"):
         for t, keys in teacher_keys.items():
@@ -764,6 +1065,55 @@ def build_from_context(model, objective="default", collect=None):
             ex = m.NewIntVar(0, total, f"sede_{code}_{d}")
             m.Add(ex >= sum(terms) - cap)
             soft_terms.append((pen["evenDistribution"], ex))
+
+    # ---- new soft kinds (taxonomy v2)
+    for code, entry in R.items():
+        rules = (entry or {}).get("rules") or {}
+        units_of = [u for u in model["units"] if u["teacher"] == code
+                    or (u["group"] and code in (u["members"] or []))]
+        if not units_of:
+            continue
+        for e in (rules.get("soft_prefer_free_slots_days") or []):
+            dset = _dayset(e.get("days") or [])
+            sset = _slotset(e.get("slots") or [])
+            for u in units_of:
+                for p in range(u["count"]):
+                    for d in sorted(dset):
+                        for sl in sorted(sset):
+                            soft_terms.append((pen["preferFreeSlot"],
+                                               _eq_bool(m, piece_keys[u["id"]][p], sl * Dg + d,
+                                                        f"spfd_{code}_{u['id']}_{p}_{d}_{sl}")))
+        if rules.get("soft_compact_days"):
+            # penalise interior holes per worked day (checker reports the exact
+            # gap count; the optimiser uses the same width-minus-count proxy)
+            for d in range(Dg):
+                occ = {}
+                for sl in range(Pg):
+                    terms = [_eq_bool(m, piece_keys[u["id"]][p], sl * Dg + d,
+                                      f"sccd_{code}_{d}_{sl}_{u['id']}_{p}")
+                             for u in units_of for p in range(u["count"])]
+                    if terms:
+                        b = m.NewBoolVar(f"sccb_{code}_{d}_{sl}")
+                        m.AddMaxEquality(b, terms)
+                        occ[sl] = b
+                if not occ:
+                    continue
+                cnt_d = m.NewIntVar(0, Pg, f"sccn_{code}_{d}")
+                m.Add(cnt_d == sum(occ.values()))
+                work = m.NewBoolVar(f"sccw_{code}_{d}")
+                m.Add(cnt_d >= 1).OnlyEnforceIf(work)
+                m.Add(cnt_d == 0).OnlyEnforceIf(work.Not())
+                lo = m.NewIntVar(0, Pg - 1, f"sccl_{code}_{d}")
+                hi = m.NewIntVar(0, Pg - 1, f"scch_{code}_{d}")
+                for sl, b in occ.items():
+                    m.Add(lo <= sl).OnlyEnforceIf(b)
+                    m.Add(hi >= sl).OnlyEnforceIf(b)
+                m.Add(lo == 0).OnlyEnforceIf(work.Not())
+                m.Add(hi == 0).OnlyEnforceIf(work.Not())
+                gap = m.NewIntVar(0, Pg, f"sccg_{code}_{d}")
+                m.Add(gap >= hi - lo + 1 - cnt_d)
+                m.Add(gap >= 0)
+                soft_terms.append((pen["rule"], gap))
 
     # ---- objective: shuffle + soft penalties
     obj = []

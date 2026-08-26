@@ -342,7 +342,7 @@ def solver_context(population_ids, overrides=None):
         sections.update(alloc)
         level = _population_level(pid)
         for key in alloc:
-            section_meta[key] = {"level": level, "offDays": [], "firstLast": False}
+            section_meta[key] = {"level": level, "pop": pid, "offDays": [], "firstLast": False}
 
     # the admin's CURRENT per-population allocation (incl. sections created or
     # deleted in the UI) replaces the bundled canonical allocation per passed pop
@@ -356,7 +356,7 @@ def solver_context(population_ids, overrides=None):
                 section_meta.pop(key, None)
             for key, rows in a.items():
                 sections[key] = rows
-                section_meta[key] = {"level": level, "offDays": [], "firstLast": False}
+                section_meta[key] = {"level": level, "pop": pid, "offDays": [], "firstLast": False}
 
     # instructions -> section meta + behavioural flags
     no_same = {"inter": bool(gi.get("no_same_subject_same_day")),

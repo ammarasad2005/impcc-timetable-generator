@@ -278,7 +278,7 @@
       const alloc = solverAllocation(pid);
       Object.assign(sections, alloc);
       const level = _populationLevel(pid);
-      for (const key in alloc) sectionMeta[key] = { level: level, offDays: [], firstLast: false };
+      for (const key in alloc) sectionMeta[key] = { level: level, offDays: [], firstLast: false, pop: pid };
     }
 
     const noSame = { inter: !!gi.no_same_subject_same_day, bs: !gi.same_subject_same_day_allowed };

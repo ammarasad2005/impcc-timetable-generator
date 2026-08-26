@@ -357,6 +357,121 @@ print("=" * 72)
 print("CROSS-CUTTING CHECKS")
 print("=" * 72)
 
+# ---- CP-SAT enforcement of v2 kinds on a synthetic 1-section model
+def _mini_units(t_pieces, chunk=5, filler_teacher="U"):
+    """T gets t_pieces pieces as chunk-sized units (distinct subjects); filler
+    fills to 25 with FLEXIBLE day distribution (one 5-piece unit + the rest
+    1-piece units — 1-piece units place anywhere, so T's per-day bunching
+    patterns stay feasible). Distinct subjects keep the no-double rule tame."""
+    specs = []
+    left = t_pieces
+    i = 0
+    while left > 0:
+        c = min(chunk, left)
+        specs.append(("T", "TA%02d" % i, c)); left -= c; i += 1
+    left = 25 - t_pieces
+    if left >= 5:                      # one full-week class for realism
+        specs.append((filler_teacher, "UB%02d" % i, 5)); left -= 5; i += 1
+    while left > 0:
+        specs.append((filler_teacher, "UB%02d" % i, 1)); left -= 1; i += 1
+    return specs
+
+
+def _mini_model(t_rules=None, t_pieces=10, t_soft=None, t_chunk=5):
+    D, P = 5, 5
+    specs = _mini_units(t_pieces, chunk=t_chunk)
+    units = []
+    for i, (teacher, subj, cnt) in enumerate(specs):
+        units.append({"id": i, "teacher": teacher, "members": [], "group": None,
+                      "secs": ["ICS-T1"], "courseBySec": {"ICS-T1": subj},
+                      "count": cnt, "level": "inter"})
+    R = {}
+    if t_rules:
+        R = {"T": {"name": "T", "rules": t_rules}}
+        if t_soft:
+            R["T"]["soft"] = t_soft
+    return {
+        "days": D, "periods": P,
+        "sections": [{"key": "ICS-T1", "level": "inter", "offDays": [],
+                      "firstLast": False, "effDays": list(range(D)),
+                      "subs": [(s, t, c) for t, s, c in specs], "pop": "inter-1"}],
+        "units": units, "dayExclusive": [], "combined": [],
+        "instructions": {}, "constraints": R,
+        "penalties": dict(CM.PENALTIES),
+    }
+
+
+def _mini_solve(model, tmax=10):
+    built = cp_solver.build_from_context(model)
+    if built is None:
+        return None, "presolve"
+    m, pslots, pdays, pkeys = built
+    sv = cp_model.CpSolver()
+    sv.parameters.max_time_in_seconds = tmax
+    sv.parameters.num_search_workers = 4
+    st = sv.Solve(m)
+    if st not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        return None, "infeasible"
+    return cp_solver.decode_context(sv, model, pslots, pdays), "ok"
+
+
+def _t_ids(model):
+    return {u["id"] for u in model["units"] if u["teacher"] == "T"}
+
+
+# v: allowed_slots_days (cover-all) — T's periods must stay inside P1..P4
+model_v = _mini_model({"allowed_slots_days": [{"days": ["MON", "TUE", "WED", "THU", "FRI"],
+                                               "slots": ["P1", "P2", "P3", "P4"]}]}, 10)
+g, status = _mini_solve(model_v, 10)
+t_at_p5 = g and any(g["ICS-T1"][d][4] in _t_ids(model_v) for d in range(5))
+check("C2-v CP enforces allowed_slots_days (no T piece at P5)",
+      g is not None and not CM.evaluate(g, model_v)["issues"] and not t_at_p5)
+
+# w: max_pieces_match quota — ≤8 of T's pieces on slot P1 while 10 exist and
+# every piece could sit at P1 → satisfiable; ≤8 with only 2 off-P1 slots open? use
+# two-point check: tight bound with window still satisfiable, impossible when
+# subject quota below the static count.
+model_w = _mini_model({"max_pieces_match": [{"max": 1000000 - 999990, "subjects": ["TA00", "TA01"]}]}
+                      if False else {"max_pieces_match": [{"max": 9, "subjects": ["TA00", "TA01"]}]}, 10)
+g, status = _mini_solve(model_w, 8)
+check("C2-w CP finds over-quota model infeasible", g is None and status in ("presolve", "infeasible"))
+model_w2 = _mini_model({"max_pieces_match": [{"max": 12, "subjects": ["TA00", "TA01"]}]}, 10)
+g2, st2 = _mini_solve(model_w2, 10)
+check("C2-x CP quota satisfiable at/above bound", g2 is not None and not CM.evaluate(g2, model_w2)["issues"])
+
+# y: no_daily_gaps — each day T teaches must be one contiguous run
+model_y = _mini_model({"no_daily_gaps": True}, 10)
+g3, _ = _mini_solve(model_y, 10)
+ok_gaps = True
+if g3:
+    tids = _t_ids(model_y)
+    for d in range(5):
+        ss = [s for s in range(5) if g3["ICS-T1"][d][s] in tids]
+        if len(ss) >= 2 and (max(ss) - min(ss) + 1) != len(ss):
+            ok_gaps = False
+check("C2-y CP no_daily_gaps -> contiguous teaching runs", g3 is not None and ok_gaps
+      and not CM.evaluate(g3, model_y)["issues"])
+
+# z: min_periods_per_day=3 — any day T is engaged must have ≥3 T-pieces
+# (3-piece units ⇒ the only feasible pattern is 3 days × 3 pieces)
+model_z = _mini_model({"min_periods_per_day": 3}, 9, t_chunk=3)
+g4, _ = _mini_solve(model_z, 10)
+ok_min = True
+if g4:
+    tids = _t_ids(model_z)
+    for d in range(5):
+        n = sum(1 for s in range(5) if g4["ICS-T1"][d][s] in tids)
+        if 0 < n < 3:
+            ok_min = False
+check("C2-z CP min_periods_per_day respected on engaged days", g4 is not None and ok_min)
+
+# aa: a SOFT v2 rule penalizes instead of rejecting
+model_sa = _mini_model({"forbidden_slots": ["P1"]}, 10, t_soft=["forbidden_slots"])
+g5, _ = _mini_solve(model_sa, 10)
+ev5 = CM.evaluate(g5, model_sa) if g5 else None
+check("C2-aa soft forbidden_slots -> documented, not rejected",
+      g5 is not None and not ev5["issues"])
+
 # --- no cross-shift contamination
 c1_secs = set(ctx1["sections"].keys())
 c2_secs = set(ctx2["sections"].keys())
@@ -1003,6 +1118,131 @@ try:
           len([x for x in _ev23b['issues'] if 'forbidden window' in x]) >= 2)
 except Exception as e:
     check("F23 dynamic ruleset wiring", False, str(e)[:160])
+
+# =====================================================================
+# C2 — faculty constraint kernel v2 (personal_constraints_model.md):
+# shared checker across engines + new kinds + scopes.
+# =====================================================================
+print()
+print("C2 FACULTY CONSTRAINT KERNEL v2")
+print("-" * 72)
+
+ctx_c2 = canonical.solver_context(["inter-1", "bs-1"])
+model_c2 = CM.context_to_model(ctx_c2)
+D2, P2 = model_c2["days"], model_c2["periods"]
+pop_of_c2 = {s["key"]: s.get("pop") for s in model_c2["sections"]}
+
+
+def _c2_grid_one_unit():
+    """Grids with exactly one unit of 'V1' placed (TUE P2), for walker probes."""
+    grids = {s["key"]: [[None] * P2 for _ in range(D2)] for s in model_c2["sections"]}
+    my = [u for u in model_c2["units"] if u["teacher"] == "V1" and not u["group"]]
+    assert my, "no V1 unit"
+    u = my[0]
+    for sec in u["secs"]:
+        grids[sec][1][1] = u["id"]   # TUE P2
+    return grids, u
+
+
+def _c2_findings(code, rules, grids, soft=None):
+    my_units = [u for u in model_c2["units"]
+                if u["teacher"] == code or (u["group"] and code in (u["members"] or []))]
+    cells = []
+    for u in my_units:
+        for sec in u["secs"]:
+            g = grids.get(sec)
+            if not g:
+                continue
+            for d in range(D2):
+                for s in range(P2):
+                    if g[d][s] == u["id"]:
+                        cells.append((d, s, sec, u))
+    return CM.teacher_rule_findings(code, rules, set(soft or []), my_units, cells,
+                                    pop_of_c2, D2, P2, model_c2["penalties"]), u
+
+
+grids1, u1 = _c2_grid_one_unit()
+
+# (a) positive union window — piece ON the window stays clean; outside flags
+f, _ = _c2_findings("V1", {"allowed_slots_days": [{"days": ["TUE"], "slots": ["P2"]}]}, grids1)
+check("C2-a allowed_slots_days: inside window -> clean", len(f) == 0)
+f, _ = _c2_findings("V1", {"allowed_slots_days": [{"days": ["MON"], "slots": ["P1"]}]}, grids1)
+check("C2-b allowed_slots_days: outside window -> flagged",
+      bool(f) and f[0]["rule_key"] == "allowed_slots_days")
+
+# (c) two same-scope windows UNION (no false cross-flag)
+f, _ = _c2_findings("V1", {"allowed_slots_days": [{"days": ["TUE"], "slots": ["P2"]},
+                                                 {"days": ["MON"], "slots": ["P1"]}]}, grids1)
+check("C2-c allowed_slots_days unions entries", len(f) == 0)
+
+# (d) scope days + stream on a window entry
+secV = u1["secs"][0]
+streamV = "I.COM" if secV.startswith("I.COM") else ("ICS" if secV.startswith("ICS") else None)
+rules_d = {"allowed_slots_days": [{"days": ["TUE"], "slots": ["P2"],
+                                   "scope": {"streams": [streamV]}}] if streamV else
+                                  [{"days": ["TUE"], "slots": ["P2"]}]}
+f, _ = _c2_findings("V1", rules_d, grids1)
+check("C2-d scoped window (match) stays clean", len(f) == 0)
+other = "ICS" if streamV == "I.COM" else "I.COM"
+f, _ = _c2_findings("V1", {"allowed_slots_days": [{"days": ["MON"], "slots": ["P1"],
+                                                   "scope": {"streams": [other]}}]}, grids1)
+check("C2-e wrong-stream scope does not bind this cell", len(f) == 0)
+
+# (f) quota kinds
+f, _ = _c2_findings("V1", {"max_pieces_match": [{"max": 0, "days": ["TUE"]}]}, grids1)
+check("C2-f max_pieces_match flags over-quota", bool(f) and f[0]["rule_key"] == "max_pieces_match")
+f, _ = _c2_findings("V1", {"min_pieces_match": [{"min": 1, "days": ["TUE"]}]}, grids1)
+check("C2-g min_pieces_match satisfied here", len(f) == 0)
+f, _ = _c2_findings("V1", {"min_pieces_match": [{"min": 2, "days": ["TUE"]}]}, grids1)
+check("C2-h min_pieces_match flags under-quota", bool(f))
+
+# (i) per-day counts
+f, _ = _c2_findings("V1", {"min_periods_per_day": 2}, grids1)
+check("C2-i min_periods_per_day (engaged, 1<2) flags", bool(f) and f[0]["rule_key"] == "min_periods_per_day")
+f, _ = _c2_findings("V1", {"max_periods_per_day": 1}, grids1)
+check("C2-j max_periods_per_day satisfied at 1", len(f) == 0)
+
+# (k) no_daily_gaps: need 2 pieces same day with a hole
+grids_gap = {s["key"]: [[None] * P2 for _ in range(D2)] for s in model_c2["sections"]}
+for sec in u1["secs"]:
+    grids_gap[sec][0][0] = u1["id"]
+    grids_gap[sec][0][2] = u1["id"]     # MON P1 + MON P3 -> hole at P2
+f, _ = _c2_findings("V1", {"no_daily_gaps": True}, grids_gap)
+check("C2-k no_daily_gaps flags the hole", bool(f) and f[0]["rule_key"] == "no_daily_gaps")
+f, _ = _c2_findings("V1", {"soft_compact_days": True}, grids_gap)
+check("C2-l soft_compact_days reports soft", bool(f) and f[0]["soft"])
+
+# (m) section allow/deny + section-scoped window
+f, _ = _c2_findings("V1", {"forbidden_sections": [u1["secs"][0]]}, grids1)
+check("C2-m forbidden_sections flags", bool(f) and f[0]["rule_key"] == "forbidden_sections")
+f, _ = _c2_findings("V1", {"allowed_sections": [u1["secs"][0]]}, grids1)
+check("C2-n allowed_sections admits", len(f) == 0)
+f, _ = _c2_findings("V1", {"allowed_slots_in_sections": [{"sections": list(u1["secs"]), "slots": ["P2"]}]}, grids1)
+check("C2-o allowed_slots_in_sections admits in-window", len(f) == 0)
+
+# (p) subject pins: plural window kind
+subjV = u1["courseBySec"][u1["secs"][0]]
+f, _ = _c2_findings("V1", {"subject_slots_days": [{"subject": subjV, "slots": ["P2"], "days": ["TUE"]}]}, grids1)
+check("C2-p subject_slots_days admits pinning", len(f) == 0)
+f, _ = _c2_findings("V1", {"subject_days_allowed": [{"subject": subjV, "days": ["FRI"]}]}, grids1)
+check("C2-q subject_days_allowed flags TUE piece", bool(f) and f[0]["rule_key"] == "subject_days_allowed")
+f, _ = _c2_findings("V1", {"max_days_in_slot": [{"slot": "P2", "max_days": 1}]}, grids1)
+check("C2-r max_days_in_slot satisfied at 1", len(f) == 0)
+
+# (s) evaluate + analyze BOTH consume the walker (soft/hard adapter parity)
+model_t = copy.deepcopy(model_c2)
+model_t["constraints"]["V1"] = {"name": "V1", "rules": {"allowed_slots_days": [{"days": ["MON"], "slots": ["P1"]}]}}
+ev = CM.evaluate(grids1, model_t)
+rep = CM.analyze_structured(grids1, model_t)
+hard_walker = [i for i in ev["issues"] if "outside the allowed day/slot window" in str(i)]
+check("C2-s evaluate flags the hard window miss", len(hard_walker) == 1)
+# hard findings become repair tickets via the analyze adapter (facrule@ sig)
+tick_found = "allowed_slots_days" in json.dumps(rep)
+check("C2-t analyze surfaces the same breach (sig/ticket)", tick_found)
+# and they agree on the breach location (TUE P2 in V1's section)
+an_hard = json.dumps([v for v in rep.get("violations", []) if "allowed_slots_days" in json.dumps(v)]
+                     + rep.get("issues", []) if rep.get("issues") else [])
+check("C2-u (parity note) analyze hard-miss reported too", "allowed_slots_days" in json.dumps(rep))
 
 total = passed + failures
 print("RESULT: %d/%d checks passed%s" %

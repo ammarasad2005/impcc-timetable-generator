@@ -355,6 +355,9 @@ td.mb-changed select{outline:2px solid var(--amber);background:var(--amber-tint)
 .ed-chip{display:inline-flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:10px;padding:2px 8px;border:1px solid var(--line2);border-radius:99px;cursor:pointer;background:#fff;color:var(--ink2)}
 .ed-chip.on{background:var(--green);color:#fff;border-color:var(--green)}
 .ed-num{padding:4px 7px;border:1px solid var(--line2);border-radius:6px;font-size:12px;width:56px}
+.ed-chip-sec{font-size:10px}
+.ed-row{margin:3px 0}
+.stag.pop-badge{background:#1d4ed8;color:#fff;border-color:#1d4ed8}
 .ed-subject{padding:4px 7px;border:1px solid var(--line2);border-radius:6px;font-size:12px;width:150px}
 .ed-slot-sel,.ed-stream{padding:4px 6px;border:1px solid var(--line2);border-radius:6px;font-size:12px}
 .rule-add{margin-top:2px}
@@ -2970,6 +2973,7 @@ function renderAllocationPops(){
   });
 }
 function saveAllocationFor(pop){
+  window.__ALL_SECS=null;
   const cfg = popCfgOf(pop), cells = (cfg.days||5) * (cfg.periods||5);
   const alloc = getPopAllocation(pop) || {};
   const bad = [];
@@ -3204,24 +3208,57 @@ const RULE_META={
   allowed_slots_in_stream:{label:'Stream: only these periods',kind:'streamSlotsOnly'},
   allowed_days_in_stream:{label:'Stream: only these days',kind:'streamDaysOnly'},
   subject_slot_days:{label:'Subject pinned to period on days',kind:'subjectSlotDays'},
+  allowed_slots_days:{label:'Only these day/period windows',kind:'slotsOnDays'},
+  allowed_slots_in_sections:{label:'In sections: only these periods',kind:'sectionsSlotsDays'},
+  allowed_days_in_sections:{label:'In sections: only these days',kind:'sectionsDays'},
+  allowed_sections:{label:'Only these sections',kind:'sectionsPick'},
+  forbidden_sections:{label:'Never these sections',kind:'sectionsPick'},
+  subject_days_allowed:{label:'Subject only on days',kind:'subjectDays'},
+  subject_slots_days:{label:'Subject pinned to day/period windows',kind:'subjectSlotsDays'},
+  max_days_in_slot:{label:'Max days in a period',kind:'maxDaysSlot'},
+  min_periods_per_day:{label:'Min periods on a taught day',kind:'number'},
+  max_pieces_match:{label:'At most N matching classes/week',kind:'quotaMax'},
+  min_pieces_match:{label:'At least N matching classes/week',kind:'quotaMin'},
+  no_daily_gaps:{label:'No gaps inside a teaching day',kind:'bool'},
   soft_prefer_free_slots:{label:'Prefer free periods (soft)',kind:'slots'},
+  soft_prefer_free_slots_days:{label:'Prefer free day/period windows (soft)',kind:'slotsOnDays'},
   soft_even_distribution:{label:'Even distribution over week (soft)',kind:'bool'},
+  soft_compact_days:{label:'Compact days, no gaps (soft)',kind:'bool'},
   allow_same_subject_same_day:{label:'Same-subject doubles allowed',kind:'bool'},
 };
+function scopeBadge(e){
+  if(!e||typeof e!=='object')return '';
+  const sc=e.scope||{};const bits=[];
+  if(sc.populations&&sc.populations.length)bits.push('pops '+sc.populations.join('+'));
+  if(sc.streams&&sc.streams.length)bits.push(sc.streams.join('+'));
+  if(sc.sections&&sc.sections.length)bits.push(sc.sections.join('+'));
+  if(sc.days&&sc.days.length)bits.push(sc.days.join('+'));
+  return bits.length?' 〈'+bits.join(' · ')+'〉':'';
+}
+function describeEntry(e){
+  return JSON.stringify(e);
+}
 function describeRule(key,v){
   const m=RULE_META[key];if(!m)return JSON.stringify(v);
   switch(m.kind){
     case 'slots':case 'days':return (v||[]).join(', ');
     case 'number':return String(v);
-    case 'slotsOnDays':return (v||[]).map(e=>e.days.join('/')+' '+e.slots.join(',')).join(' · ');
-    case 'minDaysSlot':return (v||[]).map(e=>e.slot+' ≥ '+e.min_days+' days').join(' · ');
-    case 'subjectSlots':return (v||[]).map(e=>e.subject+' → '+e.slots.join(',')).join(' · ');
-    case 'subjectDays':return (v||[]).map(e=>e.subject+' not '+e.days.join(',')).join(' · ');
-    case 'streamSlots':return (v||[]).map(e=>e.stream+' fills '+e.slots.join(',')).join(' · ');
-    case 'streamDays':return (v||[]).map(e=>e.stream+' not '+e.days.join(',')).join(' · ');
-    case 'streamSlotsOnly':return (v||[]).map(e=>e.stream+' only '+e.slots.join(',')).join(' · ');
-    case 'streamDaysOnly':return (v||[]).map(e=>e.stream+' only '+e.days.join(',')).join(' · ');
-    case 'subjectSlotDays':return (v||[]).map(e=>e.subject+' at '+e.slot+' on '+e.days.join(',')).join(' · ');
+    case 'slotsOnDays':return (v||[]).map(e=>(e.days||[]).join('/')+' '+e.slots.join(',')+scopeBadge(e)).join(' · ');
+    case 'minDaysSlot':return (v||[]).map(e=>e.slot+' ≥ '+e.min_days+' days'+scopeBadge(e)).join(' · ');
+    case 'subjectSlots':return (v||[]).map(e=>e.subject+' → '+e.slots.join(',')+(e.days&&e.days.length?(' on '+e.days.join('/')):'')+scopeBadge(e)).join(' · ');
+    case 'subjectDays':return (v||[]).map(e=>e.subject+' not '+(e.days||[]).join(',')+scopeBadge(e)).join(' · ');
+    case 'streamSlots':return (v||[]).map(e=>e.stream+' fills '+e.slots.join(',')+(e.days&&e.days.length?(' on '+e.days.join('/')):'')+scopeBadge(e)).join(' · ');
+    case 'streamDays':return (v||[]).map(e=>e.stream+' not '+e.days.join(',')+scopeBadge(e)).join(' · ');
+    case 'streamSlotsOnly':return (v||[]).map(e=>e.stream+' only '+e.slots.join(',')+(e.days&&e.days.length?(' on '+e.days.join('/')):'')+scopeBadge(e)).join(' · ');
+    case 'streamDaysOnly':return (v||[]).map(e=>e.stream+' only '+e.days.join(',')+scopeBadge(e)).join(' · ');
+    case 'subjectSlotDays':return (v||[]).map(e=>e.subject+' at '+e.slot+' on '+e.days.join(',')+scopeBadge(e)).join(' · ');
+    case 'sectionsSlotsDays':return (v||[]).map(e=>(e.sections||[]).join('+')+' only '+(e.slots||[]).join(',')+(e.days&&e.days.length?(' on '+e.days.join('/')):'')+scopeBadge(e)).join(' · ');
+    case 'sectionsDays':return (v||[]).map(e=>(e.sections||[]).join('+')+' on '+(e.days||[]).join('/')+scopeBadge(e)).join(' · ');
+    case 'sectionsPick':return (v||[]).join(', ');
+    case 'subjectSlotsDays':return (v||[]).map(e=>e.subject+' at '+(e.slots||[]).join(',')+' on '+(e.days||[]).join('/')+scopeBadge(e)).join(' · ');
+    case 'maxDaysSlot':return (v||[]).map(e=>e.slot+' ≤ '+e.max_days+' days'+scopeBadge(e)).join(' · ');
+    case 'quotaMax':return (v||[]).map(e=>'≤'+e.max+' /wk'+(e.subject?(' '+e.subject):'')+(e.stream?(' in '+e.stream):'')+(e.sections?(' in '+e.sections.join('+')):'')+(e.slot?(' at '+e.slot):'')+(e.days&&e.days.length?(' on '+e.days.join('/')):'')+scopeBadge(e)).join(' · ');
+    case 'quotaMin':return (v||[]).map(e=>'≥'+e.min+' /wk'+(e.subject?(' '+e.subject):'')+(e.stream?(' in '+e.stream):'')+(e.sections?(' in '+e.sections.join('+')):'')+(e.slot?(' at '+e.slot):'')+(e.days&&e.days.length?(' on '+e.days.join('/')):'')+scopeBadge(e)).join(' · ');
     case 'bool':return (v?'yes':'no');
   }
   return JSON.stringify(v);
@@ -3264,8 +3301,33 @@ function readRuleEditor(root,kind){
   if(kind==='streamSlotsOnly'){const st=root.querySelector('.ed-stream').value,sl=selTokens(root,'ed-chip-slot');return (st&&sl.length)?[{stream:st,slots:sl}]:null;}
   if(kind==='streamDaysOnly'){const st=root.querySelector('.ed-stream').value,d=selTokens(root,'ed-chip-day');return (st&&d.length)?[{stream:st,days:d}]:null;}
   if(kind==='subjectSlotDays'){const subj=root.querySelector('.ed-subject').value.trim(),sl=root.querySelector('.ed-slot-sel').value,d=selTokens(root,'ed-chip-day');return (subj&&sl&&d.length)?[{subject:subj,slot:sl,days:d}]:null;}
+  if(kind==='sectionsSlotsDays'){const secs=selTokens(root,'ed-chip-sec'),sl=selTokens(root,'ed-chip-slot'),d=selTokens(root,'ed-chip-day');return (secs.length&&sl.length)?[{sections:secs,slots:sl,days:d.length?d:undefined}].map(function(e){if(!e.days)delete e.days;return e;}):null;}
+  if(kind==='sectionsDays'){const secs=selTokens(root,'ed-chip-sec'),d=selTokens(root,'ed-chip-day');return (secs.length&&d.length)?[{sections:secs,days:d}]:null;}
+  if(kind==='sectionsPick'){const a=selTokens(root,'ed-chip-sec');return a.length?a:null;}
+  if(kind==='subjectSlotsDays'){const subj=root.querySelector('.ed-subject').value.trim(),sl=selTokens(root,'ed-chip-slot'),d=selTokens(root,'ed-chip-day');return (subj&&sl.length&&d.length)?[{subject:subj,slots:sl,days:d}]:null;}
+  if(kind==='maxDaysSlot'){const sl=root.querySelector('.ed-slot-sel').value,n=parseInt(root.querySelector('.ed-min').value,10);return (sl&&n>0)?[{slot:sl,max_days:n}]:null;}
+  if(kind==='quotaMax'||kind==='quotaMin'){
+    const n=parseInt(root.querySelector('.ed-num').value,10);if(isNaN(n)||n<0)return null;
+    const e={};e[kind==='quotaMax'?'max':'min']=n;
+    const subj=root.querySelector('.ed-subject').value.trim();if(subj)e.subject=subj;
+    const st=root.querySelector('.ed-stream').value;if(st)e.stream=st;
+    const sl=selTokens(root,'ed-chip-slot');if(sl.length)e.slot=sl[0];
+    const d=selTokens(root,'ed-chip-day');if(d.length)e.days=d;
+    return [e];
+  }
   if(kind==='bool'){const cb=root.querySelector('.ed-bool input');return cb&&cb.checked?true:null;}
   return null;
+}
+function allSectionKeys(){
+  if(window.__ALL_SECS)return window.__ALL_SECS;
+  let keys=[];try{
+    for(const pid of (window.ALLOC_POPS||[])){
+      const ctx=IMPCC_CANONICAL.solverContext([pid]);
+      keys=keys.concat(Object.keys(ctx.sections||{}));
+    }
+  }catch(e){}
+  if(!keys.length){keys=['ICS-I','ICS-II-A','ICS-II-B','I.COM-I-A','I.COM-I-B','I.COM-I-C','I.COM-II-A','I.COM-II-B'];}
+  window.__ALL_SECS=keys;return keys;
 }
 function chipsHTML(cls,tokens,selected){
   return tokens.map(t=>'<span class="ed-chip '+cls+((selected||[]).indexOf(t)>=0?' on':'')+'" data-v="'+t+'">'+t+'</span>').join('');
@@ -3287,6 +3349,18 @@ function ruleEditorHTML(code,key,value){
     case 'streamSlotsOnly':inner='<select class="ed-stream"><option value="ICS"'+(v&&v[0]&&v[0].stream==='ICS'?' selected':'')+'>ICS</option><option value="I.COM"'+(v&&v[0]&&v[0].stream==='I.COM'?' selected':'')+'>I.COM</option></select> '+chipsHTML('ed-chip '+C,SLOTS,(v&&v[0]&&v[0].slots)||[]);break;
     case 'streamDaysOnly':inner='<select class="ed-stream"><option value="ICS"'+(v&&v[0]&&v[0].stream==='ICS'?' selected':'')+'>ICS</option><option value="I.COM"'+(v&&v[0]&&v[0].stream==='I.COM'?' selected':'')+'>I.COM</option></select> '+chipsHTML('ed-chip '+D,DAYS,(v&&v[0]&&v[0].days)||[]);break;
     case 'subjectSlotDays':inner='<input class="ed-subject" placeholder="Subject" value="'+esc((v&&v[0]&&v[0].subject)||'')+'"> at <select class="ed-slot-sel">'+SLOTS.map(x=>'<option'+(v&&v[0]&&v[0].slot===x?' selected':'')+'>'+x+'</option>').join('')+'</select> on '+chipsHTML('ed-chip '+D,DAYS,(v&&v[0]&&v[0].days)||[]);break;
+    case 'sectionsSlotsDays':inner='<div class="ed-row">Sections: '+chipsHTML('ed-chip ed-chip-sec',allSectionKeys(),(v&&v[0]&&v[0].sections)||[])+'</div><div class="ed-row">only periods: '+chipsHTML('ed-chip '+C,SLOTS,(v&&v[0]&&v[0].slots)||[])+'</div><div class="ed-row">on days (optional): '+chipsHTML('ed-chip '+D,DAYS,(v&&v[0]&&v[0].days)||[])+'</div>';break;
+    case 'sectionsDays':inner='<div class="ed-row">Sections: '+chipsHTML('ed-chip ed-chip-sec',allSectionKeys(),(v&&v[0]&&v[0].sections)||[])+'</div><div class="ed-row">only days: '+chipsHTML('ed-chip '+D,DAYS,(v&&v[0]&&v[0].days)||[])+'</div>';break;
+    case 'sectionsPick':inner=chipsHTML('ed-chip ed-chip-sec',allSectionKeys(),v||[]);break;
+    case 'subjectSlotsDays':inner='<input class="ed-subject" placeholder="Subject" value="'+esc((v&&v[0]&&v[0].subject)||'')+'"> '+chipsHTML('ed-chip '+C,SLOTS,(v&&v[0]&&v[0].slots)||[])+' on '+chipsHTML('ed-chip '+D,DAYS,(v&&v[0]&&v[0].days)||[]);break;
+    case 'maxDaysSlot':inner='<select class="ed-slot-sel">'+SLOTS.map(x=>'<option'+(v&&v[0]&&v[0].slot===x?' selected':'')+'>'+x+'</option>').join('')+'</select> ≤ <input class="ed-min" type="number" min="1" max="6" value="'+((v&&v[0]&&v[0].max_days)||1)+'"> days';break;
+    case 'quotaMax':case 'quotaMin':{
+      inner=(m.kind==='quotaMax'?'At most ':'At least ')+'<input class="ed-num" type="number" min="1" max="48" value="'+((v&&v[0]&&(v[0].max||v[0].min))||1)+'"> classes/week '
+        +'<input class="ed-subject" placeholder="Subject (optional)" value="'+esc((v&&v[0]&&v[0].subject)||'')+'"> '
+        +'<select class="ed-stream"><option value="">any stream</option><option value="ICS"'+(v&&v[0]&&v[0].stream==='ICS'?' selected':'')+'>ICS</option><option value="I.COM"'+(v&&v[0]&&v[0].stream==='I.COM'?' selected':'')+'>I.COM</option></select> '
+        +'<div class="ed-row">periods (optional): '+chipsHTML('ed-chip '+C,SLOTS,(v&&v[0]&&v[0].slot?[v[0].slot]:[])||[])+'</div>'
+        +'<div class="ed-row">days (optional): '+chipsHTML('ed-chip '+D,DAYS,(v&&v[0]&&v[0].days)||[])+'</div>';
+      break;}
     case 'bool':inner='<label class="ed-bool"><input type="checkbox"'+(v?' checked':'')+'> enabled</label>';break;
   }
   return '<div class="rule-ed" data-code="'+esc(code)+'" data-key="'+esc(key)+'" data-kind="'+m.kind+'">'+inner+'<button class="mini-export rule-save">Save</button><button class="mini-export rule-cancel">Cancel</button></div>';
@@ -3312,7 +3386,19 @@ function renderConstraints(){
     const keys=Object.keys(eff);
     h+='<article class="cons-card'+(e.overridden?' edited':'')+(simActive()&&simRulesOf(e.code)?' sim-edited':'')+'">'
     +(simActive()&&simRes&&!simRes.error&&simRes.verdicts[e.code]?'<div class="sim-fail">⚑ would violate: '+simRes.verdicts[e.code].length+' rule'+(simRes.verdicts[e.code].length===1?'':'s')+'</div>':'')
-    h+='<header><h4>'+esc(e.name)+'</h4>'+(e.hasDefault?'<span class="stag">default</span>':'')+(e.overridden?'<span class="stag edited">edited</span>':'')+'</header>';
+    const popsBadge=(function(){try{
+      const pops=new Set();
+      for(const pid of (window.ALLOC_POPS||[])){
+        const ctx=IMPCC_CANONICAL.solverContext([pid]);
+        for(const sk in (ctx.sections||{})){
+          for(const row of (ctx.sections[sk]||[])){
+            if((row||[]).indexOf(e.name)>=0)pops.add((POPS.POPULATIONS[pid]&&POPS.POPULATIONS[pid].short)||pid);
+          }
+        }
+      }
+      return pops.size?('<span class="stag">'+[...pops].join(' + ')+'</span>'.replace(/class="stag"/,'class="stag pop-badge"')):'';
+    }catch(x){return ''}})();
+    h+='<header><h4>'+esc(e.name)+'</h4>'+popsBadge+(e.hasDefault?'<span class="stag">default</span>':'')+(e.overridden?'<span class="stag edited">edited</span>':'')+'</header>';
     h+='<div class="cons-rules-ed">';
     if(keys.length){
       for(const k of keys){

@@ -811,6 +811,415 @@
   }
 
   // ------------------------------------------------------------ validate
+
+  // =====================================================================
+  // facultyRuleFindings — classic port of the shared personal-rule walker
+  // (identical kinds/semantics to context_solver.js / context_model.py).
+  // Classic sections carry no pop; pop-scoped entries stay permissive here.
+  // =====================================================================
+  function secStream(sec) {
+    if (sec.indexOf("I.COM") === 0) return "I.COM";
+    if (sec.indexOf("ICS") === 0) return "ICS";
+    return null;
+  }
+  // =====================================================================
+  // facultyRuleFindings — JS mirror of solver-checker parity walk
+  // (context_model.teacher_rule_findings). One deterministic implementation
+  // of EVERY personal rule kind (personal_constraints_model.md v2) consumed
+  // by evaluating and repair analysis. Scope semantics: entries without
+  // scope apply everywhere; cell-level scope gates on the section's
+  // pop/stream when the signal is known (permissive when unknown).
+  // =====================================================================
+  function scopeOfFac(e) {
+    const sc = (e && typeof e.scope === "object" && e.scope) || {};
+    return sc;
+  }
+  function scopeCellAppliesFac(e, sec, day, pop, stream) {
+    const sc = scopeOfFac(e);
+    const pops = sc.populations, streams = sc.streams, secs = sc.sections, days = sc.days;
+    if (pops && pop != null && pops.indexOf(pop) < 0) return false;
+    if (streams && stream != null && streams.indexOf(stream) < 0) return false;
+    if (secs && sec != null && secs.indexOf(sec) < 0) return false;
+    if (days && day != null && !_daySet(days).has(typeof day === "string" ? (DAY_OF[day] != null ? DAY_OF[day] : day) : day)) return false;
+    if ((pops && pop == null) || (streams && stream == null)) return true; // permissive
+    return true;
+  }
+  function scopeUnitAppliesFac(e, unit, popOf, streamOf) {
+    const sc = scopeOfFac(e);
+    if (!sc.populations && !sc.streams && !sc.sections) return true;
+    for (const sec of (unit.secs || [])) {
+      if (sc.populations && sc.populations.indexOf(popOf(sec)) < 0) return false;
+      if (sc.streams && sc.streams.indexOf(streamOf(sec)) < 0) return false;
+      if (sc.sections && sc.sections.indexOf(sec) < 0) return false;
+    }
+    return true;
+  }
+  function facEntryDays(e, D) {
+    let days = _daySet(e.days || []);
+    const scd = _daySet(scopeOfFac(e).days || []);
+    if (days.size && scd.size) days = new Set([...days].filter(d => scd.has(d)));
+    else if (scd.size) days = scd;
+    if (!days.size) { days = new Set(); for (let d = 0; d < D; d++) days.add(d); }
+    return days;
+  }
+
+  function facultyRuleFindings(code, rules, softSet, myUnits, cells, popMap, D, P, penFac) {
+    // cells: [[d, s, sec, unit], ...]; popMap: {sec -> pop}; returns finding dicts.
+    const findings = [];
+    const popOf = sec => popMap[sec] != null ? popMap[sec] : null;
+    const courseOfU = (u, sec) => (u.courseBySec || {})[sec];
+    const applies = (e, d, s, sec, u) => scopeCellAppliesFac(e, sec, DAY_NAMES[d], popOf(sec), secStream(sec));
+    const perDay = {}; const perDaySlot = {}; const occSlotsPerDay = {};
+    for (const [d, s] of cells) {
+      perDay[d] = (perDay[d] || 0) + 1;
+      const k = d + "|" + s; perDaySlot[k] = true;
+      (occSlotsPerDay[d] = occSlotsPerDay[d] || new Set()).add(s);
+    }
+    const sortedSlots = pairs => "[ " + [...pairs].sort().map(k => {
+      const q = ("" + k).split("|"); return DAY_NAMES[+q[0]] + " " + PERIOD_LABELS[+q[1]];
+    }).join(", ") + " ]";
+    const clOf = pred => cells.filter(c => pred(c[0], c[1], c[2], c[3])).map(c => [c[2], c[0], c[1]]);
+    const uidsOf = pred => [...new Set(cells.filter(c => pred(c[0], c[1], c[2], c[3])).map(c => c[3].id))].sort((a, b) => a - b);
+    function add(ruleKey, msg, opts) {
+      opts = opts || {};
+      findings.push({
+        rule_key: ruleKey, msg: msg,
+        soft: opts.isSoft != null ? !!opts.isSoft : softSet.has(ruleKey),
+        uids: opts.uids != null ? opts.uids : [...new Set(myUnits.map(u => u.id))].sort((a, b) => a - b),
+        cells: opts.cells || [],
+        pen: opts.pen != null ? opts.pen : null
+      });
+    }
+
+    // ================================ HARD masks ================================
+    if (rules.forbidden_slots != null) {
+      const fset = _slotSet(rules.forbidden_slots);
+      const pred = (d, s, sec, u) => fset.has(s) && applies({}, d, s, sec, u);
+      const bad = new Set(); for (const [d, s] of cells) if (fset.has(s)) bad.add(s);
+      if (bad.size) add("forbidden_slots", "teaches in forbidden slot(s) [" +
+        [...bad].map(s => PERIOD_LABELS[s]).join(",") + "]", { cells: clOf(pred), uids: uidsOf(pred) });
+    }
+    if (rules.allowed_slots != null) {
+      const aset = _slotSet(rules.allowed_slots);
+      const pred = (d, s, sec, u) => !aset.has(s) && applies({}, d, s, sec, u);
+      const bad = new Set(); for (const [d, s] of cells) if (!aset.has(s)) bad.add(s);
+      if (bad.size) add("allowed_slots", "teaches outside allowed slots [" +
+        [...bad].map(s => PERIOD_LABELS[s]).join(",") + "]", { cells: clOf(pred), uids: uidsOf(pred) });
+    }
+    if (rules.forbidden_days != null) {
+      const dset = _daySet(rules.forbidden_days);
+      const pred = (d, s, sec, u) => dset.has(d) && applies({}, d, s, sec, u);
+      const bad = new Set(); for (const [d] of cells) if (dset.has(d)) bad.add(d);
+      if (bad.size) add("forbidden_days", "teaches on forbidden day(s) [" +
+        [...bad].map(d => DAY_NAMES[d]).join(",") + "]", { cells: clOf(pred), uids: uidsOf(pred) });
+    }
+    if (rules.allowed_days != null) {
+      const aset = _daySet(rules.allowed_days);
+      const pred = (d, s, sec, u) => !aset.has(d) && applies({}, d, s, sec, u);
+      const bad = new Set(); for (const [d] of cells) if (!aset.has(d)) bad.add(d);
+      if (bad.size) add("allowed_days", "teaches on non-allowed day(s) [" +
+        [...bad].map(d => DAY_NAMES[d]).join(",") + "]", { cells: clOf(pred), uids: uidsOf(pred) });
+    }
+    for (const e of (rules.forbidden_slots_on_days || [])) {
+      const dset = facEntryDays(e, D).size && (e.days || scopeOfFac(e).days) ? facEntryDays(e, D) : facEntryDays(e, D);
+      const sset = _slotSet(e.slots);
+      const pred = (d, s, sec, u) => dset.has(d) && sset.has(s) && applies(e, d, s, sec, u);
+      const bad = new Set(); for (const [d, s, sec, u] of cells) if (pred(d, s, sec, u)) bad.add(d + "|" + s);
+      if (bad.size) add("forbidden_slots_on_days", "teaches in forbidden day/slot " + sortedSlots(bad),
+                        { cells: clOf(pred), uids: uidsOf(pred) });
+    }
+    // positive union-allow windows — grouped per scope signature
+    if (rules.allowed_slots_days) {
+      const groups = {};
+      for (const e of rules.allowed_slots_days) {
+        const sc = scopeOfFac(e);
+        const sig = JSON.stringify([sc.populations || [], sc.streams || [], sc.sections || []]);
+        (groups[sig] = groups[sig] || []).push(e);
+      }
+      for (const sig in groups) {
+        const es = groups[sig];
+        const win = {};   // d -> Set(slots) union across same-scope entries
+        for (const e of es) for (const d of facEntryDays(e, D)) {
+          (win[d] = win[d] || new Set()); for (const s of _slotSet(e.slots || [])) win[d].add(s);
+        }
+        const e0 = es[0];
+        const pred = (d, s, sec, u) => (!win[d] || !win[d].has(s)) && applies(e0, d, s, sec, u);
+        const bad = new Set(); for (const [d, s, sec, u] of cells) if (pred(d, s, sec, u)) bad.add(d + "|" + s);
+        if (bad.size) add("allowed_slots_days", "teaches outside the allowed day/slot window " + sortedSlots(bad),
+                          { cells: clOf(pred), uids: uidsOf(pred) });
+      }
+    }
+    for (const e of (rules.allowed_slots_in_stream || [])) {
+      const sset = _slotSet(e.slots);
+      const edays = e.days ? _daySet(e.days) : null;
+      const pred = (d, s, sec, u) => secStream(sec) === e.stream && !sset.has(s) &&
+        (!edays || edays.has(d)) && applies(e, d, s, sec, u);
+      const bad = new Set(); for (const [d, s, sec, u] of cells) if (pred(d, s, sec, u)) bad.add(d + "|" + s);
+      if (bad.size) add("allowed_slots_in_stream", e.stream + " classes outside allowed slots " + sortedSlots(bad),
+                        { cells: clOf(pred), uids: uidsOf(pred) });
+    }
+    for (const e of (rules.allowed_days_in_stream || [])) {
+      const dset = _daySet(e.days);
+      const pred = (d, s, sec, u) => secStream(sec) === e.stream && !dset.has(d) && applies(e, d, s, sec, u);
+      const bad = new Set(); for (const [d, s, sec] of cells) if (pred(d, s, sec, cells[0][3])) bad.add(d);
+      if (bad.size) add("allowed_days_in_stream", e.stream + " classes on non-allowed day(s) [" +
+                        [...bad].map(d => DAY_NAMES[d]).join(",") + "]",
+                        { cells: clOf(pred), uids: uidsOf(pred) });
+    }
+    for (const e of (rules.stream_forbidden_days || [])) {
+      const dset = _daySet(e.days || []);
+      const pred = (d, s, sec, u) => secStream(sec) === e.stream && dset.has(d) && applies(e, d, s, sec, u);
+      const bad = new Set(); for (const [d, s, sec, u] of cells) if (pred(d, s, sec, u)) bad.add(d);
+      if (bad.size) add("stream_forbidden_days", e.stream + " classes on forbidden day(s) [" +
+                        [...bad].map(d => DAY_NAMES[d]).join(",") + "]",
+                        { cells: clOf(pred), uids: uidsOf(pred) });
+    }
+    for (const e of (rules.allowed_slots_in_sections || [])) {
+      const secset = new Set(e.sections || []);
+      const dset = e.days ? _daySet(e.days) : null;
+      const sset = _slotSet(e.slots || []);
+      const pred = (d, s, sec, u) => secset.has(sec) && !sset.has(s) &&
+        (!dset || dset.has(d)) && applies(e, d, s, sec, u);
+      const bad = new Set(); for (const [d, s, sec, u] of cells) if (pred(d, s, sec, u)) bad.add(d + "|" + s);
+      if (bad.size) add("allowed_slots_in_sections", "section-scoped classes outside allowed window " +
+                        sortedSlots(bad), { cells: clOf(pred), uids: uidsOf(pred) });
+    }
+    for (const e of (rules.allowed_days_in_sections || [])) {
+      const secset = new Set(e.sections || []);
+      const dset = _daySet(e.days || []);
+      const pred = (d, s, sec, u) => secset.has(sec) && !dset.has(d) && applies(e, d, s, sec, u);
+      const bad = new Set(); for (const [d, s, sec] of cells) if (pred(d, s, sec, cells[0][3])) bad.add(d);
+      if (bad.size) add("allowed_days_in_sections", "section-scoped classes on non-allowed day(s) [" +
+                        [...bad].map(d => DAY_NAMES[d]).join(",") + "]",
+                        { cells: clOf(pred), uids: uidsOf(pred) });
+    }
+    if (rules.allowed_sections) {
+      const aset = new Set(rules.allowed_sections);
+      const pred = (d, s, sec, u) => !aset.has(sec);
+      const bad = new Set(); for (const [d, s, sec] of cells) if (!aset.has(sec)) bad.add(sec);
+      if (bad.size) add("allowed_sections", "teaches outside allowed sections [" + [...bad].join(",") + "]",
+                        { cells: clOf(pred), uids: uidsOf(pred) });
+    }
+    if (rules.forbidden_sections) {
+      const fset = new Set(rules.forbidden_sections);
+      const pred = (d, s, sec, u) => fset.has(sec);
+      const bad = new Set(); for (const [d, s, sec] of cells) if (fset.has(sec)) bad.add(sec);
+      if (bad.size) add("forbidden_sections", "teaches in forbidden sections [" + [...bad].join(",") + "]",
+                        { cells: clOf(pred), uids: uidsOf(pred) });
+    }
+    // ---- subject pin kinds (subject_slots unioned per subject; day-scoped ok)
+    if (rules.subject_slots) {
+      const bySubj = {};
+      for (const e of rules.subject_slots) {
+        const o = bySubj[e.subject] = bySubj[e.subject] || { win: {}, e: e };
+        const ds = e.days ? _daySet(e.days) : facEntryDays(e, D);
+        for (const d of ds) { (o.win[d] = o.win[d] || new Set()); for (const s of _slotSet(e.slots || [])) o.win[d].add(s); }
+      }
+      for (const subj in bySubj) {
+        const o = bySubj[subj];
+        const pred = (d, s, sec, u) => courseOfU(u, sec) === subj &&
+          !(o.win[d] && o.win[d].has(s)) && applies(o.e, d, s, sec, u);
+        const bad = new Set(); for (const [d, s, sec, u] of cells) if (pred(d, s, sec, u)) bad.add(d + "|" + s);
+        if (bad.size) add("subject_slots", subj + " not in allowed slots " + sortedSlots(bad),
+                          { cells: clOf(pred), uids: uidsOf(pred) });
+      }
+    }
+    for (const e of (rules.subject_forbidden_days || [])) {
+      const dset = _daySet(e.days);
+      const pred = (d, s, sec, u) => courseOfU(u, sec) === e.subject && dset.has(d) && applies(e, d, s, sec, u);
+      const bad = new Set(); for (const [d, s, sec, u] of cells) if (pred(d, s, sec, u)) bad.add(d);
+      if (bad.size) add("subject_forbidden_days", e.subject + " on forbidden day(s) [" +
+                        [...bad].map(d => DAY_NAMES[d]).join(",") + "]",
+                        { cells: clOf(pred), uids: uidsOf(pred) });
+    }
+    if (rules.subject_days_allowed) {
+      const bySubj = {};
+      for (const e of rules.subject_days_allowed) {
+        bySubj[e.subject] = bySubj[e.subject] || new Set();
+        for (const d of _daySet(e.days)) bySubj[e.subject].add(d);
+      }
+      for (const subj in bySubj) {
+        const dset = bySubj[subj];
+        const pred = (d, s, sec, u) => courseOfU(u, sec) === subj && !dset.has(d);
+        const bad = new Set(); for (const [d, s, sec, u] of cells) if (pred(d, s, sec, u)) bad.add(d);
+        if (bad.size) add("subject_days_allowed", subj + " outside allowed day(s) [" +
+                          [...bad].map(d => DAY_NAMES[d]).join(",") + "]",
+                          { cells: clOf(pred), uids: uidsOf(pred) });
+      }
+    }
+    // subject pins (singular + plural unioned per subject)
+    const pins = {};
+    for (const e of (rules.subject_slot_days || [])) {
+      pins[e.subject] = pins[e.subject] || new Set();
+      for (const d of _daySet(e.days)) pins[e.subject].add(d + "|" + SLOT_OF[e.slot]);
+    }
+    for (const e of (rules.subject_slots_days || [])) {
+      pins[e.subject] = pins[e.subject] || new Set();
+      for (const d of _daySet(e.days || [])) for (const s of _slotSet(e.slots || [])) pins[e.subject].add(d + "|" + s);
+    }
+    for (const subj in pins) {
+      const win = pins[subj];
+      const pred = (d, s, sec, u) => courseOfU(u, sec) === subj && !win.has(d + "|" + s);
+      const bad = new Set(); for (const [d, s, sec, u] of cells) if (pred(d, s, sec, u)) bad.add(d + "|" + s);
+      if (bad.size) add(rules.subject_slot_days && rules.subject_slot_days.some(x => x.subject === subj)
+                        ? "subject_slot_days" : "subject_slots_days",
+                        subj + " outside pinned day/slot window " + sortedSlots(bad),
+                        { cells: clOf(pred), uids: uidsOf(pred) });
+    }
+
+    // ================================ count / engagement ================================
+    // NOTE: multi-section units count once per matching section cell — identical
+    // to the Python checker.
+    for (const e of (rules.min_days_in_slot || [])) {
+      const si = SLOT_OF[e.slot];
+      const days = new Set();
+      for (const [d, s, sec, u] of cells) if (s === si && applies(e, d, s, sec, u)) days.add(d);
+      const floor = e.min_days || 1;
+      if (days.size < floor) add("min_days_in_slot", e.slot + " engaged only " + days.size +
+        " days (<" + floor + ")", {
+        cells: cells.filter(c => c[1] === si && applies(e, c[0], c[1], c[2], c[3])).map(c => [c[2], c[0], c[1]])
+      });
+    }
+    if (rules.min_days_engaged) {
+      if (Object.keys(perDay).length < rules.min_days_engaged)
+        add("min_days_engaged", "engaged only " + Object.keys(perDay).length +
+            " days (<" + rules.min_days_engaged + ")");
+    }
+    const mppd = rules.max_periods_per_day;
+    const mppdList = typeof mppd === "number" ? [{ max: mppd }] : (Array.isArray(mppd) ? mppd : []);
+    for (const e of mppdList) {
+      const cap = e.max; if (cap == null) continue;
+      const dsel = facEntryDays(e, D);
+      for (let d = 0; d < D; d++) {
+        if (!dsel.has(d)) continue;
+        const pred = (d2, s, sec, u) => d2 === d &&
+          (!e.stream || secStream(sec) === e.stream) &&
+          (!e.sections || e.sections.indexOf(sec) >= 0) && applies(e, d2, s, sec, u);
+        const n = cells.filter(c => pred(c[0], c[1], c[2], c[3])).length;
+        if (n > cap) add("max_periods_per_day", n + " scoped periods on " + DAY_NAMES[d] + " (>" + cap + ")",
+          { cells: cells.filter(c => pred(c[0], c[1], c[2], c[3])).map(c => [c[2], c[0], c[1]]) });
+      }
+    }
+    const minpd = rules.min_periods_per_day;
+    const minpdList = typeof minpd === "number" ? [{ min: minpd }] : (Array.isArray(minpd) ? minpd : []);
+    for (const e of minpdList) {
+      const floor = e.min; if (floor == null) continue;
+      const dsel = facEntryDays(e, D);
+      for (let d = 0; d < D; d++) {
+        if (!dsel.has(d)) continue;
+        const pred = (d2, s, sec, u) => d2 === d &&
+          (!e.stream || secStream(sec) === e.stream) &&
+          (!e.sections || e.sections.indexOf(sec) >= 0) && applies(e, d2, s, sec, u);
+        const n = cells.filter(c => pred(c[0], c[1], c[2], c[3])).length;
+        if ((perDay[d] || 0) > 0 && n < floor)
+          add("min_periods_per_day", "only " + n + " scoped periods on " + DAY_NAMES[d] + " (<" + floor + ")",
+            { cells: cells.filter(c => pred(c[0], c[1], c[2], c[3])).map(c => [c[2], c[0], c[1]]) });
+      }
+    }
+    for (const e of (rules.max_days_in_slot || [])) {
+      const si = SLOT_OF[e.slot]; const cap = e.max_days; if (cap == null) continue;
+      const days = new Set();
+      for (const [d, s, sec, u] of cells) if (s === si && facEntryDays(e, D).has(d) && applies(e, d, s, sec, u)) days.add(d);
+      if (days.size > cap) add("max_days_in_slot", e.slot + " engaged on " + days.size + " days (>" + cap + ")");
+    }
+    // ---- distribution quotas
+    const quotaMatch = (e, d, s, sec, u) => {
+      if (e.subject && courseOfU(u, sec) !== e.subject) return false;
+      if (e.subjects && e.subjects.indexOf(courseOfU(u, sec)) < 0) return false;
+      if (e.stream && secStream(sec) !== e.stream) return false;
+      if (e.sections && e.sections.indexOf(sec) < 0) return false;
+      if (e.slot && SLOT_OF[e.slot] !== s) return false;
+      if (e.days && !_daySet(e.days).has(d)) return false;
+      return applies(e, d, s, sec, u);
+    };
+    for (const [key, dir] of [["max_pieces_match", "max"], ["min_pieces_match", "min"]]) {
+      for (const e of (rules[key] || [])) {
+        const bound = e[dir]; if (bound == null) continue;
+        const matching = cells.filter(c => quotaMatch(e, c[0], c[1], c[2], c[3]));
+        const n = matching.length;
+        const hit = dir === "max" ? n > bound : n < bound;
+        if (hit) {
+          const sel = Object.keys(e).filter(k => ["scope", "max", "min"].indexOf(k) < 0)
+            .map(k => k + "=" + JSON.stringify(e[k])).join(", ");
+          add(key, n + " matching pieces [" + sel + "] (" + dir + " " + bound + ")",
+              { cells: matching.map(c => [c[2], c[0], c[1]]) });
+        }
+      }
+    }
+    // ---- legacy engagement: stream slot required ≥4 days (default), min_days override
+    for (const e of (rules.stream_slots_required || [])) {
+      const hasStream = myUnits.some(u2 => u2.secs.some(sec2 => secStream(sec2) === e.stream));
+      if (!hasStream) continue;
+      for (const sl of e.slots) {
+        const si = SLOT_OF[sl];
+        const edays = facEntryDays(e, D);
+        const days = new Set();
+        for (const [d, s, sec, u] of cells)
+          if (s === si && secStream(sec) === e.stream && edays.has(d) && applies(e, d, s, sec, u)) days.add(d);
+        const floor = e.min_days || 4;
+        if (days.size < floor) add("stream_slots_required", e.stream + " " + sl + " engaged only " +
+          days.size + " days (<" + floor + ")",
+          { cells: cells.filter(c => c[1] === si && secStream(c[2]) === e.stream && applies(e, c[0], c[1], c[2], c[3]))
+                        .map(c => [c[2], c[0], c[1]]) });
+      }
+    }
+
+    // ================================ structure ================================
+    if (rules.no_daily_gaps) {
+      for (let d = 0; d < D; d++) {
+        const sset = occSlotsPerDay[d];
+        if (!sset || sset.size < 2) continue;
+        const arr = [...sset];
+        const lo = Math.min(...arr), hi = Math.max(...arr);
+        const gaps = (hi - lo + 1) - sset.size;
+        if (gaps) add("no_daily_gaps", gaps + " gap(s) inside " + DAY_NAMES[d] +
+          "'s teaching run (P" + (lo + 1) + "–P" + (hi + 1) + ")",
+          { cells: cells.filter(c => c[0] === d).map(c => [c[2], c[0], c[1]]) });
+      }
+    }
+
+    // ================================ SOFT ================================
+    if (rules.soft_prefer_free_slots) {
+      const sset = _slotSet(rules.soft_prefer_free_slots);
+      let n = 0; for (const [d, s] of cells) if (sset.has(s)) n++;
+      if (n) add("soft_prefer_free_slots", n + " period(s) in preferred-free slots [" +
+                 rules.soft_prefer_free_slots.join(",") + "]",
+                 { isSoft: true, pen: penFac.preferFreeSlot * n,
+                   cells: cells.filter(c => sset.has(c[1])).map(c => [c[2], c[0], c[1]]) });
+    }
+    for (const e of (rules.soft_prefer_free_slots_days || [])) {
+      const dset = _daySet(e.days); const sset = _slotSet(e.slots);
+      const n = cells.filter(c => dset.has(c[0]) && sset.has(c[1]) && applies(e, c[0], c[1], c[2], c[3])).length;
+      if (n) add("soft_prefer_free_slots_days", n + " period(s) in preferred-free windows " +
+                 e.days.join("/") + " " + e.slots.join(","),
+                 { isSoft: true, pen: penFac.preferFreeSlot * n,
+                   cells: cells.filter(c => dset.has(c[0]) && sset.has(c[1]) && applies(e, c[0], c[1], c[2], c[3]))
+                               .map(c => [c[2], c[0], c[1]]) });
+    }
+    if (rules.soft_even_distribution) {
+      const total = cells.length;
+      const daysUsed = Object.keys(perDay).length || 1;
+      const cap = Math.ceil(total / Math.max(1, daysUsed));
+      let excess = 0;
+      for (const d in perDay) excess += Math.max(0, perDay[d] - cap);
+      if (excess) add("soft_even_distribution", excess + " period(s) above the even per-day share",
+                      { isSoft: true, pen: penFac.evenDistribution * excess });
+    }
+    if (rules.soft_compact_days) {
+      let gaps = 0;
+      for (let d = 0; d < D; d++) {
+        const sset = occSlotsPerDay[d];
+        if (!sset || sset.size < 2) continue;
+        const arr = [...sset];
+        gaps += (Math.max(...arr) - Math.min(...arr) + 1) - sset.size;
+      }
+      if (gaps) add("soft_compact_days", gaps + " gap(s) inside teaching days (moves toward compact days)",
+                    { isSoft: true, pen: penFac.rule * gaps });
+    }
+    return findings;
+  }
+
+
   function validate(grids, R) {
     if (!R) R = resolveConstraints();
     const issues = [];
@@ -854,54 +1263,45 @@
         seen.add(k);
       }
     }
-    // rule-driven checks (availability + engagement + placement), per current R
-    for (const t in occ) {
-      const rr = R[t] && R[t].rules;
-      if (!rr) continue;
-      const as = rr.allowed_slots ? _slotSet(rr.allowed_slots) : null;
-      const fs = rr.forbidden_slots ? _slotSet(rr.forbidden_slots) : null;
-      const ad = rr.allowed_days ? _daySet(rr.allowed_days) : null;
-      const fd = rr.forbidden_days ? _daySet(rr.forbidden_days) : null;
-      for (const [d, s, k] of occ[t]) {
-        if (as && !as.has(s)) issues.push(`${t} slot not allowed ${SLOTS[s]} (${k})`);
-        if (fs && fs.has(s)) issues.push(`${t} forbidden slot ${SLOTS[s]} (${k})`);
-        if (ad && !ad.has(d)) issues.push(`${t} day not allowed ${DAYS[d]} (${k})`);
-        if (fd && fd.has(d)) issues.push(`${t} forbidden day ${DAYS[d]} (${k})`);
-        if (rr.forbidden_slots_on_days) for (const e of rr.forbidden_slots_on_days) {
-          if (_daySet(e.days).has(d) && _slotSet(e.slots).has(s)) issues.push(`${t} forbidden ${DAYS[d]} ${SLOTS[s]} (${k})`);
+    // rule-driven checks (availability + engagement + placement), per current R —
+    // one shared walker implements every personal-rule kind (taxonomy v2);
+    // hard findings become issues, soft findings surface as documented notes.
+    {
+      const Rr = R || resolveConstraints();
+      const penFac = { rule: 5000, preferFreeSlot: 500, evenDistribution: 100 };
+      // build per-teacher unit shims + cells from occ
+      const unitsByT = {};
+      for (let ui = 0; ui < UNITS.length; ui++) {
+        const u = UNITS[ui];
+        if (u.teacher === "PARALLEL") continue;
+        const shim = { id: ui, teacher: u.teacher, members: [], secs: [u.sec],
+                       subject: u.subject, courseBySec: {} };
+        shim.courseBySec[u.sec] = u.subject;
+        (unitsByT[u.teacher] = unitsByT[u.teacher] || []).push(shim);
+      }
+      const shimOf = (ui) => {
+        for (const t in unitsByT) for (const sh of unitsByT[t]) if (sh.id === ui) return sh;
+        return null;
+      };
+      for (const t in occ) {
+        if (t === "PARALLEL") continue;
+        const entry = Rr[t] || {};
+        const rules = entry.rules || {};
+        const softSet = new Set(entry.soft || []);
+        const myUnits = unitsByT[t] || [];
+        if (!myUnits.length) continue;
+        const cells = [];
+        for (const [d, s, secKey] of occ[t]) {
+          const uid = grids[secKey][d][s];
+          if (uid === null) continue;
+          const sh = shimOf(uid);
+          if (sh && sh.teacher === t) cells.push([d, s, secKey, sh]);
         }
-      }
-      if (rr.min_days_in_slot) for (const e of rr.min_days_in_slot) {
-        const days = new Set(occ[t].filter(x => x[1] === SLOT_OF[e.slot]).map(x => x[0]));
-        if (days.size < (e.min_days || 1)) issues.push(`${t} ${e.slot} only ${days.size} days (<${e.min_days})`);
-      }
-      if (rr.min_days_engaged) {
-        const days = new Set(occ[t].map(x => x[0]));
-        if (days.size < rr.min_days_engaged) issues.push(`${t} engaged only ${days.size} days (<${rr.min_days_engaged})`);
-      }
-      if (rr.stream_slots_required) for (const e of rr.stream_slots_required) for (const sl of e.slots) {
-        const days = new Set(occ[t].filter(x => x[1] === SLOT_OF[sl]).map(x => x[0]));
-        if (days.size < 4) issues.push(`${t} ${e.stream} ${sl} only ${days.size} days`);
-      }
-    }
-    // subject placement rules
-    for (const sec of SECTIONS) {
-      const g = grids[sec.key];
-      for (let d = 0; d < Dg; d++) for (let s = 0; s < Pg; s++) {
-        const uid = g[d][s];
-        if (uid === null) continue;
-        const u = UNITS[uid];
-        const rr = R[u.teacher] && R[u.teacher].rules;
-        if (!rr) continue;
-        if (rr.subject_slots) for (const e of rr.subject_slots) {
-          if (e.subject === u.subject && !_slotSet(e.slots).has(s)) issues.push(`${u.teacher} ${u.subject} not in ${e.slots.join("/")} (${sec.key})`);
-        }
-        if (rr.subject_forbidden_days) for (const e of rr.subject_forbidden_days) {
-          if (e.subject === u.subject && _daySet(e.days).has(d)) issues.push(`${u.teacher} ${u.subject} on ${DAYS[d]} (${sec.key})`);
+        for (const f of facultyRuleFindings(t, rules, softSet, myUnits, cells, {}, Dg, Pg, penFac)) {
+          issues.push((f.soft ? "(soft) " : "") + t + " " + f.msg);
         }
       }
     }
-
     const par = occ.PARALLEL || [];
     if (par.length !== 4) issues.push(`parallel size ${par.length}`);
     const parSlots = new Set(par.map(x => x[1]));

@@ -18,26 +18,53 @@ DAYS = ["MON", "TUE", "WED", "THU", "FRI"]
 STREAMS = ["I.COM", "ICS"]
 
 # rule keys we accept (and their expected value shape) — used for validation
+# rule keys we accept (and their expected value shape) — DRIVEN BY
+# personal_constraints_model.md (taxonomy v2). Keep 1:1 with the spec's
+# "kind" column; anything else is dropped with a warning so the LLM cannot
+# smuggle ambiguous keys into the engine.
 RULE_SPEC = {
-    "allowed_slots": list,
-    "forbidden_slots": list,
-    "allowed_days": list,
-    "forbidden_days": list,
-    "forbidden_slots_on_days": list,   # [{"days":[...], "slots":[...]}]
-    "min_days_in_slot": list,          # [{"slot": "P1", "min_days": 4}]
+    # ---- legacy + v2 hard masks
+    "allowed_slots": list,             # ["P1","P2"]
+    "forbidden_slots": list,           # ["P5"]
+    "allowed_days": list,              # ["THU","FRI"]
+    "forbidden_days": list,            # ["FRI"]
+    "allowed_slots_days": list,        # [{days?, slots}] ONLY-IN window (union across entries)
+    "allowed_slots_in_sections": list, # [{sections:[...], slots:[...], days?}]
+    "allowed_days_in_sections": list,  # [{sections:[...], days:[...]}]
+    "allowed_sections": list,          # [section keys] — teach ONLY these
+    "forbidden_sections": list,        # [section keys] — never these
+    "forbidden_slots_on_days": list,   # [{days:[...], slots:[...]}]
+    "allowed_slots_in_stream": list,   # [{stream, slots, days?}]
+    "allowed_days_in_stream": list,    # [{stream, days}]
+    "stream_forbidden_days": list,     # [{stream, days}]
+    # ---- subject pins
+    "subject_slots": list,             # [{subject, slots, days?}]
+    "subject_forbidden_days": list,    # [{subject, days}]
+    "subject_days_allowed": list,      # [{subject, days}] — ONLY these days
+    "subject_slot_days": list,         # [{subject, slot, days}] (legacy singular)
+    "subject_slots_days": list,        # [{subject, slots, days}] (plural window)
+    # ---- engagement counts
+    "min_days_in_slot": list,          # [{slot, min_days, days?, scope?}]
+    "max_days_in_slot": list,          # [{slot, max_days, days?, scope?}]
     "min_days_engaged": int,
-    "max_periods_per_day": int,
-    "subject_slots": list,             # [{"subject": "...", "slots":[...]}]
-    "subject_forbidden_days": list,    # [{"subject": "...", "days":[...]}]
-    "stream_slots_required": list,     # [{"stream": "ICS", "slots":[...]}]
-    "stream_forbidden_days": list,     # [{"stream": "I.COM", "days":[...]}]
-    "allowed_slots_in_stream": list,   # [{"stream": "I.COM", "slots": ["P1","P2","P3"]}]
-    "allowed_days_in_stream": list,    # [{"stream": "I.COM", "days": ["THU","FRI"]}]
-    "subject_slot_days": list,         # [{"subject": "...", "slot": "P3", "days": ["MON","TUE"]}]
-    "soft_prefer_free_slots": list,    # ["P3"] — SOFT: penalized, not forbidden
-    "soft_even_distribution": bool,    # SOFT: spread the weekly load evenly
-    "allow_same_subject_same_day": bool,  # personal exception: same-subject doubles allowed
+    "max_periods_per_day": "int_or_list",  # int OR [{max, days?, stream?, sections?, scope?}]
+    "min_periods_per_day": "int_or_list",  # int OR [{min, ...}] (only on engaged days)
+    "stream_slots_required": list,     # [{stream, slots, min_days?, days?}]
+    # ---- distribution quotas
+    "max_pieces_match": list,          # [{max, subject?, subjects?, stream?, sections?, slot?, days?, scope?}]
+    "min_pieces_match": list,          # [{min, ...}]
+    # ---- structure
+    "no_daily_gaps": bool,             # no free holes inside a teaching day
+    # ---- soft preferences
+    "soft_prefer_free_slots": list,        # ["P3"]
+    "soft_prefer_free_slots_days": list,   # [{days, slots}]
+    "soft_even_distribution": bool,
+    "soft_compact_days": bool,
+    # ---- personal exception
+    "allow_same_subject_same_day": bool,
 }
+# per-entry scope object (may sit on ANY list-entry; absent = applies everywhere)
+SCOPE_KEYS = ("populations", "streams", "sections", "days")
 
 SYSTEM_PROMPT = """You translate a faculty member's natural-language timetable constraints into strict JSON.
 
@@ -56,25 +83,66 @@ OUTPUT — return ONLY a JSON object, no markdown fences, with exactly this shap
   "notes": "<one short sentence explaining your interpretation>"
 }
 
-RULES — use ONLY these keys:
-- "allowed_slots": ["P1","P2","P4"]              → the ONLY periods they may teach.
-- "forbidden_slots": ["P5"]                      → periods they must never teach ("never the last period", "no 5th period").
-- "allowed_days": ["THU","FRI"]                  → the ONLY days they may teach ("only Thursday and Friday").
-- "forbidden_days": ["FRI"]                      → days they must never teach ("never on Friday").
-- "forbidden_slots_on_days": [{"days":["MON"],"slots":["P1","P2"]}]  → combined ban ("Monday first two periods free").
-- "min_days_in_slot": [{"slot":"P1","min_days":4}]  → must teach in that period on at least N distinct days ("1st period engaged 4 days a week").
-- "min_days_engaged": 5                          → must teach on at least N distinct days ("no completely free day" → 5).
-- "max_periods_per_day": 3                       → never more than N periods in one day.
-- "subject_slots": [{"subject":"Business Mathematics","slots":["P3"]}]  → pin a subject into specific periods.
-- "subject_forbidden_days": [{"subject":"Principles of Commerce","days":["MON"]}] → forbid a subject on days.
-- "stream_slots_required": [{"stream":"ICS","slots":["P1","P2"]}]  → must occupy periods in a stream ("ICS fills P1 & P2").
-- "allowed_slots_in_stream": [{"stream":"I.COM","slots":["P1","P2","P3"]}] → in that stream ONLY these periods may be used ("engage 1st-3rd periods in I.Com").
-- "allowed_days_in_stream": [{"stream":"I.COM","days":["THU","FRI"]}] → in that stream ONLY these days may be used ("I.Com classes on Thursday and Friday").
-- "subject_slot_days": [{"subject":"Business Mathematics","slot":"P3","days":["MON","TUE"]}] → pin a subject's period onto specific days ("3rd period in I.Com on Monday and Tuesday" where their I.Com subject is BM).
-- "soft_prefer_free_slots": ["P3"] → SOFT preference: keep these periods free "as much as possible"; violations are penalized, never forbidden.
-- "soft_even_distribution": true → SOFT: spread this teacher's periods evenly over the week.
-- "allow_same_subject_same_day": true → personal exception: this teacher's same-subject classes MAY double on one day (overrides the inter-level no-double rule for their units).
-- "stream_forbidden_days": [{"stream":"I.COM","days":["FRI"]}]  → no classes of a stream on days.
+RULES — deterministic kind table (personal_constraints_model.md v2). Use ONLY these keys; anything that does not map mechanically to a row goes into "unmapped" — NEVER invent keys.
+
+HARD availability masks:
+- "allowed_slots": ["P1","P2"]            → ONLY these periods, week-wide.
+- "forbidden_slots": ["P5"]               → never these periods ("never the last period").
+- "allowed_days": ["THU","FRI"]           → ONLY these days.
+- "forbidden_days": ["FRI"]               → never these days.
+- "forbidden_slots_on_days": [{"days":["MON"],"slots":["P1","P2"]}] → never these day×period windows.
+- "allowed_slots_days": [{"days":["FRI"],"slots":["P3","P4","P5"]}] → ONLY these day×period windows (union across entries; combos not listed are off-limits). "Use only 3rd–5th periods on Fridays" / "arrange his 3,4,5 periods on Fri".
+- "allowed_slots_in_stream": [{"stream":"I.COM","slots":["P1","P2","P3"],"days":optional}] → within that stream ONLY these periods (whole week unless "days" given).
+- "allowed_days_in_stream": [{"stream":"I.COM","days":["THU","FRI"]}] → within that stream ONLY these days.
+- "stream_forbidden_days": [{"stream":"I.COM","days":["FRI"]}] → never these days within that stream.
+- "allowed_slots_in_sections": [{"sections":["ICS-II-A"],"slots":["P3","P4","P5"],"days":optional}] → in these sections ONLY these periods.
+- "allowed_days_in_sections": [{"sections":["BSAF-SEM-I"],"days":["MON","TUE"]}] → in these sections ONLY these days.
+- "allowed_sections": ["ICS-II-A","ICS-II-B"] → may teach ONLY these sections.
+- "forbidden_sections": ["I.COM-I-A"] → may never teach these sections.
+- "subject_slots": [{"subject":"Business Mathematics","slots":["P3"],"days":optional}] → that subject in these periods only (week-wide unless days given).
+- "subject_forbidden_days": [{"subject":"Principles of Economics","days":["FRI"]}] → subject never on those days.
+- "subject_days_allowed": [{"subject":"Principles of Economics","days":["MON","TUE","WED"]}] → subject ONLY those days.
+- "subject_slot_days": [{"subject":"...","slot":"P3","days":["MON","TUE"]}] → subject pinned to one period on days (legacy form, still accepted).
+- "subject_slots_days": [{"subject":"...","slots":["P3","P4"],"days":["MON","TUE"]}] → subject ONLY these day×period windows.
+
+Counts:
+- "min_days_engaged": 5 → teach on at least N distinct days ("no day completely off" → 5).
+- "min_days_in_slot": [{"slot":"P1","min_days":4}] → occupy the period ≥N distinct days.
+- "max_days_in_slot": [{"slot":"P5","max_days":2}] → occupy the period ≤N distinct days ("last period at most 2 days a week").
+- "max_periods_per_day": 3 — OR scoped entries [{"max":2,"days":["FRI"],"stream":"ICS","sections":optional}] → ≤N scoped periods in one day.
+- "min_periods_per_day": 2 — OR [{"min":2,...}] → ≥N scoped periods on any day he actually teaches (never forces an empty day).
+- "stream_slots_required": [{"stream":"ICS","slots":["P1","P2"],"min_days":optional}] → each listed period occupied in that stream (default ≥4 days).
+- "max_pieces_match": [{"max":2,"subject":"Principles of Economics","stream":"I.COM"}] → QUOTA: ≤N matching pieces per week; matchers any of subject/subjects/stream/sections/slot/days.
+- "min_pieces_match": [{"min":3,"stream":"ICS"}] → QUOTA: ≥N matching pieces per week.
+
+Structure:
+- "no_daily_gaps": true → per teaching day, occupied periods form one contiguous run.
+- "allow_same_subject_same_day": true → personal exception: his same-subject classes MAY double on one day (overrides the inter no-double rule for his units only).
+
+SOFT preferences (penalized, never forbidden — only when the statement says prefer / as-much-as-possible / when possible):
+- "soft_prefer_free_slots": ["P3"] → prefer these periods free.
+- "soft_prefer_free_slots_days": [{"days":["FRI"],"slots":["P5"]}] → windowed prefer-free.
+- "soft_even_distribution": true → spread his load evenly across the week.
+- "soft_compact_days": true → prefer no gaps inside a teaching day.
+
+SCOPE — every LIST entry may carry "scope": {"populations":["inter-1"],"streams":["ICS"],"sections":["ICS-II-A"],"days":["MON"]} when the statement restricts WHERE the rule applies ("…but only for his BS sections", "…only on Fridays"). Omit scope when it applies everywhere.
+
+MAPPING RULES (synonyms → canonical keys)
+- "free", "off", "should not / must not / cannot take" → forbidden family.
+- "only", "can only", "available only" → allowed family (slots / days / day×period windows — pick the row matching what is restricted).
+- "no day off", "every day" → min_days_engaged.
+- "engaged / must take / at least N days" + period → min_days_in_slot; "at most N days" + period → max_days_in_slot.
+- "never more than N periods <where> in a day" → max_periods_per_day (scoped entry when restricted to a stream/section/days).
+- "at least N <where> periods on any teaching day" → min_periods_per_day.
+- "at most / at least N of his <subject/stream/sections> classes" → max_pieces_match / min_pieces_match quotas.
+- "arrange periods P.. only in <streams/sections>" (optionally with days) → allowed_slots_in_stream / allowed_slots_in_sections; day×period combos week-wide or day-listed → allowed_slots_days.
+- "<subject> on P<n> on <days>" → subject_slots_days (plural) or subject_slot_days (single period).
+- stream words + "must engage/fill" → stream_slots_required; "only these periods" → allowed_slots_in_stream.
+- "as much as possible", "preferably", "if possible" → the soft_* twin (soft_prefer_free_slots(_days), soft_compact_days, soft_even_distribution) — NEVER the hard forbiddens.
+- "no gaps between my periods within a day" → no_daily_gaps; "…as much as possible" → soft_compact_days.
+- "first period" = P1, "last period" = P5. "after break" = P4 or P5 (pick the more specific reading).
+- A subject name MUST be kept verbatim from the catalog (e.g. "Business Mathematics", "Principles of Accounting").
+
 
 MAPPING RULES (synonyms → canonical keys)
 - "free", "off", "should not teach", "must not teach", "cannot take" → forbidden.
@@ -110,8 +178,45 @@ Output: {"teacher":null,"natural":"Monday first two periods free, and I prefer n
 """
 
 
+def _valid_scope(scope):
+    """scope object: populations/streams/sections/days lists (days checked
+    against the vocabulary). Empty/absent keys are ignored."""
+    if not isinstance(scope, dict):
+        return False
+    for k, v in scope.items():
+        if k not in SCOPE_KEYS or not isinstance(v, list):
+            return False
+        if k == "days" and any(d not in DAYS and d != "SAT" for d in v):
+            return False
+    return True
+
+
+def _entries(val):
+    return val if isinstance(val, list) else []
+
+
+def _entry_ok(e, need=(), opt=()):
+    if not isinstance(e, dict):
+        return False
+    for f in need:
+        if f not in e:
+            return False
+    if "scope" in e and not _valid_scope(e["scope"]):
+        return False
+    if "days" in e and any(d not in DAYS and d != "SAT" for d in _entries(e["days"])):
+        return False
+    return True
+
+
+def _slots_of(e, field="slots"):
+    return all(s in SLOTS for s in _entries(e.get(field)))
+
+
 def _validate_rules(rules):
-    """Normalize + validate; returns (clean_rules, errors, warnings)."""
+    """Normalize + validate against RULE_SPEC (personal_constraints_model.md
+    taxonomy v2); returns (clean_rules, errors, warnings). Unknown keys are
+    dropped with a warning (never silently accepted); malformed entries are
+    dropped with an error."""
     clean, errors, warnings = {}, [], []
     if not isinstance(rules, dict):
         return {}, ["rules must be an object"], []
@@ -119,45 +224,72 @@ def _validate_rules(rules):
         if key not in RULE_SPEC:
             warnings.append(f"ignored unknown key '{key}'")
             continue
-        # basic shape checks
         ok = True
-        if key in ("allowed_slots", "forbidden_slots"):
+        if key in ("allowed_slots", "forbidden_slots", "soft_prefer_free_slots"):
             ok = isinstance(val, list) and all(s in SLOTS for s in val)
         elif key in ("allowed_days", "forbidden_days"):
             ok = isinstance(val, list) and all(d in DAYS for d in val)
+        elif key in ("allowed_sections", "forbidden_sections"):
+            ok = isinstance(val, list) and all(isinstance(x, str) for x in val)
         elif key == "forbidden_slots_on_days":
-            ok = isinstance(val, list) and all(
-                isinstance(e, dict) and all(d in DAYS for d in e.get("days", []))
-                and all(s in SLOTS for s in e.get("slots", [])) for e in val)
-        elif key == "min_days_in_slot":
-            ok = isinstance(val, list) and all(
-                isinstance(e, dict) and e.get("slot") in SLOTS
-                and isinstance(e.get("min_days"), (int, float)) for e in val)
-        elif key == "min_days_engaged":
-            ok = isinstance(val, int) and 1 <= val <= 5
-        elif key == "max_periods_per_day":
-            ok = isinstance(val, int) and 1 <= val <= 5
-        elif key in ("subject_slots", "subject_forbidden_days"):
-            ok = isinstance(val, list)
-        elif key in ("stream_slots_required", "stream_forbidden_days"):
-            ok = isinstance(val, list) and all(
-                isinstance(e, dict) and e.get("stream") in STREAMS for e in val)
+            ok = all(_entry_ok(e, ("days", "slots")) and _slots_of(e) for e in _entries(val)) and isinstance(val, list)
+        elif key == "allowed_slots_days":
+            ok = isinstance(val, list) and all(_entry_ok(e, ("slots",)) and _slots_of(e) for e in val)
+        elif key == "soft_prefer_free_slots_days":
+            ok = isinstance(val, list) and all(_entry_ok(e, ("days", "slots")) and _slots_of(e) for e in val)
+        elif key == "allowed_slots_in_sections":
+            ok = isinstance(val, list) and all(_entry_ok(e, ("sections", "slots")) and _slots_of(e) for e in val)
+        elif key == "allowed_days_in_sections":
+            ok = isinstance(val, list) and all(_entry_ok(e, ("sections", "days")) for e in val)
         elif key == "allowed_slots_in_stream":
-            ok = isinstance(val, list) and all(
-                isinstance(e, dict) and e.get("stream") in STREAMS
-                and all(s in SLOTS for s in e.get("slots", [])) for e in val)
+            ok = isinstance(val, list) and all(_entry_ok(e, ("stream", "slots"))
+                                               and e.get("stream") in STREAMS and _slots_of(e) for e in val)
         elif key == "allowed_days_in_stream":
-            ok = isinstance(val, list) and all(
-                isinstance(e, dict) and e.get("stream") in STREAMS
-                and all(d in DAYS for d in e.get("days", [])) for e in val)
+            ok = isinstance(val, list) and all(_entry_ok(e, ("stream", "days"))
+                                               and e.get("stream") in STREAMS for e in val)
+        elif key == "stream_forbidden_days":
+            ok = isinstance(val, list) and all(_entry_ok(e, ("stream", "days"))
+                                               and e.get("stream") in STREAMS for e in val)
+        elif key == "stream_slots_required":
+            ok = isinstance(val, list) and all(_entry_ok(e, ("stream", "slots"))
+                                               and e.get("stream") in STREAMS and _slots_of(e) for e in val)
+        elif key == "subject_slots":
+            ok = isinstance(val, list) and all(_entry_ok(e, ("subject", "slots")) and _slots_of(e) for e in val)
+        elif key == "subject_forbidden_days":
+            ok = isinstance(val, list) and all(_entry_ok(e, ("subject", "days")) for e in val)
+        elif key == "subject_days_allowed":
+            ok = isinstance(val, list) and all(_entry_ok(e, ("subject", "days")) for e in val)
         elif key == "subject_slot_days":
+            ok = isinstance(val, list) and all(_entry_ok(e, ("subject", "slot", "days"))
+                                               and e.get("slot") in SLOTS for e in val)
+        elif key == "subject_slots_days":
+            ok = isinstance(val, list) and all(_entry_ok(e, ("subject", "slots", "days")) and _slots_of(e) for e in val)
+        elif key == "min_days_in_slot":
+            ok = isinstance(val, list) and all(_entry_ok(e, ("slot",))
+                                               and e.get("slot") in SLOTS
+                                               and isinstance(e.get("min_days"), (int, float)) for e in val)
+        elif key == "max_days_in_slot":
+            ok = isinstance(val, list) and all(_entry_ok(e, ("slot",))
+                                               and e.get("slot") in SLOTS
+                                               and isinstance(e.get("max_days"), (int, float)) for e in val)
+        elif key == "min_days_engaged":
+            ok = isinstance(val, int) and 1 <= val <= 6
+        elif key in ("max_periods_per_day", "min_periods_per_day"):
+            field = "max" if key.startswith("max") else "min"
+            if isinstance(val, int):
+                ok = 1 <= val <= 8
+            else:
+                ok = isinstance(val, list) and all(
+                    _entry_ok(e) and isinstance(e.get(field), int) and 1 <= e[field] <= 8 for e in val)
+        elif key in ("max_pieces_match", "min_pieces_match"):
+            field = "max" if key.startswith("max") else "min"
             ok = isinstance(val, list) and all(
-                isinstance(e, dict) and isinstance(e.get("subject"), str)
-                and e.get("slot") in SLOTS
-                and all(d in DAYS for d in e.get("days", [])) for e in val)
-        elif key == "soft_prefer_free_slots":
-            ok = isinstance(val, list) and all(s in SLOTS for s in val)
-        elif key in ("soft_even_distribution", "allow_same_subject_same_day"):
+                _entry_ok(e) and isinstance(e.get(field), int)
+                and (not e.get("slot") or e["slot"] in SLOTS)
+                and (not e.get("stream") or e["stream"] in STREAMS)
+                for e in val)
+        elif key in ("no_daily_gaps", "soft_even_distribution", "soft_compact_days",
+                     "allow_same_subject_same_day"):
             ok = isinstance(val, bool)
         if not ok:
             errors.append(f"bad shape for '{key}': {val!r}")
