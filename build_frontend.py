@@ -5823,5 +5823,446 @@ f20_css = """
 """
 rep("/* theme picker control (masthead) */", f20_css.strip() + "\n/* theme picker control (masthead) */")
 
+# ---- 53) GI SHEETS: shift-scoped linear topic→detail→expression sheets (F21) ---
+
+f21_js = '''
+/* ================================================================
+ * F21 — GENERAL INSTRUCTIONS, SHEET STYLE.
+ * Two linear sheets, exactly like the admin's Excel workbook: one row
+ * per instruction with columns TOPIC | DETAIL (plain language) |
+ * EXPRESSION (the AI/pattern-translated pseudocode, directly editable)
+ * + actions (translate / apply / delete).
+ *   • shift-1 sheet -> inter-1 + bs-1 (one sheet governs both);
+ *     shift-2 sheet -> inter-2.
+ *   • DETAIL is translated deterministically by pattern first; unknown
+ *     phrasing goes through /translate-gi (AI) when signed in.
+ *   • EXPRESSION is parsed by dslCompile(): schedule assignments stage
+ *     into the existing timetable_config channel (schedStage), rule
+ *     clauses upsert structured entries into giByPop (the same channel
+ *     generation + CP-SAT already read). ✓ Apply is idempotent; ✕
+ *     delete removes everything a row derived.
+ *   • Everything remains draft -> ☁ Publish (per shift); sheets sync to
+ *     devices through timetable_config.sheet on the shift's primary
+ *     population record.
+ * ================================================================ */
+var GI_SHIFT_POPS = { "shift-1": ["inter-1", "bs-1"], "shift-2": ["inter-2"] };
+var GI_SHIFT_PRIMARY = { "shift-1": "inter-1", "shift-2": "inter-2" };
+var GI_SHIFT_LABEL = { "shift-1": "Shift 1 — Intermediate · 1st + BS Departments", "shift-2": "Shift 2 — Intermediate · 2nd" };
+function sheetKeyOf(shift){ return 'impcc-gisheet-' + shift; }
+function sheetRows(shift){
+  state.sheetByShift = state.sheetByShift || {};
+  if(!state.sheetByShift[shift]){
+    let saved = null;
+    try{ const raw = localStorage.getItem(sheetKeyOf(shift)); if(raw) saved = JSON.parse(raw); }catch(e){}
+    if(Array.isArray(saved)){ state.sheetByShift[shift] = saved; }
+    else { state.sheetByShift[shift] = seedSheet(shift); saveSheetLocal(shift); }
+  }
+  return state.sheetByShift[shift];
+}
+function saveSheetLocal(shift){ try{ localStorage.setItem(sheetKeyOf(shift), JSON.stringify(sheetRows(shift))); }catch(e){} }
+function sheetIdGen(){ return 'gsr-' + Math.random().toString(36).slice(2, 8) + Date.now().toString(36); }
+var GI_TOPIC_LABELS = {
+  no_same_subject_same_day: 'Same-subject repetitions',
+  same_subject_same_day_allowed: 'Same-subject repetitions',
+  avoid_shuffling: 'Shuffling across the week',
+  non_overriding: 'Non-overriding classes',
+  consecutive_days_for_2pw: 'Consecutive days (2/week)',
+  subject_forbidden_days: 'Subject off-days',
+  section_off_days: 'Section off-days',
+  first_last_period_occupied: 'Off periods',
+  combined_classes: 'Combined classes',
+  soft_individual_spread: 'Individual spread'
+};
+var DSL_DAYS = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
+function dslScopeTag(pop, shift){
+  if(shift !== 'shift-1') return '';
+  return pop === 'bs-1' ? '[bs] ' : '[inter] ';
+}
+function dslRenderRule(rule, pop, shift){
+  const p = rule.params || {};
+  const pre = dslScopeTag(pop, shift);
+  switch(rule.type){
+    case 'no_same_subject_same_day':        return pre + 'no same subject twice on one day';
+    case 'same_subject_same_day_allowed':   return pre + 'same-subject repeats allowed';
+    case 'avoid_shuffling':                 return 'avoid shuffling';
+    case 'consecutive_days_for_2pw':        return pre + '2/week subjects on consecutive days';
+    case 'soft_individual_spread':          return 'individual spread of periods (soft: last period free)';
+    case 'subject_forbidden_days':{
+      const scope = p.scope ? ' (scope: ' + p.scope + ')' : '';
+      return pre + "subject '" + (p.subject || '?') + "' forbidden on " + (p.days || []).join(',') + scope;
+    }
+    case 'section_off_days':               return pre + 'sections ' + (p.sections || []).join(',') + ' off on ' + (p.days || []).join(',');
+    case 'first_last_period_occupied':
+      return p.libraryWorkLabel ? ("first & last period occupied, free gaps as '" + p.libraryWorkLabel + "'") : 'first & last period occupied';
+    case 'combined_classes':               return pre + 'combined classes: ' + (p.groups || []).join(',');
+    case 'non_overriding':
+      return pre + 'non-overriding weekly: ' + (p.sections || []).join(',') + ': ' + (p.subjects || []).map(function(s){ return "'" + s + "'"; }).join(' vs ');
+    default:                               return null;
+  }
+}
+function seedSheet(shift){
+  const rows = [], byNatural = {};
+  for(const pop of GI_SHIFT_POPS[shift]){
+    const list = CANON ? (((CANON.get().generalInstructions || {})[pop]) || []) : [];
+    for(const r of list){
+      const key = r.natural || (r.type + '@' + pop);
+      if(!byNatural[key]){
+        byNatural[key] = { id: sheetIdGen(), topic: GI_TOPIC_LABELS[r.type] || 'Instruction', detail: r.natural || '',
+                           expr: '', applied: 'seed', error: null, sourceIds: {} };
+        rows.push(byNatural[key]);
+      }
+      const clause = dslRenderRule(r, pop, shift);
+      if(clause){ byNatural[key].expr += (byNatural[key].expr ? ' ; ' : '') + clause; }
+      (byNatural[key].sourceIds[pop] = byNatural[key].sourceIds[pop] || []).push(r.id);
+    }
+  }
+  return rows;
+}
+
+/* ---- DSL compile: expression -> schedule assignments + structured rules ---- */
+function dslScopePops(scope, shift){
+  scope = (scope || '').toLowerCase();
+  if(scope === 'bs')      { if(shift === 'shift-1') return ['bs-1']; throw new Error('[bs] scope only exists in Shift 1'); }
+  if(scope === 'inter')   { return [GI_SHIFT_PRIMARY[shift]]; }
+  if(scope === 'inter2' || scope === 'inter-2'){ return ['inter-2']; }
+  return GI_SHIFT_POPS[shift].slice();
+}
+function dslNormDay(tok){
+  const t = (tok || '').trim().slice(0, 3).toUpperCase();
+  return DSL_DAYS.indexOf(t) >= 0 ? t : null;
+}
+function dslCompile(expr, shift){
+  const out = { schedule: {}, rulesByPop: {} };
+  const pushSched = function(pops, key, val){ for(const p of pops){ (out.schedule[p] = out.schedule[p] || {})[key] = val; } };
+  const pushRule = function(pops, type, params){ for(const p of pops){ (out.rulesByPop[p] = out.rulesByPop[p] || []).push({ type: type, params: params }); } };
+  const clauses = String(expr || '').split(';').map(function(s){ return s.trim(); }).filter(function(s){ return s.length; });
+  if(!clauses.length) throw new Error('expression is empty');
+  for(const raw of clauses){
+    let text = raw, scope = '';
+    const sm = text.match(/^\\[(bs|inter2|inter-2|inter|all)\\]\\s*(.*)$/i);
+    if(sm){ scope = sm[1].toLowerCase(); text = sm[2]; }
+    const pops = dslScopePops(scope, shift);
+    const s = text.replace(/\\s+/g, ' ').trim();
+    let m;
+    if((m = s.match(/^break\\s+after\\s+P?(\\d+)$/i))){               pushSched(pops, 'breakAfterPeriod', Math.min(8, Math.max(1, parseInt(m[1], 10)))); continue; }
+    if((m = s.match(/^break\\s+(\\d+)\\s*min$/i))){                   pushSched(pops, 'breakMinutes', Math.min(60, Math.max(0, parseInt(m[1], 10)))); continue; }
+    if((m = s.match(/^working\\s+days\\s*=\\s*(\\d)$/i))){            pushSched(pops, 'days', Math.min(6, Math.max(5, parseInt(m[1], 10)))); continue; }
+    if((m = s.match(/^periods?\\s+per\\s+day\\s*=\\s*(\\d)$/i))){     pushSched(pops, 'periods', Math.min(8, Math.max(3, parseInt(m[1], 10)))); continue; }
+    if((m = s.match(/^period\\s+length\\s*=\\s*(\\d+)\\s*min$/i))){   pushSched(pops, 'periodMinutes', Math.min(90, Math.max(30, parseInt(m[1], 10)))); continue; }
+    if((m = s.match(/^day\\s+starts\\s+(\\d{1,2}:\\d{2})$/i))){       pushSched(pops, 'start', m[1]); continue; }
+    if((m = s.match(/^(MON|TUE|WED|THU|FRI|SAT|SUN)\\s+starts\\s+(\\d{1,2}:\\d{2})$/i))){
+      pushSched(pops, 'dayStartOverrides', (function(){ const o = {}; o[dslNormDay(m[1])] = m[2]; return o; })());
+      continue;
+    }
+    if((m = s.match(/^subject\\s+'([^']+)'\\s+forbidden\\s+on\\s+([A-Za-z ,]+?)(?:\\s+\\(scope:\\s*(.+)\\))?$/i))){
+      const days = m[2].split(',').map(dslNormDay); if(days.some(function(d){ return !d; })) throw new Error("bad day in: " + raw);
+      const p = { subject: m[1].trim(), days: days }; if(m[3]) p.scope = m[3].trim();
+      pushRule(pops, 'subject_forbidden_days', p); continue;
+    }
+    if((m = s.match(/^sections\\s+(.+?)\\s+off\\s+on\\s+([A-Za-z ,]+)$/i))){
+      const days = m[2].split(',').map(dslNormDay); if(days.some(function(d){ return !d; })) throw new Error("bad day in: " + raw);
+      pushRule(pops, 'section_off_days', { sections: m[1].split(',').map(function(x){ return x.trim(); }).filter(Boolean), days: days }); continue;
+    }
+    if(/^no same subject twice on one day$/i.test(s)){                pushRule(pops, 'no_same_subject_same_day', {}); continue; }
+    if(/^same-subject repeats allowed$/i.test(s)){                    pushRule(pops, 'same_subject_same_day_allowed', {}); continue; }
+    if(/^avoid shuffling$/i.test(s)){                                 pushRule(pops, 'avoid_shuffling', {}); continue; }
+    if(/^2\\/week subjects on consecutive days$/i.test(s)){           pushRule(pops, 'consecutive_days_for_2pw', {}); continue; }
+    if(/^individual spread of periods/i.test(s)){                     pushRule(pops, 'soft_individual_spread', {}); continue; }
+    if((m = s.match(/^first\\s*&\\s*last\\s+period\\s+occupied(?:,\\s*free\\s+gaps\\s+as\\s+'([^']+)')?$/i))){
+      pushRule(pops, 'first_last_period_occupied', m[1] ? { libraryWorkLabel: m[1] } : {}); continue;
+    }
+    if((m = s.match(/^combined\\s+classes:\\s*(.+)$/i))){              pushRule(pops, 'combined_classes', { groups: m[1].split(',').map(function(x){ return x.trim(); }).filter(Boolean) }); continue; }
+    if((m = s.match(/^non-overriding\\s+weekly:\\s*(.+?):\\s*(.+)$/i))){
+      const subs = m[2].split(' vs ').map(function(x){ return x.trim().replace(/^'|'$/g, ''); }).filter(Boolean);
+      pushRule(pops, 'non_overriding', { sections: m[1].split(',').map(function(x){ return x.trim(); }).filter(Boolean), subjects: subs }); continue;
+    }
+    throw new Error("cannot read this clause: '" + raw + "' — tweak the words or use ✦ Translate");
+  }
+  return out;
+}
+
+/* pattern-first translation of a DETAIL into an expression (AI covers the rest) */
+var DSL_ORDINALS = { first: 1, '1st': 1, second: 2, '2nd': 2, third: 3, '3rd': 3, fourth: 4, '4th': 4, fifth: 5, '5th': 5, sixth: 6, '6th': 6, seventh: 7, '7th': 7, eighth: 8, '8th': 8 };
+function dslHeuristic(detail){
+  const d = ' ' + String(detail || '').toLowerCase().replace(/\\s+/g, ' ').trim() + ' ';
+  let m;
+  if((m = d.match(/break[^.]*after\\s+(?:the\\s+)?P?(\\d|first|1st|second|2nd|third|3rd|fourth|4th|fifth|5th|sixth|6th|seventh|7th|eighth|8th)/))) {
+    const n = parseInt(m[1], 10) || DSL_ORDINALS[m[1]] || null;
+    if(n) return 'break after P' + n;
+  }
+  if((m = d.match(/break[^.]*?(\\d{1,2})\\s*min/))){                   return 'break ' + m[1] + ' min'; }
+  if((m = d.match(/(\\d)\\s*working\\s*days/)) || (m = d.match(/(\\d)\\s*-?day\\s+(?:work)?week/)) || (m = d.match(/week[^.]*?(\\d)\\s*days?/)) || (m = d.match(/(\\d)\\s*days?[^.]*?week/))){ return 'working days = ' + m[1]; }
+  if((m = d.match(/(\\d)\\s*periods?\\s*(?:per|a|each)\\s+day/))){    return 'periods per day = ' + m[1]; }
+  if((m = d.match(/period\\s*(?:length|duration)?[^.]*?(\\d{2})\\s*min/))){ if(parseInt(m[1], 10) >= 25) return 'period length = ' + m[1] + ' min'; }
+  for(const day of DSL_DAYS){
+    const rx = new RegExp(day.toLowerCase() + '[a-z]*[^.]*?(?:starts?|begins?) *(\\\\d{1,2})[:.](\\\\d{2})');
+    if((m = d.match(rx))){ return day + ' starts ' + m[1] + ':' + m[2]; }
+  }
+  if((m = d.match(/(?:starts?|begins?)[^0-9]{0,8}(\\d{1,2})[:.](\\d{2})/))){ return 'day starts ' + m[1] + ':' + m[2]; }
+  if((m = d.match(/([a-z][a-z .&-]{2,40}?)\\s+(?:must|should) not be (?:set |scheduled |held )?on (mon|tue|wed|thu|fri|sat|sun)[a-z]*/))){
+    const day = dslNormDay(m[2]);
+    if(day) return "subject '" + m[1].trim().replace(/\\b\\w/g, function(c){ return c.toUpperCase(); }) + "' forbidden on " + day;
+  }
+  if(/shuffle|shuffling/.test(d) && /(avoid|not allowed|no[nt] be)/.test(d)){ return 'avoid shuffling'; }
+  if(/no(t| more than one)?\\s*(two|2|double)?\\s*(same )?subject[^.]*(interval|twice|two times|repeat)|not allowed[^.]*same subject/i.test(d)){ return 'no same subject twice on one day'; }
+  if(/same subject[^.]*(allowed|permitted)/.test(d)){                 return 'same-subject repeats allowed'; }
+  if(/consecutive days/.test(d) && /(2|two)\\s*(classes|periods)?\\s*(per|a)\\s*week/.test(d)){ return '2/week subjects on consecutive days'; }
+  if(/(1st|first)\\s+(and|&)\\s+last period[^.]*(not be|must not)?\\s*free/.test(d)){ return 'first & last period occupied'; }
+  if(/spread/.test(d) && /(soft|prefer|individual)/.test(d)){         return 'individual spread of periods (soft: last period free)'; }
+  return null;
+}
+
+/* ---- row actions ---- */
+function sheetFindRow(shift, id){ return sheetRows(shift).find(function(r){ return r.id === id; }) || null; }
+function giStripRowEntry(pop, row){
+  const src = row.sourceIds || {};
+  const list = giList(pop).filter(function(e){ return e.sheetRowId !== row.id && ((src[pop] || []).indexOf(e.id) < 0); });
+  state.giByPop[pop] = list; giSaveLocal(pop);
+}
+function giApplyRow(shift, id){
+  const row = sheetFindRow(shift, id); if(!row) return;
+  let expr = (row.expr || '').trim();
+  row.error = null;
+  if(!expr){
+    expr = dslHeuristic(row.detail) || '';
+    if(expr){ row.expr = expr; saveSheetLocal(shift); }
+    else { row.error = 'no pattern recognized — type the expression yourself or press ✦ Translate (needs sign-in)'; saveSheetLocal(shift); renderMain(); return; }
+  }
+  let compiled = null;
+  try{ compiled = dslCompile(expr, shift); }
+  catch(err){ row.error = err.message; saveSheetLocal(shift); renderMain(); setTicker('Could not read that expression', 'err'); return; }
+  for(const pop of GI_SHIFT_POPS[shift]){
+    giStripRowEntry(pop, row);
+    for(const rr of (compiled.rulesByPop[pop] || [])){
+      giList(pop).push({ id: 'gs-' + row.id, type: rr.type, params: rr.params, enabled: true, natural: row.detail, sheetRowId: row.id });
+    }
+    giSaveLocal(pop);
+    if(compiled.schedule[pop]){
+      const prev = {};
+      for(const k in compiled.schedule[pop]){
+        prev[k] = (schedCfg(pop))[k];
+        schedStageData(pop, k, compiled.schedule[pop][k]);
+      }
+      if(row.applied && typeof row.applied === 'object'){ row.applied.prev = prev; }
+    }
+  }
+  row.applied = { at: new Date().toISOString(), expr: expr };
+  saveSheetLocal(shift); renderMain();
+  setTicker('Applied — staged as draft; ☁ Publish to push to devices & future generations', 'ok');
+}
+function sheetDeleteRow(shift, id){
+  const row = sheetFindRow(shift, id); if(!row) return;
+  if(!window.confirm('Remove this instruction row?\\n' + (row.applied ? 'Its derived rules will be removed from the generation data.' : 'It was never applied — only the row goes away.') + '\\n(Schedule values a row set stay configured until re-set.)')) return;
+  for(const pop of GI_SHIFT_POPS[shift]) giStripRowEntry(pop, row);
+  state.sheetByShift[shift] = sheetRows(shift).filter(function(r){ return r.id !== id; });
+  saveSheetLocal(shift); renderMain();
+  setTicker('Row removed (pending ☁ Publish)', 'ok');
+}
+function sheetRowReset(shift){
+  if(!window.confirm('Reset the ' + (GI_SHIFT_LABEL[shift]) + ' sheet to the canonical defaults?\\nYour edits and derived rules in this shift will be discarded.')) return;
+  state.sheetByShift[shift] = seedSheet(shift); saveSheetLocal(shift);
+  for(const pop of GI_SHIFT_POPS[shift]){
+    if(CANON){ state.giByPop[pop] = JSON.parse(JSON.stringify(((CANON.get().generalInstructions || {})[pop]) || [])); giSaveLocal(pop); }
+  }
+  renderMain(); setTicker('Sheet reset to canonical defaults', 'ok');
+}
+function giTranslateRow(shift, id){
+  const row = sheetFindRow(shift, id); if(!row) return;
+  const text = (row.detail || '').trim();
+  if(!text){ row.error = 'write the plain-language detail first'; saveSheetLocal(shift); renderMain(); return; }
+  const hit = dslHeuristic(text);
+  if(hit){ row.expr = hit; row.error = null; saveSheetLocal(shift); renderMain(); setTicker('Translated (pattern) — review the expression, then ✓ Apply', 'ok'); return; }
+  if(!SB || !SB.loggedIn){ row.error = 'no pattern recognized — sign in for AI translation, or edit the expression manually'; saveSheetLocal(shift); renderMain(); return; }
+  row.statusTxt = 'Translating with AI…'; renderMain();
+  const base = (typeof window.IMPCC_API_URL === 'string') ? window.IMPCC_API_URL : '';
+  const primary = GI_SHIFT_PRIMARY[shift];
+  fetch(base + '/translate-gi', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json',
+               'Authorization': 'Bearer ' + (SB.session && SB.session.access_token ? SB.session.access_token : '') },
+    body: JSON.stringify({ text: text, population: primary })
+  })
+  .then(function(r){ if(!r.ok) throw new Error(r.status === 401 ? 'Sign in required' : 'HTTP ' + r.status); return r.json(); })
+  .then(function(res){
+    delete row.statusTxt;
+    if(res.error){ row.error = res.error; }
+    else {
+      const clause = dslRenderRule({ type: res.type, params: res.params || {} }, primary, shift);
+      if(clause){ row.expr = clause; row.error = null; setTicker('AI translation ready — tweak if needed, then ✓ Apply', 'ok'); }
+      else row.error = (res.notes ? String(res.notes) : 'AI could not map this — edit the expression manually');
+    }
+    saveSheetLocal(shift); renderMain();
+  })
+  .catch(function(err){ delete row.statusTxt; row.error = err.message; saveSheetLocal(shift); renderMain(); });
+}
+function sheetAddRow(shift){
+  const t = document.getElementById('sheetTopic-' + shift);
+  const d = document.getElementById('sheetDetail-' + shift);
+  const topic = ((t && t.value) || '').trim(), detail = ((d && d.value) || '').trim();
+  if(!topic && !detail){ setTicker('Give the row a topic and/or some detail first', ''); if(d) d.focus(); return; }
+  const row = { id: sheetIdGen(), topic: topic || (detail.slice(0, 32) + (detail.length > 32 ? '…' : '')), detail: detail, expr: '', applied: null, error: null, sourceIds: {} };
+  const hit = dslHeuristic(detail);
+  if(hit) row.expr = hit;
+  sheetRows(shift).push(row); saveSheetLocal(shift); renderMain();
+  setTicker(hit ? 'Row added — expression auto-translated; ✓ Apply when ready' : 'Row added — press ✦ Translate or type the expression, then ✓ Apply', 'ok');
+}
+function giPublishShift(shift){
+  if(!SB || !SB.loggedIn){ setTicker('Sign in to publish', 'ok'); return; }
+  const pops = GI_SHIFT_POPS[shift].slice();
+  const rows = sheetRows(shift);
+  let done = 0, failed = null;
+  pops.forEach(function(pop){
+    const cfg = ttConfigFor(pop);
+    if(pop === GI_SHIFT_PRIMARY[shift]) cfg.sheet = JSON.parse(JSON.stringify(rows));
+    SB.savePublished(
+      (pop === 'inter-1' && state.allocation) ? state.allocation : (state.allocByPop[pop] || {}),
+      state.constraints || {}, getFaculty(), state.tweaks || [],
+      pop, giList(pop), cfg
+    ).then(function(){
+      done++; applyScheduleCfg(pop, schedDraft(pop));
+      if(done === pops.length && !failed){ setTicker('Published ' + GI_SHIFT_LABEL[shift] + ' instructions & schedule ✓', 'ok'); renderMain(); }
+    }).catch(function(err){ failed = err; setTicker('Publish failed: ' + err.message, 'err'); });
+  });
+}
+
+/* ---- rendering ---- */
+function sheetHtml(shift){
+  const rows = sheetRows(shift);
+  let h = '<section class="gi-sheet"><div class="gi-sheet-head"><h3 class="gi-group-h">📋 ' + esc(GI_SHIFT_LABEL[shift])
+    + ' <span class="gi-count">' + rows.length + ' rows</span></h3>'
+    + '<div class="cons-btns" style="margin:0"><button class="mini-export" data-sheet-pub="' + shift + '">☁ Publish ' + (shift === 'shift-1' ? 'shift 1' : 'shift 2') + '</button>'
+    + '<button class="mini-export" data-sheet-reset="' + shift + '">Reset to defaults</button></div></div>'
+    + '<div class="sheet-addrow">'
+    + '<input id="sheetTopic-' + shift + '" class="sheet-topic" placeholder="Topic — e.g. break duration, Friday classes" maxlength="60">'
+    + '<textarea id="sheetDetail-' + shift + '" class="sheet-detail" rows="2" placeholder="Detail in plain language — e.g. ' + (shift === 'shift-1' ? 'for shift 1 the break is to happen after the 3rd period' : 'no 2nd-shift class before 2pm on Friday') + '"></textarea>'
+    + '<button class="mini-export" data-sheet-add="' + shift + '">＋ Add</button></div>';
+  if(!rows.length){ h += '<p class="gi-note">No instructions yet — add one above.</p>'; }
+  h += '<div class="sheet-list">';
+  h += '<div class="sheet-row sheet-row-h"><span>Topic</span><span>Detail</span><span>Expression — edit directly, or ✦ translate</span><span></span></div>';
+  for(const r of rows){
+    const st = r.error ? { t: '⚠ ' + r.error, cls: 'err' }
+      : r.statusTxt ? { t: '⏳ ' + r.statusTxt, cls: 'warn' }
+      : r.applied === 'seed' ? { t: 'canonical default — active', cls: 'ok' }
+      : r.applied ? { t: 'applied ' + (r.applied.at || '').slice(0, 10), cls: 'ok' }
+      : r.expr ? { t: 'translated — not applied', cls: 'warn' }
+      : { t: 'draft', cls: '' };
+    h += '<div class="sheet-row' + (r.error ? ' sheet-row-err' : '') + '">'
+      + '<input class="sheet-topic" data-rowsfield="topic" data-row="' + shift + '|' + esc(r.id) + '" value="' + esc(r.topic || '') + '" placeholder="label">'
+      + '<textarea class="sheet-detail" data-rowsfield="detail" data-row="' + shift + '|' + esc(r.id) + '" rows="2" placeholder="plain-language instruction">' + esc(r.detail || '') + '</textarea>'
+      + '<input class="sheet-expr" data-rowsfield="expr" data-row="' + shift + '|' + esc(r.id) + '" value="' + esc(r.expr || '') + '" placeholder="expression (see how-to below)">'
+      + '<span class="sheet-actions">'
+      + '<button class="card-csv" data-sheet-tr="' + shift + '|' + esc(r.id) + '" title="Translate detail → expression (pattern or AI)">✦</button>'
+      + '<button class="card-csv" data-sheet-apply="' + shift + '|' + esc(r.id) + '" title="Apply this row">✓</button>'
+      + '<button class="card-csv" data-sheet-del="' + shift + '|' + esc(r.id) + '" title="Delete row">✕</button>'
+      + '<span class="sheet-st ' + st.cls + '">' + esc(st.t) + '</span>'
+      + '</span></div>';
+  }
+  h += '</div>';
+  h += '<details class="sheet-how"><summary>📖 Expression language — what the expression column understands</summary><div class="sheet-how-body">'
+    + '<p><b>Schedule facts</b> (apply to the whole shift, or prefix with <code>[bs]</code> / <code>[inter]</code>):</p>'
+    + '<code>break after P3</code> · <code>break 25 min</code> · <code>working days = 6</code> · <code>periods per day = 6</code> · '
+    + '<code>period length = 40 min</code> · <code>day starts 08:30</code> · <code>FRI starts 14:00</code><br>'
+    + '<p><b>Rule clauses</b>:</p>'
+    + '<code>no same subject twice on one day</code> · <code>same-subject repeats allowed</code> · <code>avoid shuffling</code> · '
+    + "<code>subject 'Business Mathematics' forbidden on FRI (scope: I.COM)</code> · <code>sections BSAF-SEM-VII,BBA-SEM-VII off on FRI</code> · "
+    + "<code>first & last period occupied, free gaps as 'Library Work'</code> · <code>2/week subjects on consecutive days</code> · "
+    + '<code>combined classes: cc-fr1, cc-psa</code> · <code>non-overriding weekly: I.COM-I-A,I.COM-I-B: \\'X\\' vs \\'Y\\'</code><br>'
+    + '<p>Multiple clauses separated by <code> ; </code>. Scope prefixes: <code>[bs]</code> / <code>[inter]</code> / <code>[inter2]</code>. '
+    + 'Each row must be <b>✓ Applied</b> to affect generation; its rules land in the same channels the solvers already read.</p>'
+    + '</div></details>';
+  h += '</section>';
+  return h;
+}
+function bindSheet(shift){
+  const add = document.querySelector('[data-sheet-add="' + shift + '"]');
+  if(add) add.addEventListener('click', function(){ sheetAddRow(shift); });
+  mainEl.querySelectorAll('[data-sheet-pub="' + shift + '"]').forEach(function(el){ el.addEventListener('click', function(){ giPublishShift(shift); }); });
+  mainEl.querySelectorAll('[data-sheet-reset="' + shift + '"]').forEach(function(el){ el.addEventListener('click', function(){ sheetRowReset(shift); }); });
+  mainEl.querySelectorAll('[data-sheet-tr^="' + shift + '"]').forEach(function(el){
+    el.addEventListener('click', function(){ giTranslateRow(shift, el.getAttribute('data-sheet-tr').split('|')[1]); });
+  });
+  mainEl.querySelectorAll('[data-sheet-apply^="' + shift + '"]').forEach(function(el){
+    el.addEventListener('click', function(){ giApplyRow(shift, el.getAttribute('data-sheet-apply').split('|')[1]); });
+  });
+  mainEl.querySelectorAll('[data-sheet-del^="' + shift + '"]').forEach(function(el){
+    el.addEventListener('click', function(){ sheetDeleteRow(shift, el.getAttribute('data-sheet-del').split('|')[1]); });
+  });
+  mainEl.querySelectorAll('[data-rowsfield]').forEach(function(el){
+    if(el.getAttribute('data-row').split('|')[0] !== shift) return;
+    el.addEventListener('change', function(){
+      const parts = el.getAttribute('data-row').split('|');
+      const row = sheetFindRow(parts[0], parts[1]); if(!row) return;
+      row[el.getAttribute('data-rowsfield')] = el.value;
+      if(el.getAttribute('data-rowsfield') === 'expr' && row.applied && row.applied !== 'seed' && row.applied.expr !== el.value) row.applied = null;
+      row.error = null;
+      saveSheetLocal(parts[0]);
+      const rowEl = el.closest('.sheet-row');
+      const st = rowEl ? rowEl.querySelector('.sheet-st') : null;
+      if(st && el.getAttribute('data-rowsfield') === 'expr'){ st.textContent = row.applied === 'seed' ? 'canonical default — active' : (row.applied ? 'applied' : 'translated — not applied (✓ Apply to stage)'); st.className = 'sheet-st ' + (row.applied ? 'ok' : 'warn'); }
+    });
+  });
+}
+
+function renderGI(){
+  let h = '<div class="cons-note"><b>General instructions are institution-level data.</b> '
+    + 'One linear sheet per shift — a row is <b>topic → plain-language detail → translated expression</b>. Translations are pattern-first, '
+    + (SB && SB.loggedIn ? 'AI-backed for anything exotic; ' : '<b style="color:var(--amber-deep)">AI-backed when signed in;</b> ')
+    + 'the expression itself is always directly editable. <b>✓ Apply</b> stages it; <b>☁ Publish</b> pushes it to devices and future generations. '
+    + 'Already-generated timetables stay as snapshots.</div>';
+  h += sheetHtml('shift-1');
+  h += sheetHtml('shift-2');
+  mainEl.innerHTML = h;
+  bindSheet('shift-1');
+  bindSheet('shift-2');
+}
+
+/* schedStage variant used by row application: stage a value into ttConfig without DOM badge work */
+function schedStageData(pop, key, val){
+  const d = schedDraft(pop);
+  if(key === 'dayStartOverrides'){
+    d.dayStartOverrides = d.dayStartOverrides || {};
+    for(const k in val) d.dayStartOverrides[k] = val[k];
+  } else {
+    d[key] = val;
+  }
+  try{ localStorage.setItem('impcc-ttcfg-' + pop, JSON.stringify(d)); }catch(e){}
+}
+
+'''
+
+f21_css = """
+.gi-sheet{margin:16px 0 26px}
+.gi-sheet-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.sheet-addrow{display:grid;grid-template-columns:220px 1fr auto;gap:8px;margin:8px 0 12px;align-items:start}
+.sheet-list{display:flex;flex-direction:column;gap:6px}
+.sheet-row{display:grid;grid-template-columns:200px minmax(220px,1.1fr) minmax(300px,1.4fr) auto;gap:8px;align-items:start;border:1px solid var(--line);border-radius:12px;padding:8px 10px;background:var(--surface)}
+.sheet-row.sheet-row-h{background:transparent;border:none;padding:2px 12px;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-dim);font-weight:700}
+.sheet-topic,.sheet-expr{font-size:12px;padding:7px 9px;border:1px solid var(--line2);border-radius:8px;background:var(--surface);color:var(--ink);width:100%}
+.sheet-expr{font-family:var(--mono);font-size:11.5px}
+.sheet-detail{font-size:12px;padding:7px 9px;border:1px solid var(--line2);border-radius:8px;background:var(--surface);color:var(--ink);width:100%;resize:vertical}
+.sheet-actions{display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+.sheet-st{font-size:10px;max-width:150px;color:var(--ink-dim)}
+.sheet-st.ok{color:var(--green-deep)}
+.sheet-st.warn{color:var(--amber-deep)}
+.sheet-st.err{color:var(--red)}
+.sheet-row-err{border-color:var(--red)}
+.sheet-how{margin-top:10px}
+.sheet-how-body{font-size:12px;color:var(--ink-dim);padding:8px 4px;line-height:2}
+.sheet-how-body code{background:var(--cream);border-radius:6px;padding:1px 5px;font-size:11px}
+@media (max-width: 1100px){ .sheet-row{grid-template-columns:1fr} .sheet-addrow{grid-template-columns:1fr} }
+"""
+
+# 1) new sheet UI + helpers replace the old renderGI (legacy body kept, renamed)
+rep("function renderGI(){\n  const pop = POP_ID;",
+    f21_js.strip() + "\n\nfunction renderGILegacy_UNUSED(){\n  const pop = POP_ID;")
+
+# 2) publish/sync: sheet rows ride timetable_config; pure config must exclude it
+rep("const pure={}; for(const kk in pub.timetable_config){ if(kk!=='sectionsAdded'&&kk!=='sectionsRemoved') pure[kk]=pub.timetable_config[kk]; }",
+    "const pure={}; for(const kk in pub.timetable_config){ if(kk!=='sectionsAdded'&&kk!=='sectionsRemoved'&&kk!=='sheet') pure[kk]=pub.timetable_config[kk]; }\n"
+    "        if(Array.isArray(pub.timetable_config.sheet)){ const _sh=(POP_ID==='inter-1')?'shift-1':(POP_ID==='inter-2')?'shift-2':null; if(_sh){ state.sheetByShift=state.sheetByShift||{}; state.sheetByShift[_sh]=pub.timetable_config.sheet; try{localStorage.setItem('impcc-gisheet-'+_sh,JSON.stringify(pub.timetable_config.sheet));}catch(e){} } }")
+
+# 3) styles
+rep("/* theme picker control (masthead) */", f21_css.strip() + "\n/* theme picker control (masthead) */")
+
 io.open(DST, "w", encoding="utf-8").write(src)
 print("OK → wrote", DST, "(", len(src), "bytes )")
