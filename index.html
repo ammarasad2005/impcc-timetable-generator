@@ -216,6 +216,10 @@ select#comboSel:focus{outline:2px solid var(--amber);outline-offset:1px}
 @keyframes ell{0%{content:""}25%{content:"."}50%{content:".."}75%{content:"..."}}
 #cpsatStatus{margin-left:auto;color:#9db5a8}
 .cpsat-insights{margin:10px 0 0;padding:12px 14px;border:1px solid var(--amber,#c9a227);border-radius:10px;background:rgba(201,162,39,.07)}
+.cpsat-insights summary{cursor:pointer;font-weight:600;font-size:13px;list-style:none;user-select:none}
+.cpsat-insights summary::-webkit-details-marker{display:none}
+.cpsat-insights summary::before{content:'▸';display:inline-block;margin-right:.4em;transition:transform .15s}
+.cpsat-insights[open] summary::before{content:'▾'}
 .cpsat-insights h5{margin:0 0 8px;font-size:13px}
 .cpsat-insight{border-left:3px solid var(--red,#c0392b);padding:6px 10px;margin:6px 0;background:var(--card,rgba(255,255,255,.02));border-radius:6px}
 .cpsat-insight b{font-weight:600}
@@ -1010,7 +1014,10 @@ footer b{color:var(--green)}
     <span id="publishedAge"></span>
   </div>
   <div class="prog"><i id="progFill"></i></div>
-  <div id="cpsatInsights" class="cpsat-insights hidden"></div>
+  <details id="cpsatInsights" class="cpsat-insights hidden" open>
+    <summary id="cpsatInsightsHead">🔍 Why is CP-SAT finding 0 timetables?</summary>
+    <div id="cpsatInsightsBody"></div>
+  </details>
 </nav>
 
 <!-- ================= MAIN ================= -->
@@ -1271,13 +1278,23 @@ function setCpsatStatus(msg,kind){cpsatStatusEl.textContent=msg;cpsatStatusEl.cl
 /* Dynamic over-constraint insights — rendered from data.diagnostics ONLY
  * (computed server-side from the live context): any future data can explain
  * itself, nothing here is a hardcoded factor list. */
+function _insightsOpen(){
+  try{return localStorage.getItem('impcc-insights-open')!=='0';}catch(e){return true;}
+}
+function _setInsightsOpen(v){
+  try{localStorage.setItem('impcc-insights-open',v?'1':'0');}catch(e){}
+  const box=document.getElementById('cpsatInsights');
+  if(box)box.open=v;
+}
 function renderCpsatInsights(diag){
   const box=document.getElementById('cpsatInsights');
   if(!box)return;
   const flags=(diag&&Array.isArray(diag.flags))?diag.flags:[];
-  if(!flags.length){box.classList.add('hidden');box.innerHTML='';return;}
+  if(!flags.length){box.classList.add('hidden');const b=document.getElementById('cpsatInsightsBody');if(b)b.innerHTML='';return;}
   const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-  let h='<h5>🔍 Why is CP-SAT finding 0 timetables? <span style="opacity:.7;font-weight:400">(detected live from the current constraint data)</span></h5>';
+  const head=document.getElementById('cpsatInsightsHead');
+  if(head)head.innerHTML='🔍 Why is CP-SAT finding 0 timetables? <span style="opacity:.7;font-weight:400">('+flags.length+' factor'+(flags.length===1?'':'s')+' — detected live from the current constraint data'+(diag&&diag.mode==='relaxation'?', proved by relaxation':'')+')</span>';
+  let h='';
   flags.forEach(f=>{
     h+='<div class="cpsat-insight">';
     h+='<b>'+esc(f.name||f.scope)+'</b>';
@@ -1288,7 +1305,13 @@ function renderCpsatInsights(diag){
     h+='<div class="ci-meta">'+esc(f.detail||'')+'</div>';
     h+='</div>';
   });
-  box.innerHTML=h;
+  const note=(diag&&diag.note)?('<div class="ci-meta" style="opacity:.7;margin-top:6px">'+esc(diag.note)+'</div>'):'';
+  document.getElementById('cpsatInsightsBody').innerHTML=h+note;
+  box.open=_insightsOpen();
+  if(!box.__bound){
+    box.__bound=true;
+    box.addEventListener('toggle',()=>{_setInsightsOpen(box.open);});
+  }
   box.classList.remove('hidden');
 }
 
