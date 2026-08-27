@@ -473,6 +473,16 @@ def _clean_overrides(populations, raw):
                 existing.add(slug)
         if reg:
             out["rule_registry"] = reg
+    fn = raw.get("faculty_names")
+    if isinstance(fn, dict):
+        clean_fn = {}
+        for k, v in fn.items():
+            if len(clean_fn) >= 64 or not isinstance(k, str) or not isinstance(v, str):
+                break
+            if 0 < len(k.encode("utf-8")) <= 64 and 0 < len(v.encode("utf-8")) <= 128:
+                clean_fn[k.strip()] = v.strip()
+        if clean_fn:
+            out["faculty_names"] = clean_fn
     clean = {}
     if isinstance(a, dict):
         for pid, secs in a.items():
@@ -501,9 +511,13 @@ def _clean_overrides(populations, raw):
     return out or None
 
 
-def _grids_to_dict_ctx(grids, model):
+def _grids_to_dict_ctx(grids, model, name_overrides=None):
     """Context grids -> per-section [subject, teacher] cells (course names per
-    section; parallel groups render 'A / B')."""
+    section; parallel groups render 'A / B').
+
+    `faculty_names` from the admin (e.g. {"V1": "Prof. Green"}) are honoured
+    so a renamed visiting placeholder renders with the real name end-to-end.
+    """
     import canonical as _canon
     units = {u["id"]: u for u in model["units"]}
     out = {}
@@ -521,9 +535,9 @@ def _grids_to_dict_ctx(grids, model):
                 u = units[uid]
                 cname = u["courseBySec"].get(key) or list(u["courseBySec"].values())[0]
                 if u["group"]:
-                    tnames = " / ".join(_canon.display_name(t) for t in u["members"])
+                    tnames = " / ".join(_canon.display_name(t, name_overrides) for t in u["members"])
                 else:
-                    tnames = _canon.display_name(u["teacher"])
+                    tnames = _canon.display_name(u["teacher"], name_overrides)
                 row.append([cname, tnames])
             rows.append(row)
         out[key] = rows
@@ -539,9 +553,9 @@ def generate_context(req: GenerateContextRequest, user: dict = Depends(require_u
     import cp_solver as _cs
     import context_model as _cm
     t0 = _time.time()
+    clean = _clean_overrides(req.populations, req.overrides)
     try:
-        ctx = _canon.solver_context(req.populations,
-                                    overrides=_clean_overrides(req.populations, req.overrides))
+        ctx = _canon.solver_context(req.populations, overrides=clean)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     ranked, any_optimal = _cs.generate_context(
@@ -551,7 +565,8 @@ def generate_context(req: GenerateContextRequest, user: dict = Depends(require_u
     solutions = [{
         "score": r["score"], "penalty": r["penalty"], "total": r["total"],
         "violations": r["violations"],
-        "timetable": _grids_to_dict_ctx(r["grids"], model),
+        "timetable": _grids_to_dict_ctx(r["grids"], model,
+                                        (clean or {}).get("faculty_names")),
     } for r in ranked]
     return {
         "solver": "cp-sat-context",

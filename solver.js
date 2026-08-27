@@ -201,6 +201,19 @@
     return TEACHER_FULL;
   }
 
+  // Admin rename (e.g. visiting placeholder "Visiting-1" -> "Prof. Green"):
+  // keep ONE identity — mutate BOTH maps in place so every existing reference
+  // (constraints keyed by name or code, sheets, tweak payloads) keeps binding.
+  function renameTeacher(oldName, newName) {
+    const code = NAME_TO_CODE[oldName];
+    if (!code || code === "PARALLEL") return null;
+    if (NAME_TO_CODE[newName] && NAME_TO_CODE[newName] !== code) return null;
+    delete NAME_TO_CODE[oldName];
+    NAME_TO_CODE[newName] = code;
+    TEACHER_FULL[code] = newName;
+    return code;
+  }
+
   const _slotSet = a => new Set((a||[]).map(x => SLOT_OF[x]));
   const _daySet  = a => new Set((a||[]).map(x => DAY_OF[x]));
 
@@ -1954,7 +1967,7 @@
   return {
     DAYS, SLOTS, SECTIONS, TEACHER_FULL, RULES, UNITS,
     CAPACITY: { days: 6, periods: 8 }, DAY_NAMES, PERIOD_LABELS,
-    SLOT_OF, DAY_OF, DEFAULT_CONSTRAINTS, NAME_TO_CODE, resolveConstraints, extendTeachers,
+    SLOT_OF, DAY_OF, DEFAULT_CONSTRAINTS, NAME_TO_CODE, resolveConstraints, extendTeachers, renameTeacher,
     DEFAULT_SECTIONS, normalizeSections, buildUnits,
     generate, validate, score, canonical, toTimetable, locksOk,
     engage, validateEngagement, codesOfFullName, substituteEligible,
