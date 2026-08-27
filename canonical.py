@@ -157,6 +157,54 @@ def solver_constraints():
     return {code: clean_faculty_entry(c) for code, c in (get().get("constraints") or {}).items()}
 
 
+def merge_constraint_overrides(base, overrides):
+    """Apply the admin's LIVE constraint edits (shared global row payload) over
+    the canonical-resolved `base` — mirror of solver.js resolveConstraints:
+    each override entry carries `edits` (legacy `rules` treated as edits),
+    null values REMOVE the rule, `hardness` merges per-key (present rules
+    only, clamped 0..100), `soft` overrides when non-empty, `natural` kept.
+    Without this, the server CP-SAT path would run on the repo-baked
+    constraint snapshot regardless of the admin's edits (the stale-Yasir bug).
+    """
+    import copy
+    out = {}
+    for code, e in (base or {}).items():
+        out[code] = {"name": e.get("name") or code,
+                     "rules": copy.deepcopy(e.get("rules") or {}),
+                     "soft": list(e.get("soft") or []),
+                     "hardness": dict(e.get("hardness") or {})}
+    n2c = name_to_code()
+    for key, entry in (overrides or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        code = n2c.get(key, key)
+        edits = entry.get("edits") if isinstance(entry.get("edits"), dict) else entry.get("rules") or {}
+        ent = out.get(code) or {"name": entry.get("name") or key, "rules": {},
+                                "soft": [], "hardness": {}}
+        if entry.get("name"):
+            ent["name"] = entry["name"]
+        if entry.get("natural"):
+            ent["natural"] = entry["natural"]
+        for rk, v in edits.items():
+            if v is None:
+                ent["rules"].pop(rk, None)
+                ent["hardness"].pop(rk, None)
+            else:
+                ent["rules"][rk] = v
+        for hk, hv in (entry.get("hardness") or {}).items():
+            if hk not in ent["rules"]:
+                continue
+            try:
+                ent["hardness"][hk] = max(0, min(100, int(hv)))
+            except (TypeError, ValueError):
+                pass
+        if isinstance(entry.get("soft"), list) and entry["soft"]:
+            ent["soft"] = list(entry["soft"])
+        out[code] = ent
+    # shape-wall the merged set so malformed wire values never reach the engine
+    return {code: clean_faculty_entry(e) for code, e in out.items()}
+
+
 def clean_faculty_entry(c):
     """Shape wall for one teacher's constraint record: unknown rule keys are
     dropped, the v2.1 hardness map is reduced to present rule keys and clamped
@@ -428,7 +476,8 @@ def solver_context(population_ids, overrides=None):
         "sectionMeta": section_meta,
         "relationships": relationships,
         "instructions": instructions,
-        "constraints": solver_constraints(),
+        "constraints": merge_constraint_overrides(
+            solver_constraints(), ov.get("constraints")),
         "teacherCodes": name_to_code(),
         "softPenalties": dict(ov).get("softPenalties", {}),
     }

@@ -197,6 +197,46 @@
     return out;
   }
 
+  // Merge the admin's LIVE constraint edits (shared global row payload) over the
+  // canonical-resolved base — mirror of canonical.merge_constraint_overrides /
+  // solver.js resolveConstraints: edits (legacy `rules` = edits), null removes,
+  // hardness merges per-key over present rules clamped 0..100, soft overrides
+  // when non-empty, `natural` kept.
+  function mergeConstraintOverrides(base, overrides) {
+    var out = {};
+    for (var code in (base || {})) {
+      var e = base[code] || {};
+      out[code] = { name: e.name || code,
+                    rules: JSON.parse(JSON.stringify(e.rules || {})),
+                    soft: (e.soft || []).slice(),
+                    hardness: Object.assign({}, e.hardness || {}) };
+    }
+    var n2c = nameToCode();
+    for (var key in (overrides || {})) {
+      var entry = overrides[key];
+      if (!entry || typeof entry !== "object") continue;
+      var cd = n2c[key] || key;
+      var edits = (entry.edits && typeof entry.edits === "object") ? entry.edits : (entry.rules || {});
+      var ent = out[cd] || { name: entry.name || key, rules: {}, soft: [], hardness: {} };
+      if (entry.name) ent.name = entry.name;
+      if (entry.natural) ent.natural = entry.natural;
+      for (var rk in edits) {
+        if (edits[rk] === null || edits[rk] === undefined) { delete ent.rules[rk]; delete ent.hardness[rk]; }
+        else ent.rules[rk] = edits[rk];
+      }
+      for (var hk in (entry.hardness || {})) {
+        if (!(hk in ent.rules)) continue;
+        var n = parseInt(entry.hardness[hk], 10);
+        if (!isNaN(n)) ent.hardness[hk] = Math.max(0, Math.min(100, n));
+      }
+      if (Array.isArray(entry.soft) && entry.soft.length) ent.soft = entry.soft.slice();
+      out[cd] = ent;
+    }
+    // shape-wall the merged set (mirror of canonical.py's clean_faculty_entry pass)
+    for (var ck in out) out[ck] = cleanFacultyEntry(out[ck]);
+    return out;
+  }
+
   // Register canonical faculty the solver doesn't know (new members) so that
   // full display names resolve to codes inside IMPCC_SOLVER.
   function extendSolver(SOLVER) {
@@ -287,7 +327,7 @@
 
   // Build a solve context for ONE shift (shift 1: ["inter-1","bs-1"] jointly;
   // shift 2: ["inter-2"]). Mirrors canonical.py solver_context() exactly.
-  function solverContext(populationIds) {
+  function solverContext(populationIds, overrides) {
     const POPS = _pops();
     const pids = (populationIds || []).slice();
     const shifts = {};
@@ -345,7 +385,8 @@
           subjects: e.params.subjects, sections: e.params.sections, teachers: e.params.teachers })),
         softIndividualSpread: !!gi.soft_individual_spread
       },
-      constraints: solverConstraints(),
+      constraints: mergeConstraintOverrides(
+        solverConstraints(), ((overrides || {}).constraints || null)),
       teacherCodes: nameToCode()
     };
   }
@@ -355,6 +396,7 @@
     directory: directory, nameToCode: nameToCode, codeOf: codeOf, displayName: displayName,
     solverAllocation: solverAllocation, solverConstraints: solverConstraints,
     cleanFacultyEntry: cleanFacultyEntry,
+    mergeConstraintOverrides: mergeConstraintOverrides,
     solverContext: solverContext,
     extendSolver: extendSolver, sectionFill: sectionFill, teacherLoad: teacherLoad,
     POPULATIONS: ["inter-1", "bs-1", "inter-2"],

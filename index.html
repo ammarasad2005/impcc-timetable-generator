@@ -2166,6 +2166,9 @@ function cpsatOverrides(){
   if(Object.keys(instr).length) out.general_instructions=instr;
   const reg=ruleRegistry();
   if(Object.keys(reg).length) out.rule_registry=JSON.parse(JSON.stringify(reg));
+  // the admin's LIVE constraint set must reach the server CP-SAT — without this,
+  // /generate-context solves against the repo-baked snapshot (stale-constraint bug)
+  out.constraints=JSON.parse(JSON.stringify(state.constraints||{}));
   return Object.keys(out).length?out:null;
 }
 function runCpsat(){
