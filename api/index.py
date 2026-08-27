@@ -558,10 +558,23 @@ def generate_context(req: GenerateContextRequest, user: dict = Depends(require_u
         ctx = _canon.solver_context(req.populations, overrides=clean)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    model = _cm.context_to_model(ctx)
+    if not model["units"]:
+        # nothing to optimize — an unconfigured/unpopulated population (e.g. an
+        # empty 2nd-shift context) must be an honest diagnostic, not a silent
+        # "0 solutions" that looks like a solver failure.
+        return {
+            "solver": "cp-sat-context",
+            "populations": req.populations,
+            "solutions": [], "total_found": 0, "optimal": False,
+            "best_score": None, "best_total": None, "elapsed_seconds": 0.0,
+            "empty_context": True,
+            "detail": "Context has no sections/units — configure sections and "
+                      "allocations for this population first.",
+        }
     ranked, any_optimal = _cs.generate_context(
         ctx, n_seeds=req.n_seeds, time_per_seed=req.time_limit,
         max_solutions=req.max_solutions)
-    model = _cm.context_to_model(ctx)
     solutions = [{
         "score": r["score"], "penalty": r["penalty"], "total": r["total"],
         "violations": r["violations"],

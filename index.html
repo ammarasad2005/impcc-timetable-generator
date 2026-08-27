@@ -2178,10 +2178,9 @@ function cpsatOverrides(){
 function runCpsat(){
   if(!SB||!SB.loggedIn){setCpsatStatus('Sign in required to use CP-SAT','err');setTicker('Sign in to use CP-SAT','ok');return;}
   if(state.cpsatBusy)return;
-  if(state.cpsatDone){
-    setCpsatStatus('CP-SAT: proven optimal — best score 560 ('+state.cpsatMerged+' solutions merged)','ok');
-    return;
-  }
+  // a restored/finished state must NOT block a click — the button always runs
+  // a fresh solver pass (the done-badge stays on screen until results arrive)
+  if(state.cpsatDone){state.cpsatDone=false;}
   state.cpsatBusy=true;
   btnCpsat.disabled=true;
   btnCpsat.innerHTML='<span class="spin"></span> running CP-SAT…';
@@ -2210,6 +2209,18 @@ function runCpsat(){
     state.cpsatDone=true;state.cpsatBusy=false;state.cpsatMerged=added;
     const list=sortedList();
     if(list.length)state.selected=list[0].id;
+    if(data.empty_context){
+      setCpsatStatus('CP-SAT: nothing to optimize — no sections/units configured for this shift (pick 1st shift, or add sections & allocations first)','warn');
+      setTicker('CP-SAT: empty context — nothing to solve on this shift','err');
+      renderAll();persist();
+      return;
+    }
+    if(!(data.solutions||[]).length){
+      setCpsatStatus('CP-SAT: server returned 0 timetables — the active constraints are over-constrained right now (see the Constraints page; a hard rule is likely self-contradictory)','warn');
+      setTicker('CP-SAT: 0 timetables — over-constrained rules','err');
+      renderAll();persist();
+      return;
+    }
     const optimal=data.optimal?'proven optimal':'best found';
     const _bt=data.best_total!=null?data.best_total:data.best_score;
     setCpsatStatus('CP-SAT: '+optimal+' — best total '+_bt+' ('+added+' new solutions merged)','ok');
