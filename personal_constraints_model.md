@@ -158,3 +158,88 @@ Soft-penalty bases: `rule`=5000, `preferFreeSlot`=500 (per hit),
 `evenDistribution`=100 (per excess), mirroring the existing soft layer.
 The bool soft kinds keep their bases; hard kinds demoted to h<100 report
 against the `rule` base by default.
+
+## 9. Course period-coherence (dominant-slot rule) — v3.1
+
+An invariant orthogonal to personal rules, applying **to INTERMEDIATE-level
+sections only**: inside ONE intermediate section, ONE course taught 3+
+times a week must sit at (as near as possible) the SAME period every day.
+It is checked jointly with each teacher's personal constraints (those stay
+dominant — coherence never overrides an h=100 personal rule).
+
+**BS-level scope (locked v3.1):** the whole entropy-minimisation concept
+targets intermediate. For BS sections, slot alignment of a 3+/week course
+is a bonus only ("if it can be done at any level, it's a plus — never a
+requirement"): no floors, no tolerance checks, no documented violations,
+no penalties. The solver still steers BS placement softly toward the
+dominant slot (at the count-3 weight) so aligned BS solutions win the
+ranking whenever they exist at equal cost; checkers stay silent on BS
+groups.
+
+| weekly count in an INTERMEDIATE section | floor | tolerance | semantics |
+| --- | --- | --- | --- |
+| 5 | 4 of 5 in one slot | ≤ 1 class elsewhere, documented soft | hard floor; the single tolerated deviation is charged soft so it is used only when genuinely needed |
+| 4 | 3 of 4 in one slot | ≤ 1 class elsewhere, documented soft | same |
+| 3 | none | all documented | SOFT only: every deviation from the dominant slot is charged at 65% of the rule base (the solver lines them up unless something else resists) |
+| 1–2 | none | none | no check at all |
+
+Grouping is per (section, course) pair: units teaching the same course in
+that section are summed; for combined (multi-section) group units each
+member section keeps its own course name, so each (sec, course) pair gets
+its own dominant-slot constraint on its own piece times.
+
+Penalties (added to the shared `pen` table):
+`periodConsistency45` = 5000 × 90/100 = **4500** per class outside the
+dominant slot (count 4–5, only reachable for the ≤-1 tolerance);
+`periodConsistency3` = 5000 × 65/100 = **3250** per deviation (count 3,
+unbounded but soft).
+
+Checker messages (mirrored byte-identically by both JS engines):
+- hard: `SEC course: N of C classes outside one period (dominant P1) — beyond the allowed 1 tolerance`
+- soft 4/5: `SEC course: 1 class outside dominant period P1 (allowed at most 1)`
+- soft 3: `SEC course: N of 3 classes outside dominant period P1`
+
+CP-SAT encoding per group: one IntVar `ds` (dominant slot), per piece a
+bool `same_p ⇔ (slot_p = ds)`; hard `Σ same_p ≥ count−1` for counts 4–5;
+objective charges `(count − Σ same_p) × weight` in both tiers.
+
+### 9.1 Structural exemption (locked)
+
+The "without defying the teacher's personal constraint" clause makes the
+hard floor relax to the STATICALLY ATTAINABLE alignment for each group:
+`floor = count − max(1, count − attain)`, where `attain` is the maximum
+over slots `s` of the sum-per-unit of `min(count_u, days_u)` with the
+unit's personal slot/day domains (cp_solver._unit_slot_domain /
+_unit_day_domain). Deviations up to `count − floor` are FORCED by the
+personal claims and are never charged; anything beyond stays hard. When
+the floor cannot reach 3 the group carries no hard constraint at all —
+its placement is steered by the shuffle objective only.
+
+### 9.2 Tier cascade (feasibility, locked) — v3.1
+
+BS groups never carry floors (scope). When the remaining INTERMEDIATE
+floors are jointly infeasible under teacher personal rules, the solver
+walks the deterministic cascade: all inter floors → none, probes each
+tier once (first-hit wins), caches the decision per full data signature,
+and persists any dropped groups as `_cohExempt` on the context. A
+dropped group's deviations become DOCUMENTED SOFT at
+`periodConsistency45` per deviation — solid documentation of the
+sanctioned infeasibility, never a silent release. Every dropped-group
+deviation message reads:
+`SEC course: N of C classes outside dominant period P1 (alignment infeasible — documented exception)`.
+
+### 9.3 Engines
+
+- cp_solver.build_from_context: BS (sec, course) groups never get hard
+  floors — only bonus soft steering at `periodConsistency3` weight, and
+  checkers never flag them. Inter groups keep hard floors; `coh_off`
+  skips a group's hard floor (soft charge stays); generate_context runs
+  the 2-tier cascade and stamps `context._cohExempt`.
+- context_model.period_coherence_findings: shared by evaluate() and
+  analyze_structured(); computes the same structural `attain` (lazy
+  import of cp_solver's domain helpers) and applies the same floor
+  relaxation — checker and solver can never disagree about the tier.
+- context_solver.js periodCoherenceFindings: byte-identical mirror,
+  including the `_cohExempt` documented-exception branch.
+- solver.py + solver.js classic validate(): same hard messages and
+  (soft)-prefixed tolerance notes on the classic grids.

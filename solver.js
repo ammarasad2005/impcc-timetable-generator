@@ -1286,6 +1286,34 @@
       for (const [subject, , count] of sec.subs) {
         if ((counts[subject] || 0) !== count) issues.push(`${sec.key} ${subject} load ${counts[subject]} != ${count}`);
       }
+      // ---- course period-coherence (spec §9): 3+/week course sits at ONE dominant period
+      for (const cname in counts) {
+        const lst = [];
+        for (let d = 0; d < Dg; d++) for (let s = 0; s < Pg; s++) {
+          const uid = grids[sec.key][d][s];
+          if (uid !== null && UNITS[uid].subject === cname) lst.push(s);
+        }
+        const total = lst.length;
+        if (total < 3) continue;
+        const freq = {};
+        for (const s of lst) freq[s] = (freq[s] || 0) + 1;
+        let best = 0;
+        for (const k in freq) if (freq[k] > best) best = freq[k];
+        let dom = null;
+        for (const k in freq) if (freq[k] === best && (dom === null || (+k) < dom)) dom = +k;
+        const dev = total - best;
+        const plab = SLOTS[dom];
+        if (total >= 4) {
+          if (dev >= 2) {
+            issues.push(`${sec.key} ${cname}: ${dev} of ${total} classes outside one period ` +
+                        `(dominant ${plab}) — beyond the allowed 1 tolerance`);
+          } else if (dev === 1) {
+            issues.push(`(soft) ${sec.key} ${cname}: 1 class outside dominant period ${plab} (allowed at most 1)`);
+          }
+        } else if (dev >= 1) {
+          issues.push(`(soft) ${sec.key} ${cname}: ${dev} of 3 classes outside dominant period ${plab}`);
+        }
+      }
     }
     const occ = {};
     for (const sec of SECTIONS) {
