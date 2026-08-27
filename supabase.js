@@ -142,6 +142,28 @@
       return (Array.isArray(rows) && rows.length) ? rows[0] : null;
     },
 
+    // ---- global faculty constraints (single shared row, migration 003) ----
+    // Constraints belong to the FACULTY MEMBER, not a population: an unscoped
+    // personal rule applies to that teacher's timetable in every population;
+    // department/stream restriction is expressed inside the rule itself via
+    // scope/population-scoped rule kinds, so one shared row is the truth.
+    async loadGlobalConstraints() {
+      await this.ensureSession();
+      const rows = await this._req("/rest/v1/global_constraints?id=eq.1&select=constraints,updated_at", {
+        method: "GET", headers: this._headers()
+      });
+      return (Array.isArray(rows) && rows.length) ? rows[0] : null;
+    },
+    async saveGlobalConstraints(constraints) {
+      await this.ensureSession();
+      const body = { id: 1, constraints: constraints || {}, updated_at: new Date().toISOString() };
+      return this._req("/rest/v1/global_constraints?on_conflict=id", {
+        method: "POST",
+        headers: Object.assign({}, this._headers(), { "Prefer": "resolution=merge-duplicates,return=representation" }),
+        body: JSON.stringify(body)
+      });
+    },
+
     async savePublished(allocation, constraints, faculty, tweaks, population, generalInstructions, timetableConfig) {
       population = pop(population);
       await this.ensureSession();

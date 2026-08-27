@@ -11,6 +11,7 @@ Run:  python3 tests/validate_all.py          (full suite; CP-SAT runs — takes 
 """
 import copy
 import json
+import os
 import sys
 import time
 
@@ -1400,6 +1401,59 @@ try:
 except Exception as e:
     check("F24 unknown-teacher allocation wiring", False, str(e)[:160])
 
+# =====================================================================
+print()
+print("=" * 72)
+print("S1–S6 STALE-CONSTRAINT FIX — shared global row + live teacher views")
+print("=" * 72)
+
+_mig = open("supabase/migrations/003_global_constraints.sql", encoding="utf-8").read() \
+    if os.path.exists("supabase/migrations/003_global_constraints.sql") else ""
+check("S1 migration 003: global_constraints table + seed from NEWEST published row",
+      "CREATE TABLE IF NOT EXISTS global_constraints" in _mig
+      and "ORDER BY p.updated_at DESC" in _mig
+      and "FOR SELECT USING (true)" in _mig, _mig[:80])
+
+_sb = open("supabase.js", encoding="utf-8").read()
+check("S2 supabase.js: loadGlobalConstraints / saveGlobalConstraints client methods",
+      "loadGlobalConstraints" in _sb and "saveGlobalConstraints" in _sb
+      and "/rest/v1/global_constraints" in _sb, "")
+
+_ix = open("index.html", encoding="utf-8").read()
+_boot = _ix[_ix.find("async function syncFromCloud"):_ix.find("function pushToCloud")]
+check("S3 boot is global-first: syncFromCloud reads the shared row before the legacy mirror",
+      "SB.loadGlobalConstraints()" in _boot and "consFromGlobal" in _boot,
+      "")
+check("S3b pushToCloud writes the shared global row on every publish",
+      "SB.saveGlobalConstraints(state.constraints" in _ix, "")
+
+def _fn_body(src, name):
+    i = src.find("function " + name + "(")
+    if i < 0:
+        return ""
+    j = src.find("\nfunction ", i + 1)
+    return src[i:(j if j > 0 else len(src))]
+_tc = _fn_body(_ix, "teacherCard") + _fn_body(_ix, "openSpotlight") + _fn_body(_ix, "buildTeacherDoc")
+check("S4 teacher views render LIVE resolved constraints (no frozen CONSTRAINTS[ ) lookups)",
+      "CONSTRAINTS[" not in _tc
+      and _tc.count("liveConstraintText(") >= 3
+      and "function liveConstraintText" in _ix
+      and _fn_body(_ix, "liveConstraintText").find("resolveConstraints") > 0, "")
+
+_pt = open("llm_translate.py", encoding="utf-8").read()
+check("S5 translator prompt: BS→populations mapping + unscoped=stays-everywhere guidance",
+      '"bs-1"]' in _pt and "UNSCOPED" in _pt
+      and "Engage periods 1,2 and 3 only" in _pt, "")
+
+_dx_bs = LLM.translate_constraints(
+    '{"natural": "no first period in BS only", "rules": {"max_pieces_match": '
+    '[{"max": 0, "slot": "P1", "scope": {"populations": ["bs-1"]}}]}, '
+    '"hardness": {"max_pieces_match": 100}}')
+check("S6 deterministic validator preserves population-scoped quota entries (BS scope)",
+      _dx_bs.get("confidence") == 1.0 and not _dx_bs.get("errors")
+      and _dx_bs["rules"]["max_pieces_match"][0]["scope"]["populations"] == ["bs-1"],
+      str(_dx_bs)[:200])
+
 # ------------------------------------------------------------------
 #  C4/§9  COURSE PERIOD-COHERENCE  (dominant-slot rule)
 #   count 5   -> hard floor: min 4 aligned; dev 1 documented soft 4500
@@ -1565,5 +1619,4 @@ print("RESULT: %d/%d checks passed%s" %
        "  —  %d FAILED ✗" % failures))
 print("=" * 72)
 sys.exit(0 if failures == 0 else 1)
-
 

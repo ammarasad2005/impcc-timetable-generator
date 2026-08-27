@@ -194,6 +194,14 @@ SOFT preferences (penalized, never forbidden — only when the statement says pr
 - "soft_compact_days": true → prefer no gaps inside a teaching day.
 
 SCOPE — every LIST entry may carry "scope": {"populations":["inter-1"],"streams":["ICS"],"sections":["ICS-II-A"],"days":["MON"]} when the statement restricts WHERE the rule applies ("…but only for his BS sections", "…only on Fridays"). Omit scope when it applies everywhere.
+Department vocabulary → scope mapping (THIS MATTERS — the constraint set is shared across all departments, so an unscoped rule binds the teacher everywhere):
+- "BS", "in his BS sections", any BBA/BSAF/BSCM etc. department → scope.populations: ["bs-1"] (BS sections have no stream tag).
+- "inter", "intermediate" → scope.populations: ["inter-1","inter-2"] (both intermediate populations).
+- "second shift" specs → the matching population only.
+- "I.Com", "commerce sections" → the I.COM-specific kinds (allowed_slots_in_stream etc.) or scope.streams: ["I.COM"].
+- "ICS" → likewise with "ICS".
+- No department mentioned → NO scope: the rule applies to the faculty member's own timetable everywhere.
+
 
 MAPPING RULES (synonyms → canonical keys)
 - "free", "off", "should not / must not / cannot take" → forbidden family.
@@ -243,6 +251,12 @@ Output: {"teacher":null,"natural":"1st period must be engaged 4 days a week, las
 
 Input: "Monday first two periods free, and I prefer not to teach on Friday."
 Output: {"teacher":null,"natural":"Monday first two periods free, and I prefer not to teach on Friday.","rules":{"forbidden_slots_on_days":[{"days":["MON"],"slots":["P1","P2"]}],"forbidden_days":["FRI"]},"hardness":{"forbidden_slots_on_days":100,"forbidden_days":30},"confidence":0.9,"unmapped":[],"notes":"Monday windows are hard; 'prefer not' softens the Friday ban to hardness 30."}
+
+Input: "Soften it for his BS sections: no first period there, but only in BS."
+Output: {"teacher":null,"natural":"Soften it for his BS sections: no first period there, but only in BS.","rules":{"max_pieces_match":[{"max":0,"slot":"P1","scope":{"populations":["bs-1"]}}]},"hardness":{"max_pieces_match":100},"confidence":0.9,"unmapped":[],"notes":"Department restriction is BS-only, so the no-P1 quota is scoped to populations ['bs-1']; an unscoped forbidden_slots would wrongly ban P1 everywhere."}
+
+Input: "Engage periods 1,2 and 3 only. No other period may be engaged."
+Output: {"teacher":null,"natural":"Engage periods 1,2 and 3 only. No other period may be engaged.","rules":{"allowed_slots":["P1","P2","P3"],"forbidden_slots":["P4","P5"]},"hardness":{"allowed_slots":100,"forbidden_slots":100},"confidence":0.98,"unmapped":[],"notes":"No department mentioned → UNSCOPED: applies to the teacher's own timetable everywhere."}
 """
 
 
