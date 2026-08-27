@@ -411,6 +411,52 @@ def _clean_overrides(populations, raw):
                 good_gi[pid] = kept
         if good_gi:
             out["general_instructions"] = good_gi
+    c = raw.get("constraints")
+    if isinstance(c, dict):
+        # the admin's LIVE constraint set (shared global row payload) — shape is
+        # {code: {name?, natural?, edits|rules: {...}, hardness?: {...}, soft?: [...]}}
+        # and MUST reach the server-side CP-SAT, otherwise /generate-context keeps
+        # solving against the repo-baked constraint snapshot (the stale-Yasir bug).
+        # null edit values mean REMOVE that rule and are preserved verbatim.
+        try:
+            if len(_j.dumps(c)) <= 96 * 1024:
+                import llm_translate as _ltc
+                clean_c = {}
+                for k, e in c.items():
+                    if len(clean_c) >= 64 or not isinstance(k, str) or len(k) > 64 \
+                            or not isinstance(e, dict):
+                        continue
+                    edits = e.get("edits") if isinstance(e.get("edits"), dict) else e.get("rules")
+                    ent = {}
+                    if isinstance(e.get("name"), str) and e.get("name").strip():
+                        ent["name"] = e["name"][:128]
+                    if isinstance(e.get("natural"), str):
+                        ent["natural"] = e["natural"][:512]
+                    if isinstance(edits, dict):
+                        removed = [rk for rk, v in edits.items() if v is None]
+                        rules, _errs, _warn = _ltc._validate_rules(
+                            {rk: v for rk, v in edits.items() if v is not None})
+                        for rk in removed:
+                            if rk in _ltc.RULE_SPEC:
+                                rules[rk] = None
+                        ent["edits"] = rules
+                        hard = {}
+                        for hk, hv in (e.get("hardness") or {}).items():
+                            if isinstance(hk, str) and hk in rules and rules[hk] is not None:
+                                try:
+                                    hard[hk] = max(0, min(100, int(hv)))
+                                except (TypeError, ValueError):
+                                    pass
+                        if hard:
+                            ent["hardness"] = hard
+                        if isinstance(e.get("soft"), list):
+                            ent["soft"] = [s for s in e["soft"]
+                                           if isinstance(s, str) and s in rules
+                                           and rules[s] is not None][:16]
+                    clean_c[k] = ent
+                out["constraints"] = clean_c
+        except Exception:
+            pass
     rr = raw.get("rule_registry")
     if isinstance(rr, dict):
         import llm_translate as _lt

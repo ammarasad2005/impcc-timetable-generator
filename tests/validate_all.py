@@ -1454,6 +1454,56 @@ check("S6 deterministic validator preserves population-scoped quota entries (BS 
       and _dx_bs["rules"]["max_pieces_match"][0]["scope"]["populations"] == ["bs-1"],
       str(_dx_bs)[:200])
 
+# ---- server CP-SAT must solve against the LIVE constraint set (the third
+# root cause of the stale-Yasir symptom): /generate-context previously dropped
+# wire-level constraints entirely / canonical.solver_context ignored the
+# "constraints" override and served only the repo-baked snapshot.
+import subprocess as _sp
+_ov_demo = json.dumps({"constraints": {
+    "Yasir": {"name": "Prof. Dr. Yasir Kareem",
+              "edits": {"allowed_slots": ["P1", "P2", "P3"],
+                        "forbidden_slots": ["P4", "P5"]},
+              "hardness": {"allowed_slots": 100, "forbidden_slots": 100}},
+    "Basit": {"edits": {"forbidden_slots": None}}}})
+_py_probe = (
+    "import canonical, json\n"
+    f"ov = json.loads({_ov_demo!r})\n"
+    "ctx = canonical.solver_context(['inter-1','bs-1'], overrides=ov)\n"
+    "y = ctx['constraints']['Yasir']; b = ctx['constraints']['Basit']\n"
+    "print(json.dumps({'yr': y['rules'], 'yh': y['hardness'], 'br': b['rules']}))\n")
+_r17 = _sp.run(["python3", "-c", _py_probe], capture_output=True, text=True, cwd=".")
+_j17 = json.loads(_r17.stdout) if _r17.returncode == 0 else {}
+check("S7 python solver_context applies live constraint overrides (edit + null-removal + hardness)",
+      _j17.get("yr", {}).get("allowed_slots") == ["P1", "P2", "P3"] and
+      _j17.get("yr", {}).get("forbidden_slots") == ["P4", "P5"] and
+      _j17.get("yh", {}).get("allowed_slots") == 100 and
+      "forbidden_slots" not in (_j17.get("br") or {}), _r17.stderr[:140])
+
+_r18 = _sp.run(
+    ["node", "-e",
+     "global.IMPCC_POPULATIONS=require('/home/user/impcc-timetable-generator/populations.js');"
+     "const m=require('/home/user/impcc-timetable-generator/data.js');"
+     "global.IMPCC_DATA=m.IMPCC_DATA||m;"
+     "const C=require('/home/user/impcc-timetable-generator/canonical.js');"
+     f"const ov=JSON.parse('{_ov_demo}');"
+     "const ctx=C.solverContext(['inter-1','bs-1'],ov);"
+     "const y=ctx.constraints['Yasir'],b=ctx.constraints['Basit'];"
+     "console.log(JSON.stringify({yr:y.rules,yh:y.hardness||{},br:b.rules}))"],
+    capture_output=True, text=True, cwd=".")
+_j18 = json.loads(_r18.stdout) if _r18.returncode == 0 else {}
+check("S8 JS canonical mirror applies the same overrides (py/js parity of the merge)",
+      _j18.get("yr", {}).get("allowed_slots") == ["P1", "P2", "P3"] and
+      _j18.get("yh", {}).get("allowed_slots") == 100 and
+      "forbidden_slots" not in (_j18.get("br") or {}),
+      (_r18.stderr or _r18.stdout)[:140])
+
+_src_api = open("api/index.py", encoding="utf-8").read()
+_src_ix2 = open("index.html", encoding="utf-8").read()
+check("S9 wire path: API allowlist admits sanitized constraints ; browser sends them to /generate-context",
+      'out["constraints"] = clean_c' in _src_api
+      and "out.constraints=JSON.parse(JSON.stringify(state.constraints" in _src_ix2,
+      "")
+
 # ------------------------------------------------------------------
 #  C4/§9  COURSE PERIOD-COHERENCE  (dominant-slot rule)
 #   count 5   -> hard floor: min 4 aligned; dev 1 documented soft 4500
