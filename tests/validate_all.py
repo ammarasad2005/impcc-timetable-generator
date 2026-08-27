@@ -1607,6 +1607,90 @@ _r21 = _sp.run(["python3", "-c",
     "out = generate_context(q, user={'sub':'probe'});"
     "print(out.get('empty_context'), len(out.get('solutions') or []), out.get('detail','')[:60])"],
     capture_output=True, text=True, cwd=".")
+
+# ------------------------------------------------------------------ S15
+#  DYNAMIC INFEASIBILITY INSIGHTS (v1.17)
+#  "0 timetables" must explain itself: flags are computed from the SOLVED
+#  context at request time (weekly loads, grid, pools, hardness) — no factor
+#  text is hardcoded anywhere.
+# ------------------------------------------------------------------
+print("-" * 72)
+print("S15: dynamic infeasibility insights (load-vs-capacity attribution)")
+print("-" * 72)
+import insights as _INS
+
+# S15a structural: synthesize an over-capacity day window for the teacher with
+# the highest measured weekly load — guaranteed impossible regardless of the
+# dataset's current numbers.
+_ctxA = canonical.solver_context(['inter-1', 'bs-1'], overrides=None)
+_mA = CM.context_to_model(_ctxA)
+_statsA = _INS._teacher_stats(_ctxA, _mA)
+_hi = max(_statsA["total"], key=_statsA["total"].get)
+_ovA = {"constraints": {_hi: {"name": _hi, "edits": {"allowed_days": ["MON"]}}}}
+_ctxA2 = canonical.solver_context(['inter-1', 'bs-1'], overrides=_ovA)
+_mA2 = CM.context_to_model(_ctxA2)
+_dgA = _INS.diagnose(_ctxA2, _mA2)
+_hitA = [f for f in _dgA["flags"] if f["rule"] == "allowed_days" and f["teacher"] == _hi]
+check("S15a over-capacity insight: highest-load teacher x 1-day window -> dynamic flag with need>capacity, numbers and detail",
+      bool(_hitA) and _hitA[0]["need"] > _hitA[0]["capacity"]
+      and "classes/week" in _hitA[0]["detail"] and _hi in _hitA[0]["detail"],
+      (_dgA and json.dumps(_hitA)[:120]) or "no flags")
+
+# S15b end-to-end: the actual /generate-context response carries diagnostics
+# when zero solutions come back (fast infeasible probe on the fabricated rule).
+_r22 = _sp.run(["python3", "-c",
+    "import json, sys; sys.path.insert(0, '.');"
+    "import insights as INS, canonical as C, context_model as CM;"
+    "ctx0 = C.solver_context(['inter-1','bs-1'], overrides=None);"
+    "m0 = CM.context_to_model(ctx0);"
+    "hi = max(INS._teacher_stats(ctx0, m0)['total'], key=INS._teacher_stats(ctx0, m0)['total'].get);"
+    "ov = {'constraints': {hi: {'name': hi, 'edits': {'allowed_days': ['MON']}}}};"
+    "from api.index import GenerateContextRequest, generate_context;"
+    "out = generate_context(GenerateContextRequest(populations=['inter-1','bs-1'], overrides=ov, time_limit=5, n_seeds=1), user={'sub':'t'});"
+    "print(json.dumps({'n': len(out.get('solutions') or []),"
+    "'flags': [f['rule'] for f in (out.get('diagnostics') or {}).get('flags', [])]}))"],
+    capture_output=True, text=True, cwd=".")
+_j22 = json.loads(_r22.stdout) if _r22.returncode == 0 else {}
+check("S15b end-to-end: 0 solutions -> diagnostics.flags carries the fabricated cause",
+      _j22.get("n") == 0 and "allowed_days" in (_j22.get("flags") or []),
+      (_r22.stderr or _r22.stdout)[:160])
+
+# S15c plumbing: response field present, vercel bundles the module, UI renders
+# dynamically (renderCpsatInsights(data.diagnostics) — never static content)
+import json as _j2
+_ver = _j2.load(open("vercel.json"))
+check("S15c wiring: API returns diagnostics; vercel bundles insights.py; UI renders from response not hardcoded",
+      '"diagnostics": diagnostics' in _src_api
+      and "insights.py" in _ver["functions"]["api/index.py"]["includeFiles"]
+      and "renderCpsatInsights(data.diagnostics)" in _src_ix2
+      and "function renderCpsatInsights(diag)" in _src_ix2, "")
+
+# S15d GI pool check: force the full bs-1 firstLast pool P1-banned -> the GI
+# rule conflict surfaces with the section name and the pool teachers.
+_ctxD = canonical.solver_context(['bs-1'], overrides=None)
+_mD = CM.context_to_model(_ctxD)
+_secMetaD = _ctxD["sectionMeta"]
+_fl = [k for k, m_ in _secMetaD.items() if m_.get("firstLast")]
+if _fl:
+    _poolD = set()
+    for u in _mD["units"]:
+        if _fl[0] in (u.get("secs") or [u.get("sec")] or []):
+            for t in ((u.get("members") or []) if u.get("group") else [u["teacher"]]):
+                if t and not t.startswith("PG:"):
+                    _poolD.add(t)
+    _ovD = {"constraints": {t: {"name": (solver_constraints_lookup := None) or t,
+                                "edits": {"forbidden_slots": ["P1"]}} for t in _poolD}}
+    _ctxD2 = canonical.solver_context(['bs-1'], overrides=_ovD)
+    _mD2 = CM.context_to_model(_ctxD2)
+    _dgD = _INS.diagnose(_ctxD2, _mD2)
+    _hitD = [f for f in _dgD["flags"] if "first_last" in f["rule"] and f["scope"] == _fl[0]]
+else:
+    _hitD = []
+    _poolD = set()
+check("S15d GI conflict: all-pool P1 ban surfaces first_last_period_occupied x section flag with pool names",
+      (not _fl) or (bool(_hitD) and "period 1" in _hitD[0]["detail"]
+       and str(_fl[0]) in _hitD[0]["detail"]),
+      json.dumps((_fl, len(_poolD)))[:120])
 check("S14c live behavior: unconfigured population -> empty_context=True, 0 solutions, explicit detail (no solver burn)",
       _r21.returncode == 0 and _r21.stdout.strip().startswith("True 0 Context has no sections"),
       (_r21.stderr or _r21.stdout)[:160] + " | out=" + _r21.stdout[:80])
@@ -1630,8 +1714,8 @@ print("C4: course period-coherence (spec §9)")
 print("-" * 72)
 try:
     import canonical as _CNC, context_model as _CMC, cp_solver as _CSC
-    _ctxC = _CNC.solver_context(['inter-1', 'bs-1'])
-    _mC = _CMC.context_to_model(_ctxC)
+    _ctxC = canonical.solver_context(['inter-1', 'bs-1'])
+    _mC = CM.context_to_model(_ctxC)
     _DC = _mC["days"]; _PC = _mC["periods"]
 
     def _coh_grid(slot_seq):
@@ -1645,7 +1729,7 @@ try:
         return _g
 
     # -- count 5 scattered (dominant 3/5, dev 2) -> hard issue
-    _r = _CMC.evaluate(_coh_grid([0, 1, 0, 0, 2]), _mC)
+    _r = CM.evaluate(_coh_grid([0, 1, 0, 0, 2]), _mC)
     _hs = [i for i in _r["issues"] if "outside one period" in str(i)]
     check("C4a count-5 with 2 devs -> exactly one hard coherence issue", len(_hs) == 1)
     if _hs:
@@ -1658,7 +1742,7 @@ try:
           not any(str(v.get("rule", "")).startswith("courseConsistency") for v in _r["violations"]))
 
     # -- count 5 with dev 1 -> documented soft @ 90% of rule base
-    _r = _CMC.evaluate(_coh_grid([0, 0, 0, 0, 1]), _mC)
+    _r = CM.evaluate(_coh_grid([0, 0, 0, 0, 1]), _mC)
     _sv = [v for v in _r["violations"] if str(v["rule"]).startswith("courseConsistency")]
     check("C4d count-5 with 1 dev -> exactly one documented soft violation", len(_sv) == 1)
     if _sv:
@@ -1676,7 +1760,7 @@ try:
                  if (u["courseBySec"] or {}).get("I.COM-I-A") == "English" and u["count"] == 4)
     for d, s in enumerate((2, 2, 2, 3)):
         _g4["I.COM-I-A"][d][s] = _uid4
-    _r = _CMC.evaluate(_g4, _mC)
+    _r = CM.evaluate(_g4, _mC)
     check("C4f count-4 with 1 dev -> documented soft only, no hard issue",
           not any("outside one period" in str(i) for i in _r["issues"])
           and len([v for v in _r["violations"] if str(v["rule"]) ==
@@ -1688,7 +1772,7 @@ try:
                  if (u["courseBySec"] or {}).get("I.COM-I-B") == "Principles of Commerce" and u["count"] == 3)
     for d, s in enumerate((0, 1, 2)):
         _g3["I.COM-I-B"][d][s] = _uid3
-    _r = _CMC.evaluate(_g3, _mC)
+    _r = CM.evaluate(_g3, _mC)
     _v3 = [v for v in _r["violations"] if str(v["rule"]) ==
            "courseConsistency:I.COM-I-B:Principles of Commerce"]
     check("C4g count-3 scattered -> soft only, no hard issue",
@@ -1706,7 +1790,7 @@ try:
                  if (u["courseBySec"] or {}).get("ICS-I-A") == "Tarjama-tul-Quran" and u["count"] == 2)
     for d, s in enumerate((0, 1)):
         _g2["ICS-I-A"][d][s] = _uid2
-    _r = _CMC.evaluate(_g2, _mC)
+    _r = CM.evaluate(_g2, _mC)
     check("C4i count-2 course -> no coherence issue/violation of any kind",
           not any("outside one period" in str(i) for i in _r["issues"])
           and not any(str(v["rule"]).startswith("courseConsistency") for v in _r["violations"]))
@@ -1751,7 +1835,7 @@ console.log(JSON.stringify({
         try:
             _jsR = __import__("json").loads(_res.stdout.strip())
             _jsH = _jsR["issues"]
-            _pyH = [i for i in _CMC.evaluate(_coh_grid([0, 1, 0, 0, 2]), _mC)["issues"]
+            _pyH = [i for i in CM.evaluate(_coh_grid([0, 1, 0, 0, 2]), _mC)["issues"]
                     if "outside one period" in i]
             _ok = (_jsH == _pyH and _jsR["cohViolations"] == [])
             _note = "msgs identical" if _ok else "diff: %r vs %r" % (_jsH[:1], _pyH[:1])
@@ -1768,7 +1852,7 @@ console.log(JSON.stringify({
                   and u["count"] == 4)
     for d, s in enumerate((0, 1, 2, 3)):
         _gBS["BSAF-SEM-I"][d][s] = _uidBS
-    _rBS = _CMC.evaluate(_gBS, _mC)
+    _rBS = CM.evaluate(_gBS, _mC)
     check("C4l BS count-4 fully scattered -> complete silence (no issue, no violation)",
           not any("outside one period" in str(i) for i in _rBS["issues"])
           and not any("outside dominant period" in str(v.get("detail")) for v in _rBS["violations"])

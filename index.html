@@ -215,6 +215,12 @@ select#comboSel:focus{outline:2px solid var(--amber);outline-offset:1px}
 .tick .ell::after{content:"";animation:ell 1.2s steps(4) infinite}
 @keyframes ell{0%{content:""}25%{content:"."}50%{content:".."}75%{content:"..."}}
 #cpsatStatus{margin-left:auto;color:#9db5a8}
+.cpsat-insights{margin:10px 0 0;padding:12px 14px;border:1px solid var(--amber,#c9a227);border-radius:10px;background:rgba(201,162,39,.07)}
+.cpsat-insights h5{margin:0 0 8px;font-size:13px}
+.cpsat-insight{border-left:3px solid var(--red,#c0392b);padding:6px 10px;margin:6px 0;background:var(--card,rgba(255,255,255,.02));border-radius:6px}
+.cpsat-insight b{font-weight:600}
+.cpsat-insight .ci-meta{font-size:11px;opacity:.75;margin:2px 0 4px}
+.cpsat-insight .ci-tag{display:inline-block;padding:0 6px;margin-left:6px;border:1px solid currentColor;border-radius:8px;font-size:10px;opacity:.8}
 #publishedAge{font-family:var(--mono);font-size:11px;color:#9db5a8;white-space:nowrap;margin-left:12px}
 #publishedAge b{color:#ffd97a;font-weight:600}
 #publishedAge .led-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#4ade80;box-shadow:0 0 6px #4ade80;margin-right:4px;vertical-align:1px}
@@ -1004,6 +1010,7 @@ footer b{color:var(--green)}
     <span id="publishedAge"></span>
   </div>
   <div class="prog"><i id="progFill"></i></div>
+  <div id="cpsatInsights" class="cpsat-insights hidden"></div>
 </nav>
 
 <!-- ================= MAIN ================= -->
@@ -1261,6 +1268,30 @@ function setTicker(msg,mode,ell){
   tickText.innerHTML=esc(msg)+(ell?'<span class="ell"></span>':'');
 }
 function setCpsatStatus(msg,kind){cpsatStatusEl.textContent=msg;cpsatStatusEl.className=kind||'';}
+/* Dynamic over-constraint insights — rendered from data.diagnostics ONLY
+ * (computed server-side from the live context): any future data can explain
+ * itself, nothing here is a hardcoded factor list. */
+function renderCpsatInsights(diag){
+  const box=document.getElementById('cpsatInsights');
+  if(!box)return;
+  const flags=(diag&&Array.isArray(diag.flags))?diag.flags:[];
+  if(!flags.length){box.classList.add('hidden');box.innerHTML='';return;}
+  const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  let h='<h5>🔍 Why is CP-SAT finding 0 timetables? <span style="opacity:.7;font-weight:400">(detected live from the current constraint data)</span></h5>';
+  flags.forEach(f=>{
+    h+='<div class="cpsat-insight">';
+    h+='<b>'+esc(f.name||f.scope)+'</b>';
+    if(f.scope&&f.scope!==f.name)h+='<span class="ci-tag">'+esc(f.scope)+'</span>';
+    if(f.rule)h+='<span class="ci-tag">'+esc(f.rule)+'</span>';
+    if(f.source)h+='<span class="ci-tag">'+esc(f.source)+'</span>';
+    if(f.need!=null&&f.capacity!=null)h+='<span class="ci-tag" title="required vs available">needs '+esc(f.need)+' · available '+esc(f.capacity)+(f.slack!=null?' ('+(f.slack<0?'short '+Math.abs(f.slack) : f.slack===0?'zero slack':'slack '+f.slack)+')':'')+'</span>';
+    h+='<div class="ci-meta">'+esc(f.detail||'')+'</div>';
+    h+='</div>';
+  });
+  box.innerHTML=h;
+  box.classList.remove('hidden');
+}
+
 function liveTicker(){
   const list=sortedList();
   const best=list.length?list[0].score:'—';
@@ -2182,6 +2213,7 @@ function runCpsat(){
   // a fresh solver pass (the done-badge stays on screen until results arrive)
   if(state.cpsatDone){state.cpsatDone=false;}
   state.cpsatBusy=true;
+  renderCpsatInsights(null);
   btnCpsat.disabled=true;
   btnCpsat.innerHTML='<span class="spin"></span> running CP-SAT…';
   setCpsatStatus('running CP-SAT… (POST /generate · time_limit 120s · n_seeds 1)','warn');
@@ -2216,11 +2248,15 @@ function runCpsat(){
       return;
     }
     if(!(data.solutions||[]).length){
-      setCpsatStatus('CP-SAT: server returned 0 timetables — the active constraints are over-constrained right now (see the Constraints page; a hard rule is likely self-contradictory)','warn');
+      const _nf=(data.diagnostics&&data.diagnostics.flags)?data.diagnostics.flags.length:0;
+      setCpsatStatus('CP-SAT: server returned 0 timetables — the active constraints are over-constrained right now'+
+        (_nf?(' — 🔍 '+_nf+' likely factor'+(_nf===1?'':'s')+' shown below'):' (no single contradicting rule detected — soften hardness below 100 gradually)'),'warn');
       setTicker('CP-SAT: 0 timetables — over-constrained rules','err');
+      renderCpsatInsights(data.diagnostics);
       renderAll();persist();
       return;
     }
+    renderCpsatInsights(null);
     const optimal=data.optimal?'proven optimal':'best found';
     const _bt=data.best_total!=null?data.best_total:data.best_score;
     setCpsatStatus('CP-SAT: '+optimal+' — best total '+_bt+' ('+added+' new solutions merged)','ok');
