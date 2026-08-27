@@ -842,8 +842,9 @@ try:
     check("O4 baked standalone references carry both shift-1 sides with scores",
           'inter-1' in refs and 'bs-1' in refs and
           isinstance(refs['inter-1'].get('score'), int) and isinstance(refs['bs-1'].get('score'), int))
+    _inc = _jo.load(open('vercel.json'))['functions']['api/index.py']['includeFiles']
     check("O5 vercel.json bundles data/score_references.json",
-          'data/score_references.json' in _jo.load(open('vercel.json'))['functions']['api/index.py']['includeFiles'])
+          'data/score_references.json' in _inc or 'data/**' in _inc)
 except Exception as e:
     check("O4/O5 baked references + bundling", False)
 
