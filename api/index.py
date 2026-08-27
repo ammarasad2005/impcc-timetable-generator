@@ -575,6 +575,17 @@ def generate_context(req: GenerateContextRequest, user: dict = Depends(require_u
     ranked, any_optimal = _cs.generate_context(
         ctx, n_seeds=req.n_seeds, time_per_seed=req.time_limit,
         max_solutions=req.max_solutions)
+    diagnostics = None
+    if not ranked:
+        # dynamic attribution: inspect THIS solved model for impossible rule
+        # arithmetic (load vs capacity, pool eligibility, zero-slack packs).
+        # Flags are computed from the live context every time — nothing
+        # hardcoded — so any future over-constraint data explains itself.
+        try:
+            import insights as _ins
+            diagnostics = _ins.diagnose(ctx, model)
+        except Exception:
+            diagnostics = None
     solutions = [{
         "score": r["score"], "penalty": r["penalty"], "total": r["total"],
         "violations": r["violations"],
@@ -590,6 +601,7 @@ def generate_context(req: GenerateContextRequest, user: dict = Depends(require_u
         "best_score": solutions[0]["score"] if solutions else None,
         "best_total": solutions[0]["total"] if solutions else None,
         "elapsed_seconds": round(_time.time() - t0, 2),
+        "diagnostics": diagnostics,
         "meta": {
             "days": _solver_mod.DAYS, "slots": _solver_mod.SLOTS,
             "section_order": [s["key"] for s in model["sections"]],
