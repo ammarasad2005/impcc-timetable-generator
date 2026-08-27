@@ -581,9 +581,16 @@ def generate_context(req: GenerateContextRequest, user: dict = Depends(require_u
         # arithmetic (load vs capacity, pool eligibility, zero-slack packs).
         # Flags are computed from the live context every time — nothing
         # hardcoded — so any future over-constraint data explains itself.
+        # If the structural pass finds nothing (emergent packing conflict),
+        # a bounded soft->re-harden relaxation stage proves which teacher's
+        # rules block the model (or honestly reports "not teacher-attributable").
         try:
             import insights as _ins
             diagnostics = _ins.diagnose(ctx, model)
+            if diagnostics is not None and not diagnostics.get("flags"):
+                _relx = _ins.diagnose_relaxation(ctx, model, budget_s=70.0)
+                if _relx is not None:
+                    diagnostics = _relx
         except Exception:
             diagnostics = None
     solutions = [{

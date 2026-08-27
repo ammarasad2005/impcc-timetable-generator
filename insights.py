@@ -63,6 +63,10 @@ def _teacher_stats(ctx, model):
 
 
 def _hard(ent, key):
+    """hard (>=100) unless the entry softens this rule key — either via the
+    legacy `soft` list (canonical default mgmt) or the v2.1 hardness map."""
+    if key in (ent.get("soft") or []):
+        return False
     try:
         return int((ent.get("hardness") or {}).get(key, 100)) >= 100
     except (TypeError, ValueError):
@@ -75,6 +79,153 @@ def _flag(code, name, rule, scope, need, capacity, source, detail):
             "slack": (capacity - need if isinstance(capacity, int)
                       and isinstance(need, int) else None),
             "source": source, "detail": detail}
+
+
+DAYS = ["MON", "TUE", "WED", "THU", "FRI"]
+
+
+def _placement_domain(rules, grid_days=5, grid_periods=5):
+    """GENERIC placement domain: the set of (day, slot) cells a teacher can
+    occupy under ANY combination of domain-restricting rules — allowed_days,
+    forbidden_days, allowed_slots, forbidden_slots, forbidden_slots_on_days,
+    allowed_slots_days (pair whitelist). Every rule can only SHRINK the
+    domain, so this stays correct no matter which family a future override
+    uses. Returns (cells {(d,s)}, cap_per_day {d: int cap}, acting rule names).
+    """
+    days = DAYS[:grid_days]
+    slots = SLOTS[:grid_periods]
+    cells = {(d, s) for d in days for s in slots}
+    acting = []
+    if rules.get("allowed_days"):
+        keep = set(rules["allowed_days"])
+        cells = {c for c in cells if c[0] in keep}
+        acting.append("allowed_days")
+    if rules.get("forbidden_days"):
+        kill = set(rules["forbidden_days"])
+        cells = {c for c in cells if c[0] not in kill}
+        acting.append("forbidden_days")
+    if rules.get("allowed_slots"):
+        keep = set(rules["allowed_slots"])
+        cells = {c for c in cells if c[1] in keep}
+        acting.append("allowed_slots")
+    if rules.get("forbidden_slots"):
+        kill = set(rules["forbidden_slots"])
+        cells = {c for c in cells if c[1] not in kill}
+        acting.append("forbidden_slots")
+    if rules.get("allowed_slots_days"):
+        # pair whitelist: only the (day, slot) pairs explicitly listed survive
+        wl = set()
+        for e in (rules["allowed_slots_days"] or []):
+            for d in (e.get("days") or days):
+                for s in (e.get("slots") or []):
+                    wl.add((d, s))
+        cells = {c for c in cells if c in wl}
+        acting.append("allowed_slots_days")
+    for e in (rules.get("forbidden_slots_on_days") or []):
+        for d in (e.get("days") or []):
+            for s in (e.get("slots") or []):
+                cells.discard((d, s))
+        if e.get("days") and e.get("slots"):
+            if "forbidden_slots_on_days" not in acting:
+                acting.append("forbidden_slots_on_days")
+    mppd = rules.get("max_periods_per_day")
+    cap = {d: sum(1 for (dd, _s) in cells if dd == d) for d in days}
+    if isinstance(mppd, int) and mppd >= 0:
+        cap = {d: min(c, mppd) for d, c in cap.items()}
+        acting.append("max_periods_per_day")
+    return cells, cap, acting
+
+
+def diagnose_relaxation(ctx, model, budget_s=70.0, max_probes=14):
+    """Attribution by relaxation — the fallback for contradictions NO capacity
+    rule can express (purely emergent packing conflicts). Algorithm, fully
+    data-driven:
+
+      1. soften EVERY hard (>=100) per-teacher rule to hardness 50; if all-soft
+         is still infeasible, the conflict is emergent beyond per-teacher
+         rules -> honest report instead of a fabricated blame list.
+      2. re-harden teachers one at a time (heaviest load first); a teacher
+         whose re-hardening flips the model back to infeasible is a PROVEN
+         blocker; a flip is presolve-fast, so per-probe cost is small.
+    """
+    import time as _t
+    import copy as _cp
+    try:
+        import cp_solver as _CS
+    except Exception:
+        return None
+    t0 = _t.time()
+
+    def _soften(cons, only=None):
+        out = _cp.deepcopy(cons)
+        for code, ent in out.items():
+            if only is not None and code != only:
+                continue
+            h = {k: 50 for k in (ent.get("rules") or {})}
+            if h:
+                ent["hardness"] = h
+        return out
+
+    def _rehard(cons, code):
+        out = _cp.deepcopy(cons)
+        if code in out:
+            out[code]["hardness"] = {k: 100 for k in (out[code].get("rules") or {})}
+        return out
+
+    def _solvable(cons, tps):
+        ctx2 = dict(ctx)
+        ctx2["constraints"] = cons
+        ranked, _opt = _CS.generate_context(ctx2, n_seeds=1, time_per_seed=tps,
+                                            max_solutions=1)
+        return bool(ranked)
+
+    cons = _cp.deepcopy(model.get("constraints") or ctx.get("constraints") or {})
+    if not cons:
+        return {"mode": "relaxation", "flags": [],
+                "note": "no per-teacher constraints to relax"}
+
+    stats = _teacher_stats(ctx, model)
+    order = sorted(cons.keys(), key=lambda c: stats["total"].get(c, 0),
+                   reverse=True)
+    order = order[:max_probes]
+
+    baseline = _soften(cons)
+    soften_tps = min(25.0, max(5.0, budget_s / 3.0))
+    if not _solvable(baseline, soften_tps):
+        return {"mode": "relaxation", "flags": [],
+                "note": "still infeasible with every teacher's hard rules "
+                        "softened — the conflict is emergent in the packing "
+                        "(site/sections/level constraints), not attributable "
+                        "to any single teacher's constraint entry. Relax "
+                        "general instructions or assignment data."}
+
+    flags = []
+    per_probe = 4.0
+    state = dict(ctx)
+    state["constraints"] = baseline
+    for code in order:
+        if _t.time() - t0 > budget_s:
+            break
+        trial = _rehard(state["constraints"], code)
+        ent = cons.get(code) or {}
+        rules = ent.get("rules") or {}
+        if not rules:
+            continue
+        if not _solvable(trial, per_probe):
+            state["constraints"] = trial
+            flags.append(_flag(
+                code, ent.get("name") or code, "rule set (any family)",
+                "everywhere", stats["total"].get(code, 0) or None, None,
+                "proved by relaxation",
+                f"Re-hardening {(ent.get('name') or code)}'s constraint set "
+                f"(rules: {', '.join(sorted(rules))}) back to hardness 100 on "
+                f"top of everything-else-soft makes the model unsolvable "
+                f"again — this teacher's rules are a blocking factor. "
+                f"Loosen a scope, demote below hardness 100, or rebalance "
+                f"the load."))
+    return {"mode": "relaxation", "flags": flags,
+            "probes": len(order),
+            "note": "culprits proved by soft->re-harden flips (CP-SAT)"}
 
 
 def diagnose(ctx, model):
@@ -104,7 +255,7 @@ def diagnose(ctx, model):
         load = stats["total"].get(code, 0)
 
         # (1) allowed_days window vs weekly load
-        if rules.get("allowed_days") is not None and load:
+        if rules.get("allowed_days") is not None and load and _hard(ent, "allowed_days"):
             d = len([x for x in (rules.get("allowed_days") or []) if x])
             cap = d * periods
             if load > cap:
@@ -115,7 +266,7 @@ def diagnose(ctx, model):
                     f"{cap} slot-days ({d} days x {periods} slots)."))
 
         # (2) allowed_slots window vs weekly load
-        if rules.get("allowed_slots") is not None and load:
+        if rules.get("allowed_slots") is not None and load and _hard(ent, "allowed_slots"):
             s = len([x for x in (rules.get("allowed_slots") or []) if x])
             cap = s * days
             if load > cap:
@@ -125,7 +276,55 @@ def diagnose(ctx, model):
                     f"({', '.join(rules['allowed_slots'])}) only provides "
                     f"{cap} placements ({s} slots x {days} days)."))
 
-        # (3) allowed_slots_in_stream vs stream load (+ exact-pack)
+        # (GENERIC) full placement domain vs weekly load + coverage checks —
+        # catches ANY domain-restricting family combination (days x slots x
+        # per-day caps x pair whitelists x forbidden pairs), not just the
+        # named checks above. Skipped when a named capacity flag already fired.
+        already = any(f["teacher"] == code for f in flags)
+        hard_rules = {k: v for k, v in (rules or {}).items() if _hard(ent, k)}
+        cells, cap, acting = _placement_domain(hard_rules, days, periods)
+        cap_total = sum(cap.values())
+        if load and not already and load > cap_total:
+            flags.append(_flag(
+                code, name, "placement domain (" + "+".join(acting) + ")",
+                "everywhere", load, cap_total, src,
+                f"Under {name}'s current rules ({', '.join(acting)}), only "
+                f"{cap_total} teaching cells remain per week "
+                f"({len(cells)} day-slot pairs, per-day caps considered) "
+                f"but {name} teaches {load} classes."))
+        # coverage: must work more days than the domain permits
+        if rules.get("min_days_engaged") is not None and _hard(ent, "min_days_engaged"):
+            md = int(rules["min_days_engaged"] or 0)
+            open_days = sum(1 for d in cap if len(
+                [0 for (dd, _s) in cells if dd == d]) > 0)
+            if md > open_days:
+                flags.append(_flag(
+                    code, name, "min_days_engaged", "everywhere", md,
+                    open_days, src,
+                    f"{name} must teach on {md} days but the placement "
+                    f"domain leaves only {open_days} day(s) with a free "
+                    f"slot."))
+        # section bans that orphan a course entirely (every section carrying
+        # the teacher's course is forbidden at hard level)
+        forb_secs = set()
+        if _hard(ent, "forbidden_sections"):
+            for x in (rules.get("forbidden_sections") or []):
+                forb_secs.add(x)
+        for u in model["units"]:
+            if u["teacher"] != code:
+                continue
+            usecs = u.get("secs") or ([u["sec"]] if u.get("sec") else [])
+            if usecs and all(s in forb_secs for s in usecs) and load:
+                cn = u.get("courseBySec", {})
+                cnm = cn.get(usecs[0]) if usecs else None
+                flags.append(_flag(
+                    code, name, "forbidden_sections", " / ".join(usecs), 1, 0,
+                    src,
+                    f"Every section teaching {name}'s course "
+                    f"'{cnm or u.get('subject', '?')}' ({', '.join(usecs)}) "
+                    f"is in the forbidden_sections list — the course has "
+                    f"nowhere to be scheduled."))
+                break  # one per teacher is enough
         for e in (rules.get("allowed_slots_in_stream") or []):
             st = e.get("stream")
             sload = stats["per_stream"].get(code, {}).get(st, 0)
@@ -146,18 +345,22 @@ def diagnose(ctx, model):
                     f"rest of the college. Relax this (extra slot, softened "
                     f"hardness, or less load)."))
 
-        # (4) min_days_in_slot asks for days outside the day window
-        daywin = None
-        if rules.get("allowed_days"):
-            daywin = len(rules["allowed_days"])
-        for e in (rules.get("min_days_in_slot") or []):
+        # (4) min_days_in_slot: requires the slot on more days than the
+        # placement domain permits for that slot (uses the full domain, not
+        # just the allowed_days alias)
+        cells4, _cap4, _a4 = _placement_domain(
+            {k: v for k, v in (rules or {}).items() if _hard(ent, k)},
+            days, periods)
+        for e in ((rules.get("min_days_in_slot") or []) if _hard(ent, "min_days_in_slot") else []):
             md = int(e.get("min_days") or 0)
-            if daywin is not None and md > daywin:
+            slot_days = len({d for (d, s) in cells4 if s == e.get("slot")})
+            if md > slot_days:
                 flags.append(_flag(
-                    code, name, "min_days_in_slot", e.get("slot"), md, daywin,
+                    code, name, "min_days_in_slot", e.get("slot"), md, slot_days,
                     src,
                     f"{name} must engage {e.get('slot')} on {md} days but the "
-                    f"day window only has {daywin} days."))
+                    f"placement domain permits {e.get('slot')} on only "
+                    f"{slot_days} day(s) per week."))
 
         # (5) stream_slots_required vs available stream pieces
         for e in (rules.get("stream_slots_required") or []):
@@ -172,16 +375,19 @@ def diagnose(ctx, model):
                     f"class block(s) — impossible. The rule was likely meant "
                     f"as 'either/only' (allowed), not as a hard requirement."))
 
-    def _p1_banned(code):
+    def _slot_banned(code, slot):
         ent = cons.get(code) or {}
         rules = ent.get("rules") or {}
         fs = rules.get("forbidden_slots")
-        if fs and "P1" in fs and _hard(ent, "forbidden_slots"):
+        if fs and slot in fs and _hard(ent, "forbidden_slots"):
             return True
         al = rules.get("allowed_slots")
-        if al is not None and "P1" not in al and _hard(ent, "allowed_slots"):
+        if al is not None and slot not in al and _hard(ent, "allowed_slots"):
             return True
         return False
+
+    def _p1_banned(code):
+        return _slot_banned(code, "P1")
 
     # (6) GI first_last_period_occupied: sections the GI marks as
     #     first/last-occupied whose teacher pool has NOBODY P1-eligible
@@ -189,32 +395,50 @@ def diagnose(ctx, model):
     #     enforces, whatever GI merge produced it).
     sec_meta = ctx.get("sectionMeta") or {}
     sec_pool = {}
+    sec_load = {}
     for u in model["units"]:
         secs = u.get("secs") or ([u["sec"]] if u.get("sec") else [])
         for sec in secs:
             pool = sec_pool.setdefault(sec, set())
-            if u.get("group"):
-                for m_ in (u.get("members") or []):
-                    pool.add(m_)
-            elif u["teacher"]:
-                pool.add(u["teacher"])
+            members = (u.get("members") or []) if u.get("group") else [u["teacher"]]
+            for t in members:
+                if not t or t.startswith("PG:"):
+                    continue
+                pool.add(t)
+                sec_load[(sec, t)] = sec_load.get((sec, t), 0) + int(u.get("count", 1))
     for key, m in sec_meta.items():
         if not m.get("firstLast"):
             continue
         pool = {t for t in (sec_pool.get(key) or set()) if t
                 and not t.startswith("PG:")}
-        if pool and all(_p1_banned(t) for t in pool):
-            names = ", ".join(sorted(
-                (cons.get(t) or {}).get("name") or t for t in pool))
-            flags.append(_flag(
-                "", key, "first_last_period_occupied (GI)", key, 1, 0,
-                "gi rule",
-                f"A general instruction requires period 1 to be occupied in "
-                f"{key} every day, but every teacher in {key}'s pool "
-                f"({names}) is banned from period 1 at hard level — no one "
-                f"is left to occupy it. Reassign one {key} class to a "
-                f"P1-eligible teacher, or soften one pool teacher's P1 ban."))
+        if not pool:
+            continue
+        for slot in ("P1", "P5"):
+            # the GI demands `days` occupied cells/week at the boundary slot;
+            # only HARD-eligibility counts — a softened (soft-listed) ban is
+            # a penalty, not a blocker, so those teachers' classes STILL count
+            # as available placements... but if even that total falls short
+            # of the days needed, the section is provably dead.
+            eligible = [t for t in pool if not _slot_banned(t, slot)]
+            avail = sum(sec_load.get((key, t), 0) for t in eligible)
+            if not eligible or avail < days:
+                names = ", ".join(sorted(
+                    (cons.get(t) or {}).get("name") or t for t in pool))
+                flags.append(_flag(
+                    "", key, "first_last_period_occupied (GI)", key, days, avail,
+                    "gi rule",
+                    f"A general instruction requires period {slot[1:]} to be "
+                    f"occupied in {key} on all {days} days, but {key}'s pool "
+                    f"({names}) has only {avail}"
+                    + (" array of available classes (all members are banned "
+                       f"from {slot} at hard level)" if not eligible
+                       else f" {slot}-usable classes (some members can only "
+                           f"use {slot} at a documented penalty)")
+                    + f" while {days} occupied cells are needed. Reassign "
+                      f"one {key} class to a {slot}-eligible teacher, or "
+                      f"soften a pool teacher's {slot} ban."))
 
-    return {"flags": flags,
+    return {"mode": "structural",
+            "flags": flags,
             "loads": {t: stats["total"][t] for t in sorted(stats["total"])},
             "grid": {"days": days, "periods": periods}}

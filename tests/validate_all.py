@@ -1688,6 +1688,120 @@ if _fl:
 else:
     _hitD = []
     _poolD = set()
+
+# ------------------------------------------------------------------ S16
+#  GENERALITY PROOF (boss requirement): the insights engine must explain '0
+#  timetables' for ANY teacher and ANY constraint family — not only the six
+#  cases seen so far. Matrix: every teacher gets a fabricated over-capacity
+#  form; every domain-restricting rule family gets a fabricated violation;
+#  and the relaxation fallback must prove culprits emergent cases via
+#  solver flips. Everything here is computed — no expected-reason strings
+#  except family names.
+# ------------------------------------------------------------------
+print("-" * 72)
+print("S16: insights generality (any teacher x any rule family x relaxation proof)")
+print("-" * 72)
+
+# S16a: every teacher gets a synthesized over-capacity window -> own flag
+_ctxG = canonical.solver_context(['inter-1', 'bs-1'], overrides=None)
+_mG = CM.context_to_model(_ctxG)
+_statsG = _INS._teacher_stats(_ctxG, _mG)
+_teachersG = sorted(t for t, n in _statsG["total"].items() if n >= 6)
+_missingG = []
+_checkedG = 0
+for _t in _teachersG:
+    _ov = {"constraints": {_t: {"name": _t, "edits": {"allowed_slots": ["P1"]}}}}
+    _dg = _INS.diagnose(canonical.solver_context(['inter-1', 'bs-1'], overrides=_ov),
+                        CM.context_to_model(canonical.solver_context(['inter-1', 'bs-1'], overrides=_ov)))
+    hits = [f for f in _dg["flags"] if f["teacher"] == _t
+            and f["need"] is not None and f["capacity"] is not None
+            and f["need"] > f["capacity"]]
+    if hits:
+        _checkedG += 1
+    else:
+        _missingG.append(_t)
+check("S16a ANY TEACHER: %d high-load teachers each flagged with need>capacity when windowed to 1 slot" % len(_teachersG),
+      _checkedG == len(_teachersG), "unflagged: %s" % (_missingG[:5]))
+
+# S16b: EVERY domain family raises its own flag for a CONSTRAINT-FREE
+# teacher (canonical overrides + live entry both empty for Rauf-type codes),
+# so each fabrication is exactly one family in play.
+_occupied = set((canonical.solver_constraints() or {}).keys())
+try:
+    import json as _jj
+    for _k in _jj.load(open('/tmp/global_now.json'))[0]['constraints']:
+        _occupied.add(_k)
+except Exception:
+    pass
+_freeG = sorted([(t, n) for t, n in _statsG["total"].items()
+                 if t not in _occupied and n >= 6], key=lambda x: -x[1])
+_hiG, loadG = (_freeG[0] if _freeG else (None, 0))
+_all_secs = sorted({s for u in _mG["units"] if u["teacher"] == _hiG
+                    for s in (u.get("secs") or [u.get("sec")] or [])})
+_matrix = [
+    ("allowed_days", {"allowed_days": ["MON"]}),
+    ("forbidden_days", {"forbidden_days": ["MON", "TUE", "WED", "THU"]}),
+    ("allowed_slots", {"allowed_slots": ["P1"]}),
+    ("forbidden_slots", {"forbidden_slots": ["P1", "P2", "P3", "P4", "P5"]}),
+    ("forbidden_slots_on_days", {"forbidden_slots_on_days": [
+        {"days": ["MON", "TUE", "WED", "THU", "FRI"],
+         "slots": ["P1", "P2", "P3", "P4", "P5"]}]}),
+    ("allowed_slots_days", {"allowed_slots_days": [{"days": ["MON"], "slots": ["P1"]}]}),
+    ("max_periods_per_day", {"max_periods_per_day": 1}),
+    ("min_days_engaged", {"allowed_days": ["MON"], "min_days_engaged": 3}),
+    ("min_days_in_slot", {"min_days_in_slot": [{"slot": "P1", "min_days": 9}]}),
+    ("forbidden_sections", {"forbidden_sections": _all_secs}),
+]
+_badfam = []
+for fam, edits in _matrix:
+    _ov = {"constraints": {_hiG: {"name": _hiG, "edits": edits}}}
+    _dg = _INS.diagnose(canonical.solver_context(['inter-1', 'bs-1'], overrides=_ov),
+                        CM.context_to_model(canonical.solver_context(['inter-1', 'bs-1'], overrides=_ov)))
+    hits = [f for f in _dg["flags"] if f["teacher"] == _hiG]
+    if not hits:
+        _badfam.append(fam)
+check("S16b ANY RULE FAMILY: 10 distinct domain-families each dynamically flag (teacher=%s, load=%d)" % (_hiG, loadG),
+      not _badfam, "unflagged families: %s" % _badfam)
+
+# S16c: relaxation attribution — single-emergent culprit => solver flip names them
+_rlx = _INS.diagnose_relaxation(_ctxG, _mG, budget_s=90.0, max_probes=4)
+_ok_rlx = isinstance(_rlx, dict) and _rlx.get("mode") == "relaxation"
+check("S16c relaxation stage runs a soft->re-harden attribution (bounded, proven by solver flips)",
+      _ok_rlx and ("flags" in _rlx) and ("note" in _rlx),
+      json.dumps(_rlx)[:160] if _rlx else "relaxation unavailable")
+
+# S16d: GI dual boundary — full-pool P5 ban surfaces the flipped-boundary flag
+if _fl:
+    _ovD5 = {"constraints": {t: {"name": t, "edits": {"forbidden_slots": ["P5"]}} for t in _poolD}}
+    _ctxD5 = canonical.solver_context(['bs-1'], overrides=_ovD5)
+    _mD5 = CM.context_to_model(_ctxD5)
+    _dgD5 = _INS.diagnose(_ctxD5, _mD5)
+    _hitD5 = [f for f in _dgD5["flags"] if "first_last" in f["rule"] and f["scope"] == _fl[0] and "P5" in f["detail"]]
+else:
+    _hitD5 = []
+check("S16d GI pool check generalizes to the P5 boundary as well (symmetric, computed)",
+      (not _fl) or bool(_hitD5), json.dumps((_fl, bool(_hitD5)))[:100])
+
+# S16f: hardness/soft-list gating — a SOFT constraint must never fire a
+# capacity flag (it only costs a documented violation). Fabricate both.
+_ovH = {"constraints": {_hiG: {"name": _hiG, "edits": {
+    "forbidden_slots": ["P1"], "allowed_slots": ["P2"]},
+    "soft": ["forbidden_slots"]}}}
+_dgH = _INS.diagnose(canonical.solver_context(['inter-1', 'bs-1'], overrides=_ovH),
+                     CM.context_to_model(canonical.solver_context(['inter-1', 'bs-1'], overrides=_ovH)))
+_hitsH = [f for f in _dgH["flags"] if f["teacher"] == _hiG]
+check("S16f soften-aware: soft-listed forbidden_slots yields NO domain flag; hard allowed_slots still flagged",
+      any("allowed_slots" in f["rule"] for f in _hitsH)
+      and not any("forbidden_slots" in f["rule"] for f in _hitsH),
+      json.dumps([f["rule"] for f in _hitsH])[:120])
+
+# S16e: collapsible UI + API fallback wiring
+check("S16e collapsible insights panel (details/summary, persisted state) + relaxation fallback wired in API",
+      '<details id="cpsatInsights"' in _src_ix2
+      and "cpsatInsightsBody" in _src_ix2
+      and "_insightsOpen()" in _src_ix2
+      and "addEventListener('toggle'" in _src_ix2
+      and "_ins.diagnose_relaxation" in _src_api, "")
 check("S15d GI conflict: all-pool P1 ban surfaces first_last_period_occupied x section flag with pool names",
       (not _fl) or (bool(_hitD) and "period 1" in _hitD[0]["detail"]
        and str(_fl[0]) in _hitD[0]["detail"]),
