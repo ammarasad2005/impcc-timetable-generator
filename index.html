@@ -1181,6 +1181,27 @@ const CONSTRAINTS={
   'Visiting-2':{text:'Placeholder visiting faculty'},
   'Visiting-3':{text:'Placeholder visiting faculty'},
 };
+/* Live personal-constraint summary for teacher-facing views.
+   The frozen CONSTRAINTS map above is a code-time snapshot — it can never
+   reflect admin edits (the stale "P1, P2 & P4" bug). Derive the display text
+   from the RESOLVED live constraints instead (defaults + shared global row),
+   falling back to the frozen text only when nothing resolves (e.g. offline
+   boot before the data layer is up). */
+function liveConstraintText(name){
+  try{
+    const res=IMPCC_SOLVER.resolveConstraints(state.constraints||{});
+    const code=(IMPCC_SOLVER.NAME_TO_CODE&&IMPCC_SOLVER.NAME_TO_CODE[name])||(typeof CANON!=='undefined'&&CANON?CANON.codeOf(name):null);
+    const ent=code?res[code]:null;
+    if(ent&&ent.rules&&Object.keys(ent.rules).length){
+      return Object.keys(ent.rules).map(function(k){
+        const lab=(typeof RULE_META!=='undefined'&&RULE_META&&RULE_META[k])?RULE_META[k].label:k;
+        return lab+': '+describeRule(k,ent.rules[k]);
+      }).join(' · ');
+    }
+  }catch(e){}
+  const cons=CONSTRAINTS[name];
+  return cons?cons.text:null;
+}
 
 /* ---------- combinations & scoring ---------- */
 const state={combos:[],selected:null,view:'sections',sectionFilter:'all',running:false,runTimer:null,runTarget:0,cpsatBusy:false,cpsatDone:false,cpsatMerged:0,spot:null,seen:new Set(),tweaks:[],editMode:false,edits:[],editCell:null,source:null,lastLocks:null,history:[],swapMode:false,swapMoves:[],swapPick:null,swapDrag:null,lastSwap:null};
@@ -1383,7 +1404,7 @@ function buildStreamDoc(c,stream){
 }
 function buildTeacherDoc(c,name){
   const entries=(buildTeacherIndex(c.tt)[name])||[];
-  const cons=CONSTRAINTS[name];
+  const _ct=liveConstraintText(name);const cons=_ct?{text:_ct}:null;
   const dayCnt=[0,0,0,0,0],slotCnt=[0,0,0,0,0],secSet=new Set();
   entries.forEach(e=>{dayCnt[e.d]++;slotCnt[e.s]++;secSet.add(e.sec);});
   const busiest=entries.length?DAYS[dayCnt.indexOf(Math.max.apply(null,dayCnt))]:'—';
@@ -1808,7 +1829,7 @@ function renderSections(tt){
   mainEl.innerHTML=html;
 }
 function teacherCard(name,entries,idx){
-  const cons=CONSTRAINTS[name];
+  const _ct=liveConstraintText(name);const cons=_ct?{text:_ct}:null;
   const vis=name.indexOf('Visiting')===0;
   let rows='';
   for(const e of entries){
@@ -1956,7 +1977,7 @@ function openSpotlight(name){
   state.spot=name;
   const idx=buildTeacherIndex(c.tt);
   const entries=idx[name]||[];
-  const cons=CONSTRAINTS[name];
+  const _ct=liveConstraintText(name);const cons=_ct?{text:_ct}:null;
   const vis=name.indexOf('Visiting')===0;
   const ava=$('spAva');
   ava.className='t-ava'+(vis?' vis':'');
@@ -2774,7 +2795,19 @@ async function syncFromCloud(){
         try{localStorage.setItem('impcc-gi-'+POP_ID,JSON.stringify(pub.general_instructions));}catch(e){}
       }
       if(pub.allocation&&Object.keys(pub.allocation).length){state.allocation=pub.allocation;saveAllocationLocal();}
-      if(pub.constraints&&Object.keys(pub.constraints).length){state.constraints=pub.constraints;try{localStorage.setItem(CONST_KEY,JSON.stringify(state.constraints));}catch(e){}}
+      // constraints come from the ONE shared GLOBAL row (migration 003) — they
+      // belong to the faculty member, not a population. Per-population
+      // published.constraints remains as a legacy fallback only (older rows
+      // predate the shared truth and may be stale snapshots).
+      let consFromGlobal=false;
+      try{
+        const gc=await SB.loadGlobalConstraints();
+        if(gc&&gc.constraints&&Object.keys(gc.constraints).length){
+          state.constraints=gc.constraints;consFromGlobal=true;
+          try{localStorage.setItem(CONST_KEY,JSON.stringify(state.constraints));}catch(e){}
+        }
+      }catch(e){/* global row absent (migration not applied) — fall through to legacy */}
+      if(!consFromGlobal&&pub.constraints&&Object.keys(pub.constraints).length){state.constraints=pub.constraints;try{localStorage.setItem(CONST_KEY,JSON.stringify(state.constraints));}catch(e){}}
       if(pub.timetable_config&&Object.keys(pub.timetable_config).length){
         state.ttConfigByPop=state.ttConfigByPop||{};
         const pure={}; for(const kk in pub.timetable_config){ if(kk!=='sectionsAdded'&&kk!=='sectionsRemoved'&&kk!=='sheet'&&kk!=='ruleRegistry') pure[kk]=pub.timetable_config[kk]; }
@@ -2797,6 +2830,12 @@ function pushToCloud(pop){
   if(!SB||!SB.loggedIn)return;
   pop = pop || POP_ID;
   const alloc=(pop==='inter-1')?(state.allocation||defaultAllocation()):(state.allocByPop[pop]||getPopAllocation(pop));
+  // shared truth first: the single global constraints row (migration 003).
+  // best-effort: a write failure here must not break the legacy publish below.
+  try{
+    SB.saveGlobalConstraints(state.constraints||{})
+      .catch(function(){/* migration not applied yet — legacy mirrors still written */});
+  }catch(e){}
   SB.savePublished(alloc,state.constraints||{},getFaculty(),state.tweaks||[],pop,undefined,ttConfigFor(pop))
     .then(()=>{publishedAt=new Date().toISOString();renderPublishedAge();setTicker('Published for all users ✓ ('+(POPS.POPULATIONS[pop]?POPS.POPULATIONS[pop].label:pop)+')','ok');})
     .catch(err=>setTicker('Cloud sync failed: '+err.message,'err'));
