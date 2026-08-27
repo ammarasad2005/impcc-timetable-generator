@@ -12,9 +12,9 @@ Run:  python3 tests/validate_all.py          (full suite; CP-SAT runs — takes 
 import copy
 import json
 import os
+import re
 import sys
 import time
-
 sys.path.insert(0, ".")
 
 import canonical
@@ -1569,6 +1569,47 @@ check("S12 fan-out wiring: directory rename -> renameFaculty(old,new) rewrites s
       and 'out["faculty_names"] = clean_fn' in _src_api
       and "renameTeacher: renameTeacher" in _src_sol or "renameTeacher," in _src_sol,
       "")
+
+# ------------------------------------------------------------------ S14
+#  CP-SAT BUTTON DEAD-CLICK + SILENT ZERO-RESULT DIAGNOSTICS (v1.16)
+#  Root causes of the boss report: (1) a persisted `cpsatDone:true` restored
+#  from localStorage made the FIRST click a no-op (only "generate" cleared it);
+#  (2) an empty population context (no sections/units — e.g. an unconfigured
+#  2nd shift) made the server return 0 solutions almost instantly, reading like
+#  a broken button. Now: clicking ALWAYS runs; the API returns an explicit
+#  empty_context diagnostic; the UI explains both zero-cases.
+# ------------------------------------------------------------------
+def _fn_body2(src, name):
+    import re as _re
+    i = src.index("function " + name + "(")
+    depth = 0
+    for j in range(i, len(src)):
+        if src[j] == "{":
+            depth += 1
+        elif src[j] == "}":
+            depth -= 1
+            if depth == 0:
+                return src[i:j + 1]
+    return ""
+
+_dc = _fn_body2(_src_ix2, "runCpsat")
+check("S14a CP-SAT button never no-ops: no cpsatDone early-return remains in runCpsat (click always runs)",
+      re.search(r"if\(state\.cpsatDone\)\{[^}]*return;", _dc) is None
+      and "state.cpsatDone=false" in _dc, "")
+check("S14b server flags empty contexts instead of a silent 0; UI explains both zero-cases",
+      '"empty_context": True' in _src_api
+      and "data.empty_context" in _dc
+      and "over-constrained" in _dc, "")
+_r21 = _sp.run(["python3", "-c",
+    "import sys; sys.path.insert(0, '.');"
+    "from api.index import GenerateContextRequest, generate_context;"
+    "q = GenerateContextRequest(populations=['inter-2'], overrides={}, time_limit=1);"
+    "out = generate_context(q, user={'sub':'probe'});"
+    "print(out.get('empty_context'), len(out.get('solutions') or []), out.get('detail','')[:60])"],
+    capture_output=True, text=True, cwd=".")
+check("S14c live behavior: unconfigured population -> empty_context=True, 0 solutions, explicit detail (no solver burn)",
+      _r21.returncode == 0 and _r21.stdout.strip().startswith("True 0 Context has no sections"),
+      (_r21.stderr or _r21.stdout)[:160] + " | out=" + _r21.stdout[:80])
 check("S13 identity plumbing: code stays in directory rows (backfill + mint); canonical layers carry alias layers",
       "f.code=mintFacultyCode(f.name)" in _src_ix2
       and "{code:mintFacultyCode(nm)" in _src_ix2
