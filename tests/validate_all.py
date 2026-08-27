@@ -1504,6 +1504,79 @@ check("S9 wire path: API allowlist admits sanitized constraints ; browser sends 
       and "out.constraints=JSON.parse(JSON.stringify(state.constraints" in _src_ix2,
       "")
 
+
+# ------------------------------------------------------------------ S10-S12
+#  VISITING-FACULTY RENAME PROPAGATION (v1.16)
+#  The boss requirement: renaming e.g. "Visiting-1" in the directory must be
+#  reflected in EVERY occurrence (allocation sheets, constraints, tweaks, GI)
+#  so both engines keep ONE teacher identity and /generate-context never 500s.
+# ------------------------------------------------------------------
+print("-" * 72)
+print("S10-S12: visiting-faculty rename propagation (one identity everywhere)")
+print("-" * 72)
+_py_probe2 = (
+    "import json, canonical, context_model as CM\n"
+    "ov = {'faculty_names': {'V1': 'Prof. Green'},\n"
+    "      'constraints': {'Prof. Green': {'name': 'Prof. Green', 'edits': {'forbidden_slots': ['P5']},\n"
+    "                                     'hardness': {'forbidden_slots': 100}}},\n"
+    "      'allocation': {'inter-1': [{'key': 'INTER-ICS-1', 'class_key': 'INTER-ICS', 'stream': 'ICS',\n"
+    "                                  'sections': [{'id': 'ICS-A', 'subjects': [{'subject': 'Math',\n"
+    "                                  'teacher': 'Prof. Green', 'periods': 5}]}]}]}}\n"
+    "ctx = canonical.solver_context(['inter-1','bs-1'], overrides=ov)\n"
+    "m = CM.context_to_model(ctx)\n"
+    "print(json.dumps({'alias': ctx['teacherCodes'].get('Prof. Green'),\n"
+    "  'v1_units': sum(1 for u in m['units'] if u['teacher'] == 'V1'),\n"
+    "  'ghost_units': sum(1 for u in m['units'] if u['teacher'] == 'Prof. Green'),\n"
+    "  'folded': m['constraints'].get('V1', {}).get('rules'),\n"
+    "  'disp': canonical.display_name('V1', ov['faculty_names'])}))\n")
+_r19 = _sp.run(["python3", "-c", _py_probe2], capture_output=True, text=True, cwd=".")
+_j19 = json.loads(_r19.stdout) if _r19.returncode == 0 else {}
+check("S10 python rename-alias wire: alias -> V1, zero name-as-code units, constraints fold to V1, display renamed",
+      _j19.get("alias") == "V1" and _j19.get("ghost_units") == 0 and
+      _j19.get("v1_units", 0) >= 1 and
+      (_j19.get("folded") or {}).get("forbidden_slots") == ["P5"] and
+      _j19.get("disp") == "Prof. Green", (_r19.stderr or _r19.stdout)[:180])
+
+_r20 = _sp.run(
+    ["node", "-e",
+     "global.IMPCC_POPULATIONS=require('/home/user/impcc-timetable-generator/populations.js');"
+     "const m=require('/home/user/impcc-timetable-generator/data.js');"
+     "global.IMPCC_DATA=m.IMPCC_DATA||m;"
+     "const C=require('/home/user/impcc-timetable-generator/canonical.js');"
+     "C.setNameOverrides({V1:'Prof. Green'});"
+     "const ctx=C.solverContext(['inter-1','bs-1'],{constraints:{'Prof. Green':{name:'Prof. Green',edits:{forbidden_slots:['P5']}}}});"
+     "console.log(JSON.stringify({alias:ctx.teacherCodes['Prof. Green'],"
+     "disp:C.displayName('V1'),fold:(ctx.constraints['V1']||{}).rules||{},ghost:!!ctx.constraints['Prof. Green']}))"],
+    capture_output=True, text=True, cwd=".")
+_j20 = json.loads(_r20.stdout) if _r20.returncode == 0 else {}
+check("S11 JS canonical rename layer mirrors python (alias, display, constraint fold)",
+      _j20.get("alias") == "V1" and _j20.get("disp") == "Prof. Green" and
+      (_j20.get("fold") or {}).get("forbidden_slots") == ["P5"] and
+      _j20.get("ghost") is False, (_r20.stderr or _r20.stdout)[:180])
+
+_src_sol = open("solver.js", encoding="utf-8").read()
+_src_cjs = open("canonical.js", encoding="utf-8").read()
+_src_can = open("canonical.py", encoding="utf-8").read()
+check("S12 fan-out wiring: directory rename -> renameFaculty(old,new) rewrites solver maps + all sheets + "
+      "constraint keys/name fields + tweaks + GI/registry refs; wire sends faculty_names; API admits it",
+      "function renameFaculty(oldName,newName)" in _src_ix2
+      and "renameFaculty(oldName,v)" in _src_ix2
+      and "renameTeacherInSheets(oldName,newName)" in _src_ix2
+      and "delete c[oldName]" in _src_ix2
+      and "effect.teacher===oldName" in _src_ix2
+      and "_renameTeacherRefs(r&&r.params,oldName,newName)" in _src_ix2
+      and "out.faculty_names=fn" in _src_ix2
+      and 'out["faculty_names"] = clean_fn' in _src_api
+      and "renameTeacher: renameTeacher" in _src_sol or "renameTeacher," in _src_sol,
+      "")
+check("S13 identity plumbing: code stays in directory rows (backfill + mint); canonical layers carry alias layers",
+      "f.code=mintFacultyCode(f.name)" in _src_ix2
+      and "{code:mintFacultyCode(nm)" in _src_ix2
+      and "setNameOverrides: setNameOverrides" in _src_cjs
+      and "CANON_DIR_NAMES[f.code]" in _src_ix2
+      and "name_overrides" in _src_can,
+      "")
+
 # ------------------------------------------------------------------
 #  C4/§9  COURSE PERIOD-COHERENCE  (dominant-slot rule)
 #   count 5   -> hard floor: min 4 aligned; dev 1 documented soft 4500

@@ -112,12 +112,19 @@ def directory():
     return get()["faculty"]
 
 
-def name_to_code():
+def name_to_code(name_overrides=None):
     m = {}
     for f in directory():
         m[f["name"]] = f["code"]
         for a in (f.get("aliases") or []):
             m[a] = f["code"]
+    # admin renames (visiting placeholder -> real teacher): the RENAMED display
+    # name is registered as an alias of the same canonical code, and the custom
+    # code -> new name drives display_name. The canonical name keeps mapping to
+    # the code as well so older saved sheets stay resolvable.
+    for code, new_name in (name_overrides or {}).items():
+        if new_name:
+            m[str(new_name)] = code
     return m
 
 
@@ -125,7 +132,9 @@ def code_of(name):
     return name_to_code().get(name)
 
 
-def display_name(code):
+def display_name(code, name_overrides=None):
+    if name_overrides and name_overrides.get(code):
+        return name_overrides[code]
     for f in directory():
         if f["code"] == code:
             return f["name"]
@@ -157,7 +166,7 @@ def solver_constraints():
     return {code: clean_faculty_entry(c) for code, c in (get().get("constraints") or {}).items()}
 
 
-def merge_constraint_overrides(base, overrides):
+def merge_constraint_overrides(base, overrides, name_overrides=None):
     """Apply the admin's LIVE constraint edits (shared global row payload) over
     the canonical-resolved `base` — mirror of solver.js resolveConstraints:
     each override entry carries `edits` (legacy `rules` treated as edits),
@@ -165,6 +174,9 @@ def merge_constraint_overrides(base, overrides):
     only, clamped 0..100), `soft` overrides when non-empty, `natural` kept.
     Without this, the server CP-SAT path would run on the repo-baked
     constraint snapshot regardless of the admin's edits (the stale-Yasir bug).
+    The `name_overrides` map (admin renames: V1 -> "Prof. Green") folds
+    name-keyed override entries onto the canonical code, as does the
+    teacherCodes alias layer — a renamed teacher keeps ONE identity.
     """
     import copy
     out = {}
@@ -173,7 +185,7 @@ def merge_constraint_overrides(base, overrides):
                      "rules": copy.deepcopy(e.get("rules") or {}),
                      "soft": list(e.get("soft") or []),
                      "hardness": dict(e.get("hardness") or {})}
-    n2c = name_to_code()
+    n2c = name_to_code(name_overrides)
     for key, entry in (overrides or {}).items():
         if not isinstance(entry, dict):
             continue
@@ -477,9 +489,13 @@ def solver_context(population_ids, overrides=None):
         "relationships": relationships,
         "instructions": instructions,
         "constraints": merge_constraint_overrides(
-            solver_constraints(), ov.get("constraints")),
-        "teacherCodes": name_to_code(),
+            solver_constraints(), ov.get("constraints"),
+            name_overrides=ov.get("faculty_names")),
+        # teacher-code resolution carries the admin's rename aliases:
+        # "Prof. Green" -> V1 keeps units coded, constraints and stats unified
+        "teacherCodes": name_to_code(ov.get("faculty_names")),
         "softPenalties": dict(ov).get("softPenalties", {}),
+        "facultyNames": dict(ov.get("faculty_names") or {}),
     }
 
 

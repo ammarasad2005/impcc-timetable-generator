@@ -117,16 +117,23 @@
 
   // ------------------------------------------------------------ directory
   function directory() { return get().faculty; }
+  // Admin rename aliases (visiting placeholder -> real teacher name). Set from
+  // the faculty directory state (persisted); canonical names keep mapping to
+  // their codes too so older sheets stay resolvable.
+  let NAME_OVERRIDES = {};
+  function setNameOverrides(map) { NAME_OVERRIDES = Object.assign({}, map || {}); }
   function nameToCode() {
     const map = {};
     for (const f of directory()) {
       map[f.name] = f.code;
       for (const a of (f.aliases || [])) map[a] = f.code;
     }
+    for (const code in NAME_OVERRIDES) if (NAME_OVERRIDES[code]) map[NAME_OVERRIDES[code]] = code;
     return map;
   }
   function codeOf(name) { return nameToCode()[name] || null; }
   function displayName(code) {
+    if (NAME_OVERRIDES[code]) return NAME_OVERRIDES[code];
     const f = directory().find(x => x.code === code);
     return f ? f.name : code;
   }
@@ -202,7 +209,7 @@
   // solver.js resolveConstraints: edits (legacy `rules` = edits), null removes,
   // hardness merges per-key over present rules clamped 0..100, soft overrides
   // when non-empty, `natural` kept.
-  function mergeConstraintOverrides(base, overrides) {
+  function mergeConstraintOverrides(base, overrides, n2cPre) {
     var out = {};
     for (var code in (base || {})) {
       var e = base[code] || {};
@@ -211,7 +218,7 @@
                     soft: (e.soft || []).slice(),
                     hardness: Object.assign({}, e.hardness || {}) };
     }
-    var n2c = nameToCode();
+    var n2c = n2cPre || nameToCode();
     for (var key in (overrides || {})) {
       var entry = overrides[key];
       if (!entry || typeof entry !== "object") continue;
@@ -386,7 +393,8 @@
         softIndividualSpread: !!gi.soft_individual_spread
       },
       constraints: mergeConstraintOverrides(
-        solverConstraints(), ((overrides || {}).constraints || null)),
+        solverConstraints(), ((overrides || {}).constraints || null),
+        nameToCode()),
       teacherCodes: nameToCode()
     };
   }
@@ -394,6 +402,7 @@
   return {
     load: load, get: get, validate: validate,
     directory: directory, nameToCode: nameToCode, codeOf: codeOf, displayName: displayName,
+    setNameOverrides: setNameOverrides,
     solverAllocation: solverAllocation, solverConstraints: solverConstraints,
     cleanFacultyEntry: cleanFacultyEntry,
     mergeConstraintOverrides: mergeConstraintOverrides,

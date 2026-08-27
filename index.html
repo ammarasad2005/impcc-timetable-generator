@@ -2169,6 +2169,10 @@ function cpsatOverrides(){
   // the admin's LIVE constraint set must reach the server CP-SAT — without this,
   // /generate-context solves against the repo-baked snapshot (stale-constraint bug)
   out.constraints=JSON.parse(JSON.stringify(state.constraints||{}));
+  // admin renames (e.g. V1 -> "Prof. Green") ride as code->name aliases so the
+  // server keeps ONE teacher identity (no name-as-code identity split)
+  const fn=refreshNameOverrides();
+  if(Object.keys(fn).length) out.faculty_names=fn;
   return Object.keys(out).length?out:null;
 }
 function runCpsat(){
@@ -2823,7 +2827,7 @@ async function syncFromCloud(){
         if(Array.isArray(pub.timetable_config.sectionsAdded)){ state.secMetaByPop=state.secMetaByPop||{}; state.secMetaByPop[POP_ID]=pub.timetable_config.sectionsAdded; try{localStorage.setItem('impcc-secs-'+POP_ID,JSON.stringify(pub.timetable_config.sectionsAdded));}catch(e){} }
         if(Array.isArray(pub.timetable_config.sectionsRemoved)){ state.secRemovedByPop=state.secRemovedByPop||{}; const rm={}; pub.timetable_config.sectionsRemoved.forEach(function(k){rm[k]=true;}); state.secRemovedByPop[POP_ID]=rm; try{localStorage.setItem('impcc-secrm-'+POP_ID,JSON.stringify(rm));}catch(e){} }
       }
-      if(Array.isArray(pub.faculty)&&pub.faculty.length){state.faculty=pub.faculty;saveFacultyLocal();}
+      if(Array.isArray(pub.faculty)&&pub.faculty.length){state.faculty=pub.faculty;backfillFacultyCodes();saveFacultyLocal();refreshNameOverrides();}
       if(Array.isArray(pub.tweaks)){state.tweaks=pub.tweaks;try{localStorage.setItem(TWEAK_KEY,JSON.stringify(state.tweaks));}catch(e){}}
     }
     renderPublishedAge();
@@ -3091,16 +3095,111 @@ function defaultFaculty(){
   for(const code in IMPCC_SOLVER.TEACHER_FULL){
     if(code==='PARALLEL')continue;
     const type=(code==='V1'||code==='V2'||code==='V3')?'visiting':'permanent';
-    arr.push({name:IMPCC_SOLVER.TEACHER_FULL[code],type:type,active:true});
+    arr.push({code:code,name:IMPCC_SOLVER.TEACHER_FULL[code],type:type,active:true});
   }
   return arr;
 }
+// The canonical (baked) display name for each code — the ORIGINAL directory
+// label, used to detect admin renames regardless of later solver-map edits.
+const CANON_DIR_NAMES={};
+try{IMPCC_CANONICAL.directory().forEach(x=>{CANON_DIR_NAMES[x.code]=x.name;});}catch(e){}
+function mintFacultyCode(name){
+  const canon=(IMPCC_SOLVER.NAME_TO_CODE||{})[name];
+  if(canon&&canon!=='PARALLEL')return canon;
+  let n=1;const roster=state.faculty||[];
+  while(IMPCC_SOLVER.TEACHER_FULL['U'+n]||roster.some(r=>r.code==='U'+n))n++;
+  return 'U'+n;
+}
+// Pre-v1.16 directory rows carried no code — backfill: match the canonical
+// teacher by name, otherwise mint a stable custom code (U1, U2, …). The code
+// is the teacher's ONE identity everywhere (allocation, constraints, tweaks).
+function backfillFacultyCodes(){
+  const roster=getFaculty();
+  for(const f of roster){
+    if(f.code)continue;
+    f.code=mintFacultyCode(f.name);
+  }
+}
+// Push the admin rename aliases into the canonical name-resolution layer
+// (browser canonical) and return the map for the CP-SAT wire.
+function refreshNameOverrides(){
+  const map={};
+  for(const f of getFaculty()){
+    if(f.code&&CANON_DIR_NAMES[f.code]&&f.name!==CANON_DIR_NAMES[f.code])map[f.code]=f.name;
+  }
+  if(window.IMPCC_CANONICAL)IMPCC_CANONICAL.setNameOverrides(map);
+  return map;
+}
 function loadFaculty(){
-  try{const raw=localStorage.getItem(FAC_KEY);if(raw){state.faculty=JSON.parse(raw);return true;}}catch(e){}
+  try{const raw=localStorage.getItem(FAC_KEY);if(raw){state.faculty=JSON.parse(raw);backfillFacultyCodes();return true;}}catch(e){}
   state.faculty=null;return false;
 }
 function saveFacultyLocal(){
   try{if(state.faculty)localStorage.setItem(FAC_KEY,JSON.stringify(state.faculty));else localStorage.removeItem(FAC_KEY);}catch(e){}
+}
+/* Rename propagation — a name change in the directory is reflected in EVERY
+ * occurrence, or the engines see two different teachers (identity split):
+ *   1. teacher-code maps (solver.js + canonical.js layers)
+ *   2. allocation sheets across every population
+ *   3. constraint override entries (full-name keys AND `name` fields)
+ *   4. fix-pair tweak payloads (effect.teacher)
+ *   5. dynamic rule params + GI rule params (teacher / teachers refs)
+ * then everything is persisted and pushed so all admins converge.
+ */
+function _renameTeacherRefs(p,oldName,newName){
+  if(!p)return;
+  if(p.teacher===oldName)p.teacher=newName;
+  if(Array.isArray(p.teachers))p.teachers=p.teachers.map(t=>t===oldName?newName:t);
+}
+function renameTeacherInSheets(oldName,newName){
+  const rewrite=a=>{let n=0;for(const k in a)for(const e of ((a[k]&&a[k].subjects)||[]))if(e.teacher===oldName){e.teacher=newName;n++;}return n;};
+  let n=0;
+  if(state.allocation)n+=rewrite(state.allocation);
+  for(const pid in (state.allocByPop||{}))n+=rewrite(state.allocByPop[pid]||{});
+  return n;
+}
+function renameFaculty(oldName,newName){
+  if(!oldName||!newName||oldName===newName)return false;
+  const rec=getFaculty().find(f=>f.name===oldName);
+  if(!rec)return false;
+  backfillFacultyCodes();
+  const code=rec.code;
+  rec.name=newName;
+  // 1. engine identity: the solver's teacher maps resolve BOTH ways to one code
+  if(code&&IMPCC_SOLVER.renameTeacher)IMPCC_SOLVER.renameTeacher(oldName,newName);
+  // 2. allocation sheets, all populations
+  renameTeacherInSheets(oldName,newName);
+  try{saveAllocationLocal();}catch(e){}
+  try{for(const pid in (state.allocByPop||{}))savePopAllocationLocal(pid);}catch(e){}
+  // 3. constraint override entries: migrate the KEY, merge with an entry the
+  //    new name may already hold, and sync every entry's display `name` field
+  if(state.constraints){
+    const c=state.constraints;
+    if(c[oldName]){
+      if(c[newName]){const src=c[oldName],dst=c[newName];
+        dst.edits=Object.assign({},src.edits||{},dst.edits||{});
+        dst.hardness=Object.assign({},src.hardness||{},dst.hardness||{});
+        if(src.natural&&!dst.natural)dst.natural=src.natural;
+      }else c[newName]=c[oldName];
+      delete c[oldName];
+    }
+    for(const k in c)if(c[k]&&c[k].name===oldName)c[k].name=newName;
+  }
+  try{saveConstraints();}catch(e){}
+  // 4. fix-pair tweak payloads
+  (state.tweaks||[]).forEach(t=>{if(t.effect&&t.effect.teacher===oldName)t.effect.teacher=newName;if(t.swap&&t.swap.teacher===oldName)t.swap.teacher=newName;});
+  try{localStorage.setItem(TWEAK_KEY,JSON.stringify(state.tweaks||[]));}catch(e){}
+  // 5. dynamic rules + general-instruction rules teacher references
+  try{const reg=ruleRegistry();for(const slug in reg)_renameTeacherRefs(reg[slug]&&reg[slug].params,oldName,newName);ruleRegistrySaveLocal();}catch(e){}
+  try{
+    const pops=Object.keys((POPS&&POPS.POPULATIONS)||{});
+    pops.forEach(pid=>getPopGI(pid).forEach(r=>_renameTeacherRefs(r&&r.params,oldName,newName)));
+    pops.forEach(pid=>giSaveLocal(pid));
+  }catch(e){}
+  // canonical name-resolution alias + UI roster persist
+  refreshNameOverrides();
+  saveFacultyLocal();
+  return true;
 }
 function getFaculty(){if(!state.faculty)state.faculty=defaultFaculty();return state.faculty;}
 function facultyNames(){
@@ -3135,14 +3234,23 @@ function renderDirectory(){
     const nm=document.getElementById('dirNewName').value.trim();
     if(!nm)return;
     if(facultyNames().indexOf(nm)>=0){setTicker('“'+nm+'” already exists','err');return;}
-    getFaculty().push({name:nm,type:document.getElementById('dirNewType').value,active:true});
-    saveFacultyLocal();pushToCloud();renderDirectory();
+    getFaculty().push({code:mintFacultyCode(nm),name:nm,type:document.getElementById('dirNewType').value,active:true});
+    refreshNameOverrides();saveFacultyLocal();pushToCloud();renderDirectory();
     setTicker('Added '+nm+' to the directory','ok');
   });
   document.querySelectorAll('.dir-name').forEach(el=>el.addEventListener('change',e=>{
     const f=getFaculty()[+e.target.dataset.i];if(!f)return;
-    const v=e.target.value.trim();if(v)f.name=v;
-    saveFacultyLocal();pushToCloud();setTicker('Faculty renamed','ok');
+    const v=e.target.value.trim();
+    if(!v){e.target.value=f.name;return;}
+    if(v===f.name)return;
+    if(facultyNames().indexOf(v)>=0){setTicker('“'+v+'” already exists in the directory','err');e.target.value=f.name;return;}
+    const oldName=f.name;
+    if(renameFaculty(oldName,v)){
+      // publish EVERY population so all admins converge on the rename at once
+      try{for(const pid in (POPS&&POPS.POPULATIONS)?POPS.POPULATIONS:{})pushToCloud(pid);}catch(err){}
+      renderDirectory();
+      setTicker('Renamed “'+oldName+'” → “'+v+'” everywhere (allocation, constraints, tweaks)','ok');
+    }
   }));
   document.querySelectorAll('.dir-type').forEach(el=>el.addEventListener('change',e=>{
     const f=getFaculty()[+e.target.dataset.i];if(!f)return;
@@ -6115,6 +6223,8 @@ loadAllocation();
 getPopAllocation('bs-1');
 getPopAllocation('inter-2');
 loadFaculty();
+backfillFacultyCodes();
+refreshNameOverrides();
 loadTweaks();
 renderAuth();
 ensureScoreRefs();
