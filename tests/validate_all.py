@@ -1795,6 +1795,16 @@ check("S16f soften-aware: soft-listed forbidden_slots yields NO domain flag; har
       and not any("forbidden_slots" in f["rule"] for f in _hitsH),
       json.dumps([f["rule"] for f in _hitsH])[:120])
 
+# S16g: the insights panel is NOT a standing component — it must be display-
+# none until a 0-solutions response renders real flags (boss report: it used
+# to sit permanently on the page as an empty bordered box because `hidden`
+# had no CSS rule).
+check("S16g insights box hidden by default; .hidden genuinely hides it; only flags unhide",
+      'class="cpsat-insights hidden"' in _src_ix2
+      and ".cpsat-insights.hidden{display:none" in _src_ix2
+      and "box.classList.add('hidden')" in _src_ix2
+      and "box.classList.remove('hidden')" in _src_ix2, "")
+
 # S16e: collapsible UI + API fallback wiring
 check("S16e collapsible insights panel (details/summary, persisted state) + relaxation fallback wired in API",
       '<details id="cpsatInsights"' in _src_ix2
